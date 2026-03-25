@@ -1,0 +1,70 @@
+# Rust workspace
+/target/
+**/target/
+Cargo.lock
+
+# Databases and local state
+*.db
+*.db-*
+*.sqlite
+*.sqlite*
+*.sqlite3
+*.wal
+*.shm
+
+# Environment and credentials
+.env
+*.env
+**/.env
+**/*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+credentials*.json
+auth*.json
+
+# Python and editor state
+.venv/
+**/.venv/
+.vscode/
+.claude/
+.serena/
+__pycache__/
+*.pyc
+
+# Node and UI build output
+node_modules/
+ui/node_modules/
+ui/build/
+ui/.svelte-kit/
+
+# Local library and machine-specific artifacts
+A:/
+music_admin/
+cassette_admin/
+tmp/
+logs/
+binaries/
+A:\music*
+A:\Music*
+A:\Staging*
+A:\Download*
+
+# Validation and generated reports
+*.log
+*.csv
+validation_*.json
+validation_*.log
+*manifest*.json
+**/*manifest*.json
+spotify_library.json
+cassette_empty_export.json
+docs/copilot-chat-export/
+docs/copilot-chat-export-readable/
+
+# Local backup and recovery artifacts
+README_RECOVERY.md
+codex_core_directive.md
+*.code-workspace

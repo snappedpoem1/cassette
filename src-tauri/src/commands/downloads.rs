@@ -1,0 +1,530 @@
+use crate::state::AppState;
+use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+use cassette_core::models::{
+    AcquisitionQueueReport, DownloadArtistDiscography, DownloadJob, DownloadMetadataSearchResult,
+    DownloadStatus,
+};
+use cassette_core::sources::{fetch_slskd_transfers, get_artist_discography as fetch_artist_discography, search_metadata as search_catalog_metadata, RemoteProviderConfig, SlskdConnectionConfig};
+use serde_json::Value;
+use tauri::State;
+use uuid::Uuid;
+
+#[tauri::command]
+pub async fn start_download(
+    state: State<'_, AppState>,
+    artist: String,
+    title: String,
+    album: Option<String>,
+) -> Result<String, String> {
+    let id = format!("job-{}", Uuid::new_v4());
+    let job = DownloadJob {
+        id: id.clone(),
+        query: format!(
+            "{} {}{}",
+            artist,
+            title,
+            album
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!(" {value}"))
+                .unwrap_or_default()
+        )
+        .trim()
+        .to_string(),
+        artist: artist.clone(),
+        title: title.clone(),
+        album: album.clone(),
+        status: DownloadStatus::Queued,
+        provider: None,
+        progress: 0.0,
+        error: None,
+    };
+
+    state
+        .download_jobs
+        .lock()
+        .map_err(|error| error.to_string())?
+        .insert(id.clone(), job);
+
+    state
+        .director_submitter
+        .submit(build_track_task(&id, &artist, &title, album.clone(), AcquisitionStrategy::Standard))
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn start_album_downloads(
+    state: State<'_, AppState>,
+    albums: Vec<serde_json::Value>,
+) -> Result<Vec<String>, String> {
+    let mut job_ids = Vec::new();
+    for album in albums {
+        let artist = album
+            .get("artist")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let title = album
+            .get("title")
+            .or_else(|| album.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if artist.trim().is_empty() || title.trim().is_empty() {
+            continue;
+        }
+        let album_title = Some(title.clone());
+        job_ids.push(start_download(state.clone(), artist, title, album_title).await?);
+    }
+    Ok(job_ids)
+}
+
+#[tauri::command]
+pub async fn start_discography_downloads(
+    state: State<'_, AppState>,
+    artist: String,
+    artist_mbid: Option<String>,
+    include_singles: Option<bool>,
+    include_eps: Option<bool>,
+    include_compilations: Option<bool>,
+    max_albums: Option<usize>,
+) -> Result<AcquisitionQueueReport, String> {
+    let provider_config = load_remote_provider_config(&state)?;
+    let discography =
+        fetch_artist_discography(&provider_config, artist.as_str(), artist_mbid).await?;
+    queue_discography_with_rules(
+        state,
+        "discography",
+        discography,
+        include_singles.unwrap_or(false),
+        include_eps.unwrap_or(false),
+        include_compilations.unwrap_or(false),
+        max_albums.unwrap_or(50),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn start_artist_downloads(
+    state: State<'_, AppState>,
+    artist: String,
+    artist_mbid: Option<String>,
+    include_singles: Option<bool>,
+    include_eps: Option<bool>,
+    include_compilations: Option<bool>,
+    max_albums: Option<usize>,
+) -> Result<AcquisitionQueueReport, String> {
+    let provider_config = load_remote_provider_config(&state)?;
+    let discography =
+        fetch_artist_discography(&provider_config, artist.as_str(), artist_mbid).await?;
+    queue_discography_with_rules(
+        state,
+        "artist",
+        discography,
+        include_singles.unwrap_or(false),
+        include_eps.unwrap_or(false),
+        include_compilations.unwrap_or(false),
+        max_albums.unwrap_or(50),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn build_library_acquisition_queue(
+    state: State<'_, AppState>,
+    artist_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<AcquisitionQueueReport, String> {
+    let albums = state
+        .db
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get_albums()
+        .map_err(|error| error.to_string())?;
+
+    let artist_filter = artist_filter
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut report = AcquisitionQueueReport {
+        scope: "library_database".to_string(),
+        requested: albums.len(),
+        ..AcquisitionQueueReport::default()
+    };
+
+    for album in albums {
+        if let Some(filter) = &artist_filter {
+            if !album.artist.to_ascii_lowercase().contains(filter) {
+                report.skipped += 1;
+                continue;
+            }
+        }
+
+        if report.job_ids.len() >= limit.unwrap_or(500) {
+            report.notes.push("Queue limit reached.".to_string());
+            break;
+        }
+
+        let title = album.title.trim();
+        let artist = album.artist.trim();
+        if artist.is_empty() || title.is_empty() {
+            report.skipped += 1;
+            continue;
+        }
+
+        let key = format!(
+            "{}::{}",
+            artist.to_ascii_lowercase(),
+            title.to_ascii_lowercase()
+        );
+        if !seen.insert(key) {
+            report.skipped += 1;
+            continue;
+        }
+
+        match start_download(
+            state.clone(),
+            artist.to_string(),
+            title.to_string(),
+            Some(title.to_string()),
+        )
+        .await
+        {
+            Ok(job_id) => {
+                report.queued += 1;
+                report.job_ids.push(job_id);
+            }
+            Err(error) => {
+                report.skipped += 1;
+                report
+                    .notes
+                    .push(format!("{} - {}: {error}", album.artist, album.title));
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn get_download_jobs(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, String> {
+    let mut jobs = state
+        .download_jobs
+        .lock()
+        .map_err(|error| error.to_string())?
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Ok(transfers) = fetch_slskd_transfers(&load_slskd_config(&state)?).await {
+        for transfer in transfers.iter().map(slskd_transfer_to_job) {
+            if let Some(existing) = jobs.iter_mut().find(|job| download_jobs_match(job, &transfer)) {
+                existing.status = transfer.status;
+                existing.progress = transfer.progress;
+                existing.provider = Some("slskd".to_string());
+                existing.error = transfer.error.clone();
+                if existing.album.is_none() {
+                    existing.album = transfer.album.clone();
+                }
+            } else if jobs.iter().all(|job| job.id != transfer.id) {
+                jobs.push(transfer);
+            }
+        }
+    }
+
+    Ok(jobs)
+}
+
+#[tauri::command]
+pub async fn search_download_metadata(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<DownloadMetadataSearchResult, String> {
+    let provider_config = load_remote_provider_config(&state)?;
+    search_catalog_metadata(&provider_config, &query).await
+}
+
+#[tauri::command]
+pub async fn get_artist_discography(
+    state: State<'_, AppState>,
+    artist: String,
+    artist_mbid: Option<String>,
+) -> Result<DownloadArtistDiscography, String> {
+    let provider_config = load_remote_provider_config(&state)?;
+    fetch_artist_discography(&provider_config, artist.as_str(), artist_mbid).await
+}
+
+#[tauri::command]
+pub async fn get_slskd_transfers(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let slskd_config = load_slskd_config(&state)?;
+    fetch_slskd_transfers(&slskd_config).await
+}
+
+fn slskd_transfer_to_job(transfer: &Value) -> DownloadJob {
+    let filename = transfer
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown transfer")
+        .to_string();
+
+    let username = transfer
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or("slskd")
+        .to_string();
+
+    let state = transfer
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("Queued");
+
+    let percent_complete = transfer
+        .get("percentComplete")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
+    let progress = if percent_complete > 1.0 {
+        (percent_complete / 100.0) as f32
+    } else {
+        percent_complete as f32
+    };
+
+    DownloadJob {
+        id: transfer
+            .get("id")
+            .map(Value::to_string)
+            .unwrap_or_else(|| format!("{username}:{filename}")),
+        query: filename.clone(),
+        artist: username,
+        title: PathTitle::from_filename(&filename).title,
+        album: None,
+        status: map_transfer_status(state),
+        provider: Some("slskd".to_string()),
+        progress,
+        error: transfer
+            .get("exception")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    }
+}
+
+fn map_transfer_status(state: &str) -> DownloadStatus {
+    match state {
+        "Completed" | "Succeeded" => DownloadStatus::Done,
+        "InProgress" => DownloadStatus::Downloading,
+        "Completed, Succeeded" => DownloadStatus::Done,
+        "Cancelled" | "Errored" | "Failed" => DownloadStatus::Failed,
+        "Requested" | "Queued" | "Initialized" => DownloadStatus::Queued,
+        "InProgress, Queued" | "InProgress, Initializing" => DownloadStatus::Downloading,
+        _ => DownloadStatus::Searching,
+    }
+}
+
+fn build_track_task(
+    id: &str,
+    artist: &str,
+    title: &str,
+    album: Option<String>,
+    strategy: AcquisitionStrategy,
+) -> TrackTask {
+    TrackTask {
+        task_id: id.to_string(),
+        source: TrackTaskSource::Manual,
+        target: NormalizedTrack {
+            spotify_track_id: None,
+            source_playlist: None,
+            artist: artist.to_string(),
+            album_artist: Some(artist.to_string()),
+            title: title.to_string(),
+            album,
+            track_number: None,
+            disc_number: None,
+            year: None,
+            duration_secs: None,
+            isrc: None,
+        },
+        strategy,
+    }
+}
+
+fn load_remote_provider_config(state: &AppState) -> Result<RemoteProviderConfig, String> {
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    Ok(RemoteProviderConfig {
+        qobuz_email: read_setting(&db, "qobuz_email").or_else(|| state.download_config.qobuz_email.clone()),
+        qobuz_password: read_setting(&db, "qobuz_password").or_else(|| state.download_config.qobuz_password.clone()),
+        qobuz_password_hash: read_setting(&db, "qobuz_password_hash"),
+        qobuz_app_id: read_setting(&db, "qobuz_app_id"),
+        qobuz_app_secret: read_setting(&db, "qobuz_app_secret"),
+        qobuz_user_auth_token: read_setting(&db, "qobuz_user_auth_token"),
+        qobuz_secrets: read_setting(&db, "qobuz_secrets"),
+        deezer_arl: read_setting(&db, "deezer_arl").or_else(|| state.download_config.deezer_arl.clone()),
+        spotify_client_id: read_setting(&db, "spotify_client_id").or_else(|| state.download_config.spotify_client_id.clone()),
+        spotify_client_secret: read_setting(&db, "spotify_client_secret").or_else(|| state.download_config.spotify_client_secret.clone()),
+        spotify_access_token: read_setting(&db, "spotify_access_token").or_else(|| state.download_config.spotify_access_token.clone()),
+    })
+}
+
+fn load_slskd_config(state: &AppState) -> Result<SlskdConnectionConfig, String> {
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    Ok(SlskdConnectionConfig {
+        url: read_setting(&db, "slskd_url")
+            .or_else(|| state.download_config.slskd_url.clone())
+            .unwrap_or_else(|| "http://localhost:5030".to_string()),
+        username: read_setting(&db, "slskd_user")
+            .or_else(|| state.download_config.slskd_user.clone())
+            .unwrap_or_else(|| "slskd".to_string()),
+        password: read_setting(&db, "slskd_pass")
+            .or_else(|| state.download_config.slskd_pass.clone())
+            .unwrap_or_else(|| "slskd".to_string()),
+        api_key: read_setting(&db, "slskd_api_key"),
+    })
+}
+
+fn read_setting(db: &cassette_core::db::Db, key: &str) -> Option<String> {
+    db.get_setting(key)
+        .ok()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn download_jobs_match(job: &DownloadJob, transfer: &DownloadJob) -> bool {
+    if job.id == transfer.id {
+        return true;
+    }
+
+    if job.provider.as_deref() != Some("slskd") {
+        return false;
+    }
+
+    let haystack = normalize_job_text(&transfer.query);
+    let artist = normalize_job_text(&job.artist);
+    let title = normalize_job_text(&job.title);
+
+    (!artist.is_empty() && haystack.contains(&artist)) && (!title.is_empty() && haystack.contains(&title))
+}
+
+async fn queue_discography_with_rules(
+    state: State<'_, AppState>,
+    scope: &str,
+    discography: DownloadArtistDiscography,
+    include_singles: bool,
+    include_eps: bool,
+    include_compilations: bool,
+    max_albums: usize,
+) -> Result<AcquisitionQueueReport, String> {
+    let mut report = AcquisitionQueueReport {
+        scope: scope.to_string(),
+        requested: discography.albums.len(),
+        ..AcquisitionQueueReport::default()
+    };
+    let mut seen = std::collections::HashSet::<String>::new();
+
+    for album in discography.albums {
+        if report.job_ids.len() >= max_albums {
+            report.notes.push("Queue limit reached.".to_string());
+            break;
+        }
+
+        if !release_type_allowed(
+            album.release_type.as_deref(),
+            include_singles,
+            include_eps,
+            include_compilations,
+        ) {
+            report.skipped += 1;
+            continue;
+        }
+
+        let title = album.title.trim();
+        let artist = album.artist.trim();
+        if title.is_empty() || artist.is_empty() {
+            report.skipped += 1;
+            continue;
+        }
+
+        let dedupe_key = format!(
+            "{}::{}",
+            artist.to_ascii_lowercase(),
+            title.to_ascii_lowercase()
+        );
+        if !seen.insert(dedupe_key) {
+            report.skipped += 1;
+            continue;
+        }
+
+        match start_download(
+            state.clone(),
+            artist.to_string(),
+            title.to_string(),
+            Some(title.to_string()),
+        )
+        .await
+        {
+            Ok(job_id) => {
+                report.queued += 1;
+                report.job_ids.push(job_id);
+            }
+            Err(error) => {
+                report.skipped += 1;
+                report.notes.push(format!("{artist} - {title}: {error}"));
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+fn release_type_allowed(
+    release_type: Option<&str>,
+    include_singles: bool,
+    include_eps: bool,
+    include_compilations: bool,
+) -> bool {
+    let Some(raw) = release_type.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let normalized = raw.to_ascii_lowercase();
+
+    if normalized.contains("single") {
+        return include_singles;
+    }
+    if normalized == "ep" || normalized.contains(" ep") || normalized.contains("extended play") {
+        return include_eps;
+    }
+    if normalized.contains("compilation")
+        || normalized.contains("various")
+        || normalized.contains("anthology")
+    {
+        return include_compilations;
+    }
+    true
+}
+
+fn normalize_job_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' })
+        .collect::<String>()
+}
+
+struct PathTitle {
+    title: String,
+}
+
+impl PathTitle {
+    fn from_filename(filename: &str) -> Self {
+        let title = std::path::Path::new(filename)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(filename)
+            .to_string();
+
+        Self { title }
+    }
+}

@@ -1,0 +1,38 @@
+[package]
+name = "cassette"
+version = "0.1.0"
+description = "Cassette - music player and downloader"
+authors = ["you"]
+license = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "cassette_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+deezer_private_api = []
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+cassette-core = { path = "../crates/cassette-core" }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.10.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
+tauri-plugin-global-shortcut = "2"
+uuid = { version = "1", features = ["v4"] }

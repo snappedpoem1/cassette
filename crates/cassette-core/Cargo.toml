@@ -1,0 +1,42 @@
+[package]
+name = "cassette-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+symphonia = { version = "0.5", features = ["all"] }
+lofty = "0.21"
+cpal = "0.15"
+rb = "0.3"
+anyhow = "1"
+thiserror = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir = "2"
+dunce = "1"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart"], default-features = false }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+urlencoding = "2"
+dotenvy = "0.15"
+native-tls = "0.2"
+tempfile = "3"
+md5 = "0.7"
+aes = "0.8"
+blowfish = "0.9"
+cbc = "0.1"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "macros"] }
+blake3 = "1"
+sanitize-filename = "0.5"
+regex = "1"
+backoff = "0.4"
+futures-util = "0.3"
+url = "2"
+sha2 = "0.10"
+strsim = "0.11"
+clap = { version = "4", features = ["derive"] }
