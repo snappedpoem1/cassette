@@ -57,24 +57,20 @@ Build for recovery, not just for the happy path.
 
 Before substantial work:
 
-1. Read [PROJECT_INDEX.md](/c:/Cassette%20Music/docs/PROJECT_INDEX.md)
-2. Read [AGENT_BRIEFING.md](/c:/Cassette%20Music/docs/AGENT_BRIEFING.md)
-3. Read [TODO.md](/c:/Cassette%20Music/docs/TODO.md)
-4. Read [DECISIONS.md](/c:/Cassette%20Music/docs/DECISIONS.md) for relevant rationale
-5. Review [PATTERNS.md](/c:/Cassette%20Music/docs/PATTERNS.md)
+1. Read [PROJECT_INDEX.md](PROJECT_INDEX.md)
+2. Read [AGENT_BRIEFING.md](AGENT_BRIEFING.md)
+3. Read [TODO.md](TODO.md)
+4. Read [DECISIONS.md](DECISIONS.md) for relevant rationale
+5. Review [PATTERNS.md](PATTERNS.md)
 6. Run baseline verification if the task is not trivial
 
 Baseline commands:
 
-```powershell
+```bash
 cargo check
 cargo test
-
-Set-Location ui
-npm run build
-
-Set-Location ..
-.\scripts\smoke_desktop.ps1
+cd ui && npm run build
+# Windows: .\scripts\smoke_desktop.ps1
 ```
 
 ---
@@ -86,7 +82,7 @@ Set-Location ..
 Before editing:
 
 - read the full task
-- identify the affected layer: `ui`, `src-tauri`, or `crates/cassette-core`
+- identify the affected layer: `ui/`, `src-tauri/`, or `crates/cassette-core/`
 - look for existing patterns nearby
 - inspect related tests first
 
@@ -112,7 +108,7 @@ Run the narrowest meaningful checks:
 
 - Rust domain changes: targeted tests, then broader tests if needed
 - Tauri wiring changes: `cargo check`
-- UI changes: `npm run build` in `ui`
+- UI changes: `npm run build` in `ui/`
 - operational flow changes: smoke and validation commands where practical
 
 ### Phase 5: Document
@@ -164,7 +160,7 @@ Bad:
 
 Preferred:
 
-- record adjacent work in [TODO.md](/c:/Cassette%20Music/docs/TODO.md)
+- record adjacent work in [TODO.md](TODO.md)
 - ship the current task cleanly
 
 ### Stale Documentation
@@ -184,13 +180,6 @@ Preferred:
 
 ## Code Style And Conventions
 
-Workspace-level rules that remain in force:
-
-- Use `pathlib.Path` in Python, never `os.path`
-- Use `logging.getLogger(__name__)` instead of `print()` for Python logging
-- Add type hints on every Python function signature
-- Use parameterized SQL with `?` placeholders
-
 Rust expectations:
 
 - prefer typed errors with `thiserror` where it improves clarity
@@ -198,6 +187,13 @@ Rust expectations:
 - favor deterministic ordering
 - name thresholds and retry policies
 - add tests for risky or failure-heavy paths
+- do not suppress errors with `let _ = ...` when the failure is actionable — log it
+
+SQL expectations:
+
+- use parameterized queries with `?` placeholders
+- wrap multi-step mutations in a transaction
+- do not make schema changes without a migration story
 
 ---
 
@@ -212,7 +208,7 @@ Every risky change should answer:
 
 Common verification commands:
 
-```powershell
+```bash
 cargo test
 cargo run -p cassette-core --bin cassette -- validate --help
 ```
@@ -238,9 +234,9 @@ Stop and realign if your change involves:
 
 Before handing work off:
 
-- update [TODO.md](/c:/Cassette%20Music/docs/TODO.md) if status or priority changed
-- update [DECISIONS.md](/c:/Cassette%20Music/docs/DECISIONS.md) if you made an architectural choice
-- update [TELEMETRY.md](/c:/Cassette%20Music/docs/TELEMETRY.md) if confidence or baselines changed
+- update [TODO.md](TODO.md) if status or priority changed
+- update [DECISIONS.md](DECISIONS.md) if you made an architectural choice
+- update [TELEMETRY.md](TELEMETRY.md) if confidence or baselines changed
 - say clearly what was verified and what was not
 
 The next agent should not need your memory to continue.
@@ -259,4 +255,4 @@ Bias toward:
 
 ---
 
-**Last Updated**: 2026-03-24
+**Last Updated**: 2026-03-25

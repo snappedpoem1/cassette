@@ -2,7 +2,7 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-03-24
+**Last Updated**: 2026-03-25
 
 ---
 
@@ -178,6 +178,28 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Revisit Condition**:
 
 - Never; documentation drift is more expensive than maintenance
+
+---
+
+## Decision 10: Use Real Parsers For External Config Files
+
+**Status**: approved (applied 2026-03-25)
+**Rationale**:
+
+- `load_streamrip_config` previously used a hand-rolled line scanner that could not handle
+  TOML section headers, multi-line values, or inline comments.
+- The `toml` crate is the correct tool. It was added to `src-tauri/Cargo.toml`.
+- The YAML scanner for `slskd.yml` was left in place — the format is a flat `key: value` file
+  that the scanner handles correctly. If the format grows more complex, replace with `serde_yaml`.
+
+**Tradeoffs**:
+
+- One additional dependency (`toml = "0.8"`)
+- Parsing errors now produce a logged warning instead of silently producing empty config
+
+**Revisit Condition**:
+
+- If slskd config format becomes more complex, switch its parser too
 
 ---
 

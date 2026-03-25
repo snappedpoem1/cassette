@@ -36,3 +36,4 @@ dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
 tauri-plugin-global-shortcut = "2"
 uuid = { version = "1", features = ["v4"] }
+toml = "0.8"

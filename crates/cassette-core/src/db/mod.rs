@@ -340,14 +340,29 @@ impl Db {
     /// Delete tracks whose files no longer exist on disk
     pub fn prune_missing_tracks(&self) -> Result<usize> {
         let all = self.get_all_tracks_unfiltered()?;
-        let mut removed = 0;
-        for track in &all {
-            if !std::path::Path::new(&track.path).exists() {
-                self.delete_track(track.id)?;
-                removed += 1;
-            }
+        let missing: Vec<i64> = all
+            .iter()
+            .filter(|t| !std::path::Path::new(&t.path).exists())
+            .map(|t| t.id)
+            .collect();
+
+        if missing.is_empty() {
+            return Ok(0);
         }
-        Ok(removed)
+
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+        let write_result: Result<()> = (|| {
+            for id in &missing {
+                self.conn.execute("DELETE FROM tracks WHERE id = ?1", params![id])?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            let _ = self.conn.execute_batch("ROLLBACK;");
+            return Err(e);
+        }
+        self.conn.execute_batch("COMMIT;")?;
+        Ok(missing.len())
     }
 
     pub fn increment_play_count(&self, track_id: i64) -> Result<()> {
@@ -464,24 +479,31 @@ impl Db {
     // —— Spotify History ————————————————————————————————————————————————————————————————————————————————————————
 
     pub fn replace_spotify_album_history(&self, rows: &[SpotifyAlbumHistory]) -> Result<()> {
-        self.conn.execute("DELETE FROM spotify_album_history", [])?;
-        for row in rows {
-            self.conn.execute(
-                "
-                INSERT INTO spotify_album_history
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+        let write_result: Result<()> = (|| {
+            self.conn.execute("DELETE FROM spotify_album_history", [])?;
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO spotify_album_history
                     (artist, album, total_ms, play_count, skip_count, in_library, imported_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
-                ",
-                params![
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))"
+            )?;
+            for row in rows {
+                stmt.execute(params![
                     row.artist,
                     row.album,
                     row.total_ms as i64,
                     row.play_count as i64,
                     row.skip_count as i64,
                     if row.in_library { 1 } else { 0 },
-                ],
-            )?;
+                ])?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            let _ = self.conn.execute_batch("ROLLBACK;");
+            return Err(e);
         }
+        self.conn.execute_batch("COMMIT;")?;
         Ok(())
     }
 

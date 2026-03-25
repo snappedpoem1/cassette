@@ -6,6 +6,7 @@
     loadLibrary, search,
   } from '$lib/stores/library';
   import { queueTracks } from '$lib/stores/queue';
+  import { goto } from '$app/navigation';
   import { formatDuration, formatAudioSpec, coverSrc, debounce } from '$lib/utils';
   import type { Album, Artist, Track } from '$lib/api/tauri';
   import { api } from '$lib/api/tauri';
@@ -208,13 +209,20 @@
       {:else}
         <div class="artist-list">
           {#each $artists as artist}
-            <a href="/artists" class="artist-row">
+            <!-- svelte-ignore a11y-no-static-element-interactions -->
+            <div
+              class="artist-row"
+              role="button"
+              tabindex="0"
+              on:click={() => goto('/artists')}
+              on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goto('/artists'); } }}
+            >
               <div class="artist-avatar">{artist.name[0]?.toUpperCase()}</div>
               <div class="artist-info">
                 <div class="artist-name">{artist.name}</div>
                 <div class="artist-meta">{artist.album_count} albums · {artist.track_count} tracks</div>
               </div>
-            </a>
+            </div>
           {/each}
         </div>
       {/if}

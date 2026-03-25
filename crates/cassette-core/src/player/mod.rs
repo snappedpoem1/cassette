@@ -73,7 +73,9 @@ impl Player {
     }
 
     fn send(&self, cmd: PlayerCommand) {
-        let _ = self.cmd_tx.try_send(cmd);
+        if self.cmd_tx.try_send(cmd).is_err() {
+            tracing::warn!("[player] command channel full — command dropped");
+        }
     }
 
     pub fn load(&self, path: String) { self.send(PlayerCommand::Load(path)); }
@@ -230,7 +232,7 @@ fn player_thread(
 
                 decode_thread = Some(std::thread::Builder::new()
                     .name("cassette-decode".into())
-                    .spawn(move || decode_loop(p, prod, stop, pos, play, evt))
+                    .spawn(move || decode_loop(p, prod, stop, pos, play, evt, None))
                     .expect("spawn decode thread"));
 
                 is_playing.store(true, Ordering::Relaxed);
@@ -291,7 +293,7 @@ fn player_thread(
 
                     decode_thread = Some(std::thread::Builder::new()
                         .name("cassette-decode".into())
-                        .spawn(move || decode_loop_seek(p, prod, stop, pos, play, evt, secs))
+                        .spawn(move || decode_loop(p, prod, stop, pos, play, evt, Some(secs)))
                         .expect("spawn decode thread"));
 
                     if was_playing {
@@ -306,6 +308,8 @@ fn player_thread(
     }
 }
 
+/// Unified decode loop. Pass `seek_to = Some(secs)` to seek before starting playback,
+/// or `None` to play from the current position (typically the beginning after a fresh load).
 fn decode_loop(
     path: String,
     prod: Arc<Mutex<rb::Producer<f32>>>,
@@ -313,121 +317,7 @@ fn decode_loop(
     position_bits: Arc<AtomicU64>,
     is_playing: Arc<AtomicBool>,
     evt_tx: std::sync::mpsc::SyncSender<PlayerEvent>,
-) {
-    let file = match std::fs::File::open(&path) {
-        Ok(f) => f,
-        Err(e) => {
-            let _ = evt_tx.try_send(PlayerEvent::Error(format!("Cannot open file: {e}")));
-            return;
-        }
-    };
-
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(&path).extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    let probed = match symphonia::default::get_probe().format(
-        &hint, mss, &FormatOptions::default(), &MetadataOptions::default(),
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = evt_tx.try_send(PlayerEvent::Error(format!("Format probe failed: {e}")));
-            return;
-        }
-    };
-
-    let mut format = probed.format;
-    let track = match format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL) {
-        Some(t) => t.clone(),
-        None => {
-            let _ = evt_tx.try_send(PlayerEvent::Error("No audio track found".into()));
-            return;
-        }
-    };
-
-    let track_id = track.id;
-    let time_base = track.codec_params.time_base;
-
-    let mut decoder = match symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-    {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = evt_tx.try_send(PlayerEvent::Error(format!("Decoder error: {e}")));
-            return;
-        }
-    };
-
-    let mut sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>> = None;
-
-    loop {
-        if stop.load(Ordering::Relaxed) { break; }
-
-        // Wait if paused
-        if !is_playing.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            continue;
-        }
-
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                let _ = evt_tx.try_send(PlayerEvent::TrackEnded);
-                break;
-            }
-            Err(_) => break,
-        };
-
-        if packet.track_id() != track_id { continue; }
-
-        // Update position
-        if let Some(tb) = time_base {
-            let ts = packet.ts();
-            let secs = tb.calc_time(ts).seconds as f64 + tb.calc_time(ts).frac;
-            position_bits.store(secs.to_bits(), Ordering::Relaxed);
-        }
-
-        let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-
-        // Convert to f32 interleaved
-        let spec = *decoded.spec();
-        if sample_buf.is_none() {
-            sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(
-                decoded.capacity() as u64, spec,
-            ));
-        }
-        if let Some(ref mut sb) = sample_buf {
-            sb.copy_interleaved_ref(decoded);
-            let samples = sb.samples();
-
-            // Write to ring buffer, spin if full
-            let prod = prod.lock().unwrap();
-            let mut written = 0;
-            while written < samples.len() {
-                if stop.load(Ordering::Relaxed) { return; }
-                match prod.write(&samples[written..]) {
-                    Ok(n) => written += n,
-                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
-                }
-            }
-        }
-    }
-}
-
-fn decode_loop_seek(
-    path: String,
-    prod: Arc<Mutex<rb::Producer<f32>>>,
-    stop: Arc<AtomicBool>,
-    position_bits: Arc<AtomicU64>,
-    is_playing: Arc<AtomicBool>,
-    evt_tx: std::sync::mpsc::SyncSender<PlayerEvent>,
-    seek_secs: f64,
+    seek_to: Option<f64>,
 ) {
     use symphonia::core::formats::{SeekMode, SeekTo};
     use symphonia::core::units::Time;
@@ -478,13 +368,14 @@ fn decode_loop_seek(
         }
     };
 
-    // Seek to the target position
-    let seek_time = Time::new(seek_secs as u64, seek_secs.fract());
-    if let Err(e) = format.seek(SeekMode::Coarse, SeekTo::Time { time: seek_time, track_id: Some(track_id) }) {
-        let _ = evt_tx.try_send(PlayerEvent::Error(format!("Seek failed: {e}")));
-        return;
+    if let Some(seek_secs) = seek_to {
+        let seek_time = Time::new(seek_secs as u64, seek_secs.fract());
+        if let Err(e) = format.seek(SeekMode::Coarse, SeekTo::Time { time: seek_time, track_id: Some(track_id) }) {
+            let _ = evt_tx.try_send(PlayerEvent::Error(format!("Seek failed: {e}")));
+            return;
+        }
+        decoder.reset();
     }
-    decoder.reset();
 
     let mut sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>> = None;
 
@@ -529,6 +420,7 @@ fn decode_loop_seek(
             sb.copy_interleaved_ref(decoded);
             let samples = sb.samples();
 
+            // Write to ring buffer, spin if full
             let prod = prod.lock().unwrap();
             let mut written = 0;
             while written < samples.len() {

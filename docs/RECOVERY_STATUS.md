@@ -1,4 +1,7 @@
-# Recovery Status
+# Recovery Status (Historical Record)
+
+> This document records the state of the reconstruction event in March 2026.
+> It is not current operating state. For current state, see PROJECT_STATE.md.
 
 Last updated: March 20, 2026
 
@@ -48,8 +51,11 @@ This repo was partially reconstructed after an accidental deletion of `C:\Casset
 - The slskd handoff path now retries across a ranked, deduplicated candidate pool, skips obvious non-audio files, and records detailed per-candidate rejection diagnostics so failures are inspectable instead of silent.
 - Acquisition queue orchestration now supports multiple scopes in Tauri: single song/album, artist/discography with release-type rules (album-only by default, optional singles/EPs/compilations), and database-seeded album queue building from the local library index.
 
-## Immediate next recovery options
+## Current Status (as of 2026-03-25)
 
-1. Continue rebuilding missing source files from surviving docs and machine-level config.
-2. Reconnect deeper downloader parity, search, and proof flows on top of the restored daemon/runtime baseline.
-3. Harden the `slskd` worker with transfer reconciliation, richer candidate heuristics, and a direct end-to-end proof from the desktop shell.
+The reconstruction is functionally complete. The codebase compiles, tests pass, and all major
+feature surfaces are implemented. Remaining gaps are tracked as P0/P1 items in TODO.md —
+they are hardening and proof work, not missing reconstruction pieces.
+
+The "still missing" items listed above have been rebuilt. The current codebase should be treated
+as the canonical present-tense truth, not as a partial reconstruction of something else.

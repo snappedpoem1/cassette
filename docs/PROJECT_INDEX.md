@@ -1,16 +1,16 @@
 # Cassette Project Index
 
-**Status**: Active hardening and documentation pass  
-**Next**: Close audit gaps, validate provider reliability, keep desktop/runtime docs current  
-**Last Updated**: 2026-03-24  
-**Owner**: Christian (Capn)  
-**Agent Responsibility**: Treat this file as the project map and update it when architecture, workflows, or confidence levels materially change.
+**Status**: Active — hardening and provider proof
+**Next**: Deezer full-track path, async recovery hardening, packaging confidence
+**Last Updated**: 2026-03-25
+**Owner**: Christian (Capn)
 
 ---
 
 ## Project Overview
 
-Cassette is a private, local-first music application built for managing, organizing, auditing, and acquiring a personal audio library. It combines:
+Cassette is a private, local-first music application for managing, organizing, auditing, and acquiring
+a personal audio library. It combines:
 
 - A desktop shell in Tauri 2
 - A SvelteKit renderer
@@ -27,38 +27,30 @@ At its best, Cassette answers five questions clearly:
 
 ---
 
-## Runtime Truth
-
-The current workspace is a Rust workspace with two primary crates:
+## Repository Layout
 
 ```text
-C:\Cassette Music
-|-- Cargo.toml                  # workspace root
-|-- crates\
-|   `-- cassette-core\          # shared Rust domain logic
-|-- src-tauri\                  # desktop shell and Tauri commands
-|-- ui\                         # SvelteKit frontend
-|-- docs\                       # project documentation
-|-- scripts\                    # smoke tests and maintenance helpers
-`-- cassette.db                 # active local database in this workspace
+Cassette/
+├── Cargo.toml                  # workspace root
+├── crates/
+│   └── cassette-core/          # shared Rust domain logic
+├── src-tauri/                  # desktop shell and Tauri commands
+├── ui/                         # SvelteKit frontend
+├── docs/                       # project documentation
+├── scripts/                    # smoke tests and maintenance helpers
+└── test_data/                  # test fixtures (e.g. spotify_export.json)
 ```
 
 Canonical implementation layers:
 
-- `crates/cassette-core`: scanning, organization, downloads, validation, metadata, orchestration, locking
-- `src-tauri`: app boot, command surface, state wiring, desktop plugins
-- `ui`: end-user interface
-- `scripts`: smoke runs, sandbox reset, operational helpers
-
-Important current fact:
-
-- This folder does not currently contain local `.git` metadata, so local branch and history operations are unavailable from this workspace snapshot.
+- `crates/cassette-core` — scanning, organization, downloads, validation, metadata, orchestration, locking
+- `src-tauri` — app boot, command surface, state wiring, desktop plugins
+- `ui` — end-user interface
+- `scripts` — smoke runs, sandbox reset, operational helpers
 
 ---
 
 ## Architecture At A Glance
-
-Cassette has two overlapping views of architecture that both matter:
 
 ### Product Surface
 
@@ -77,116 +69,103 @@ SQLite + local filesystem + external metadata/download providers
 ```text
 Desired state / user intent / import data
   ->
-[Librarian]   Scan, normalize, classify local files
+[Librarian]    Scan, normalize, classify local files
   ->
-[Custodian]   Organize, validate, quarantine, stage safely
+[Custodian]    Organize, validate, quarantine, stage safely
   ->
 [Orchestrator] Reconcile desired vs local and plan work
   ->
-[Director]    Acquire missing media from sources/providers
+[Director]     Acquire missing media from sources/providers
   ->
-[Gatekeeper]  Validate arrivals, fingerprint, admit or quarantine
+[Gatekeeper]   Validate arrivals, fingerprint, admit or quarantine
   ->
-[Metadata]    Enrich tags, release data, supporting context
+[Metadata]     Enrich tags, release data, supporting context
   ->
 Library state + audit trail + UI visibility
 ```
 
-This workflow is implemented inside a broader application that also exposes:
-
-- Playback
-- Queue management
-- Playlists
-- Downloads dashboard
-- Spotify history/import helpers
-- Settings and provider health surfaces
-- Library organization tooling
+The application also exposes: playback, queue management, playlists, downloads dashboard,
+Spotify history/import helpers, settings and provider health surfaces, library organization tooling.
 
 ---
 
-## Modules And Status
+## Module Status
 
 | Area | Location | Status | What Is True Now | Main Gaps |
 |---|---|---|---|---|
-| Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Packaging confidence still needs continued proof |
-| UI | `ui` | Active | Library, downloads, settings, and advanced routes exist | Long-session UX polish still evolving |
-| Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Confidence thresholds and edge-case coverage should keep improving |
-| Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness should remain a focus |
-| Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Needs ongoing determinism and traceability checks |
-| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, sources, resilience, temp recovery modules exist | Provider reliability and circuit-break style behavior need stronger proof |
-| Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness and policy tuning should be monitored |
-| Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability are present | Single-machine only; no distributed coordination |
+| Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Packaging proof incomplete |
+| UI | `ui` | Active | Library, downloads, settings, artists, playlists, tools routes exist | Long-session UX polish; artist deep-link from library tab navigates to /artists list |
+| Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
+| Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
+| Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
+| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery exist | Deezer full-track path incomplete; MetadataRepairOnly stubbed; `downloader/` module overlap unresolved |
+| Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
+| Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
 | Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
-| Metadata | `crates/cassette-core/src/metadata.rs` and librarian enrichers | Partial | Metadata and enrichment code exists | Full background integration is still a future hardening step |
+| Metadata | `crates/cassette-core/src/metadata.rs` | Partial | Metadata and enrichment code exists | Background enrichment integration is a future hardening step |
+| Player | `crates/cassette-core/src/player` | Implemented | Symphonia decode + CPAL output + ring buffer; seek, pause, volume, queue advance | Long-session reliability not formally tested |
 
 ---
 
 ## Command Surface Snapshot
 
-The Tauri command layer currently exposes commands across these areas:
+The Tauri command layer exposes commands across these areas:
 
-- Library roots, scans, track search, albums, artists
-- Queue management
-- Playback controls and now-playing state
+- Library roots, scans, track/album/artist queries
+- Queue management and playback controls
 - Download job starts, metadata search, discography lookups, transfer inspection
 - Playlist CRUD and playback
 - Spotify import parsing and album queueing
 - Settings/config persistence and provider status
 - Organizer actions, duplicate finding, tag fixes, staging ingest
 
-This means Cassette is already beyond a narrow pipeline prototype. The canonical docs need to support both:
-
-- The pipeline-oriented audio workflow
-- The broader desktop product/runtime
-
 ---
 
 ## Known Issues And Technical Debt
 
-### Critical
+### P0 — Shipping Blockers
 
-- [ ] Audit/event coverage still needs to remain provable across organization and admission paths.
-  - Why it matters: lineage is one of the project's core promises.
-  - Evidence source: validation/logging stack exists, but this should remain a shipping gate rather than an assumption.
+- [ ] Audit/event coverage must remain provable across organization and admission paths.
+  Validation/logging checks should fail loudly if coverage regresses.
+- [ ] Provider live-proof coverage is incomplete. Deezer full-track path is the most
+  significant gap. Qobuz and slskd paths exist but are not clean-machine proven.
 
-### High Priority
+### P1 — Important Hardening
 
-- [ ] Provider live-proof coverage is incomplete on this machine.
-  - Impact: runtime confidence for external acquisition paths is not yet complete.
-  - Notes: Deezer full-track path is still called out as incomplete in current repo docs.
+- [ ] Async hardening incomplete across some acquisition/orchestration flows.
+  Cancellation safety, retry behavior, and temp/staging cleanup guarantees need test coverage.
+- [ ] Packaging and clean-machine confidence need proof. "Builds here" ≠ "ready to ship."
+- [ ] Performance telemetry not yet treated as a strict regression budget.
 
-- [ ] Async hardening is incomplete across some acquisition/orchestration flows.
-  - Impact: operational consistency and throughput are harder to reason about under load or flaky networks.
+### P2 — Improvement
 
-- [ ] Packaging and clean-machine confidence need stronger proof.
-  - Impact: "builds here" is not the same as "ready for release".
-
-### Medium Priority
-
-- [ ] Performance telemetry is not yet treated as a strict regression budget.
-- [ ] Documentation for public APIs and operating patterns can still be tightened further.
-- [ ] Long-session reliability and recovery drills should be formalized.
+- [ ] `downloader/` module and `director/providers/` have overlapping implementations.
+  The director/providers path is active; the older downloader path should be reconciled or removed.
+- [ ] `MetadataRepairOnly` acquisition strategy is explicitly stubbed in `director/engine.rs`.
+- [ ] Long-session desktop reliability not formally tested or documented.
+- [ ] `Album.id` is a computed `ROW_NUMBER()` from SQL, not a real primary key.
+  IDs are not stable across queries if data changes. Any code that caches Album IDs by value is fragile.
 
 ---
 
 ## Quality Gates
 
-Before declaring a release candidate ready, verify all of the following:
+Before declaring a release candidate ready, all of the following must pass:
 
-- [ ] `cargo check` passes at workspace root
+- [ ] `cargo check` passes at workspace root (no warnings)
 - [ ] `cargo test` passes for the Rust workspace
 - [ ] `ui` build passes with `npm run build`
 - [ ] Desktop smoke script passes: `scripts/smoke_desktop.ps1`
 - [ ] Validation flows complete against sandbox inputs without corrupting source files
 - [ ] File and operation lineage is queryable for representative workflows
 - [ ] Provider failures are visible, recoverable, and documented
-- [ ] Docs reflect the current runtime rather than historical plan text
+- [ ] Docs reflect the current runtime rather than plan text
 
 ---
 
 ## Operational Principles
 
-Cassette is handling real music files and real local state. Every implementation choice should be:
+Cassette handles real music files and real local state. Every implementation choice should be:
 
 - Reversible before destructive mutation
 - Auditable through logs and operation records
@@ -198,34 +177,30 @@ Cassette is handling real music files and real local state. Every implementation
 
 ## Performance Baseline
 
-Current evidence in repo docs is qualitative rather than benchmark-driven:
+Current evidence is qualitative:
 
 - Rust workspace compiles cleanly
 - UI production build succeeds
-- Desktop smoke checks pass via `scripts/smoke_desktop.ps1`
+- Desktop smoke checks pass
 
-Formal baseline ownership lives in [TELEMETRY.md](/c:/Cassette%20Music/docs/TELEMETRY.md), and that file should be updated whenever we add benchmarks or observe regressions.
+Formal baselines live in [TELEMETRY.md](TELEMETRY.md) and should be updated when benchmarks are added.
 
 ---
 
 ## Testing Strategy
 
-Primary verification commands in this workspace:
+Primary verification commands:
 
-```powershell
+```bash
 cargo check
 cargo test
-
-Set-Location ui
-npm run build
-
-Set-Location ..
-.\scripts\smoke_desktop.ps1
+cd ui && npm run build
+cd .. && ./scripts/smoke_desktop.ps1   # Windows
 ```
 
 Validation CLI surface:
 
-```powershell
+```bash
 cargo run -p cassette-core --bin cassette -- validate --help
 cargo run -p cassette-core --bin cassette -- lineage --help
 cargo run -p cassette-core --bin cassette -- operation --help
@@ -237,65 +212,26 @@ Use sandboxed validation paths before production-mode actions whenever possible.
 
 ## Decisions That Shape The Codebase
 
-The current codebase clearly reflects these decisions:
-
 - Local SQLite over external service dependencies
 - Shared domain crate to keep business logic outside the Tauri shell
 - Defensive file handling with validation and quarantine concepts
 - Explicit module boundaries for acquisition, organization, validation, and observability
 - Single-machine operational assumptions
 
-Full rationale lives in [DECISIONS.md](/c:/Cassette%20Music/docs/DECISIONS.md).
-
----
-
-## Agent Handoff Checklist
-
-New agents should:
-
-1. Read [AGENT_BRIEFING.md](/c:/Cassette%20Music/docs/AGENT_BRIEFING.md)
-2. Read [AGENT_CODEX.md](/c:/Cassette%20Music/docs/AGENT_CODEX.md)
-3. Read [TODO.md](/c:/Cassette%20Music/docs/TODO.md)
-4. Review [DECISIONS.md](/c:/Cassette%20Music/docs/DECISIONS.md)
-5. Review [PATTERNS.md](/c:/Cassette%20Music/docs/PATTERNS.md)
-6. Run the baseline build/test commands
-7. Confirm whether they are operating in a workspace snapshot without `.git`
-
-If onboarding takes longer than about 30 minutes, the documentation should be improved again.
-
----
-
-## Near-Term Roadmap
-
-### Hardening Track
-
-- Close any remaining auditability gaps
-- Strengthen provider reliability and recovery behavior
-- Formalize telemetry baselines and regression thresholds
-- Improve packaging/release confidence
-
-### Documentation Track
-
-- Keep agent docs aligned with runtime truth
-- Add or refine API documentation where public surfaces are ambiguous
-- Record architecture changes as decisions, not tribal knowledge
-
-### Product Track
-
-- Continue improving library management and acquisition UX
-- Keep advanced tools discoverable without bloating the primary flow
+Full rationale in [DECISIONS.md](DECISIONS.md).
 
 ---
 
 ## Canonical Companion Docs
 
-- [AGENT_CODEX.md](/c:/Cassette%20Music/docs/AGENT_CODEX.md)
-- [AGENT_BRIEFING.md](/c:/Cassette%20Music/docs/AGENT_BRIEFING.md)
-- [TODO.md](/c:/Cassette%20Music/docs/TODO.md)
-- [DECISIONS.md](/c:/Cassette%20Music/docs/DECISIONS.md)
-- [PATTERNS.md](/c:/Cassette%20Music/docs/PATTERNS.md)
-- [TELEMETRY.md](/c:/Cassette%20Music/docs/TELEMETRY.md)
-- [PROJECT_STATE.md](/c:/Cassette%20Music/docs/PROJECT_STATE.md)
+- [AGENT_CODEX.md](AGENT_CODEX.md)
+- [AGENT_BRIEFING.md](AGENT_BRIEFING.md)
+- [TODO.md](TODO.md)
+- [DECISIONS.md](DECISIONS.md)
+- [PATTERNS.md](PATTERNS.md)
+- [TELEMETRY.md](TELEMETRY.md)
+- [PROJECT_STATE.md](PROJECT_STATE.md)
+- [RECOVERY_STATUS.md](RECOVERY_STATUS.md)
 
 ---
 

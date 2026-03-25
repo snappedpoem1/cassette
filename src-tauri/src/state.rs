@@ -17,6 +17,7 @@ use cassette_core::{
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use toml::Table as TomlTable;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
@@ -419,16 +420,30 @@ fn load_streamrip_config() -> StreamripConfig {
     };
 
     let path = PathBuf::from(app_data).join("streamrip").join("config.toml");
-    let Ok(contents) = fs::read_to_string(path) else {
+    let Ok(contents) = fs::read_to_string(&path) else {
         return StreamripConfig::default();
     };
 
+    let Ok(doc) = contents.parse::<TomlTable>() else {
+        tracing::warn!("streamrip config.toml could not be parsed as TOML: {}", path.display());
+        return StreamripConfig::default();
+    };
+
+    let toml_str = |section: &str, key: &str| -> Option<String> {
+        doc.get(section)?.get(key)?.as_str().map(str::to_owned)
+    };
+    let toml_arr_csv = |section: &str, key: &str| -> Option<String> {
+        let arr = doc.get(section)?.get(key)?.as_array()?;
+        let csv = arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(",");
+        if csv.is_empty() { None } else { Some(csv) }
+    };
+
     StreamripConfig {
-        qobuz_email: read_toml_string(&contents, "email_or_userid"),
-        qobuz_password_hash: read_toml_string(&contents, "password_or_token"),
-        qobuz_app_id: read_toml_string(&contents, "app_id"),
-        qobuz_secrets: read_toml_array(&contents, "secrets"),
-        deezer_arl: read_toml_string(&contents, "arl"),
+        qobuz_email: toml_str("qobuz", "email_or_userid"),
+        qobuz_password_hash: toml_str("qobuz", "password_or_token"),
+        qobuz_app_id: toml_str("qobuz", "app_id"),
+        qobuz_secrets: toml_arr_csv("qobuz", "secrets"),
+        deezer_arl: toml_str("deezer", "arl"),
     }
 }
 
@@ -454,20 +469,6 @@ fn load_slskd_config() -> SlskdConfig {
     }
 }
 
-fn read_toml_string(contents: &str, key: &str) -> Option<String> {
-    contents.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let prefix = format!("{key} = ");
-        trimmed.strip_prefix(&prefix).map(|value| {
-            value
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string()
-        })
-    })
-}
-
 fn read_yaml_value(contents: &str, key: &str) -> Option<String> {
     contents.lines().find_map(|line| {
         let trimmed = line.trim();
@@ -475,22 +476,5 @@ fn read_yaml_value(contents: &str, key: &str) -> Option<String> {
         trimmed
             .strip_prefix(&prefix)
             .map(|value| value.trim().trim_matches('"').trim_matches('\'').to_string())
-    })
-}
-
-fn read_toml_array(contents: &str, key: &str) -> Option<String> {
-    contents.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let prefix = format!("{key} = [");
-        trimmed.strip_prefix(&prefix).map(|value| {
-            value
-                .trim()
-                .trim_end_matches(']')
-                .split(',')
-                .map(|item| item.trim().trim_matches('"').trim_matches('\''))
-                .filter(|item| !item.is_empty())
-                .collect::<Vec<_>>()
-                .join(",")
-        })
     })
 }

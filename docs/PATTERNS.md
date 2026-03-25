@@ -2,7 +2,7 @@
 
 This file records the code, naming, testing, and documentation patterns that should feel normal in Cassette.
 
-**Last Updated**: 2026-03-24
+**Last Updated**: 2026-03-25
 
 ---
 
@@ -70,17 +70,6 @@ Keep responsibilities visible:
 - UI state in UI and Tauri layers
 - domain logic in `cassette-core`
 - persistence and operational concerns close to `library`
-
----
-
-## Python Patterns
-
-Workspace rules:
-
-- use `pathlib.Path`
-- use `logging.getLogger(__name__)`
-- type-hint every function
-- use parameterized SQL with `?`
 
 ---
 
