@@ -146,7 +146,3 @@ impl DownloadConfig {
     }
 }
 
-pub mod real_debrid {}
-pub mod slskd {}
-pub mod torrent {}
-pub mod usenet {}

@@ -259,6 +259,17 @@ impl Db {
         Ok(rows.next().transpose()?)
     }
 
+    pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
+        let mut stmt = self.conn.prepare("
+            SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
+                   duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
+                   cover_art_path,added_at
+            FROM tracks WHERE path = ?1
+        ")?;
+        let mut rows = stmt.query_map(params![path], Self::row_to_track)?;
+        Ok(rows.next().transpose()?)
+    }
+
     pub fn get_albums(&self) -> Result<Vec<Album>> {
         let mut stmt = self.conn.prepare("
             SELECT album_artist, album, MIN(year), MIN(cover_art_path), COUNT(*),

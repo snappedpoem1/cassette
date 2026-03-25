@@ -32,7 +32,7 @@ export const activeTab = writable<LibraryTab>('albums');
 export async function loadLibrary() {
   try {
     const [t, a, ar, roots, count] = await Promise.all([
-      api.getTracks(2000, 0),
+      api.getTracks(50000, 0),
       api.getAlbums(),
       api.getArtists(),
       api.getLibraryRoots(),

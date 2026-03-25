@@ -145,16 +145,26 @@ impl Provider for YtDlpProvider {
                 message: error.to_string(),
             })?;
 
-        let mut newest = None::<PathBuf>;
+        // Select the file with the most recent mtime — avoids depending on OS directory
+        // iteration order, which is undefined and silently wrong on some filesystems.
+        let mut newest = None::<(PathBuf, std::time::SystemTime)>;
         while let Some(entry) = entries.next_entry().await.map_err(|error| ProviderError::Other {
             provider_id: "yt_dlp".to_string(),
             message: error.to_string(),
         })? {
             let path = entry.path();
-            if path.is_file() {
-                newest = Some(path);
+            if !path.is_file() { continue; }
+            let mtime = tokio::fs::metadata(&path).await
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            match &newest {
+                None => { newest = Some((path, mtime)); }
+                Some((_, prev_mtime)) if mtime > *prev_mtime => { newest = Some((path, mtime)); }
+                _ => {}
             }
         }
+        let newest = newest.map(|(path, _)| path);
 
         let temp_path = newest.ok_or_else(|| ProviderError::Other {
             provider_id: "yt_dlp".to_string(),

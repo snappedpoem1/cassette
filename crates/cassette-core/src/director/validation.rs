@@ -131,7 +131,7 @@ fn validate_candidate_blocking(
     }
 
     let quality = match ext.as_str() {
-        "flac" | "wav" | "aiff" => CandidateQuality::Lossless,
+        "flac" | "wav" | "aiff" | "wv" | "ape" => CandidateQuality::Lossless,
         "mp3" | "aac" | "m4a" | "ogg" | "opus" => CandidateQuality::Lossy,
         _ => CandidateQuality::Unknown,
     };

@@ -70,12 +70,16 @@ pub fn resolve_duplicate(
             if let Ok(Some(track)) = db.get_track_by_id(*id) {
                 let path = std::path::Path::new(&track.path);
                 if path.exists() {
-                    let _ = std::fs::remove_file(path);
+                    if let Err(e) = std::fs::remove_file(path) {
+                        tracing::warn!("[resolve_duplicate] failed to delete {}: {e}", path.display());
+                    }
                 }
             }
         }
 
-        let _ = db.delete_track(*id);
+        if let Err(e) = db.delete_track(*id) {
+            tracing::warn!("[resolve_duplicate] failed to delete track {id} from DB: {e}");
+        }
         removed += 1;
     }
 
@@ -152,8 +156,13 @@ pub fn ingest_staging(state: State<'_, AppState>) -> Result<Vec<String>, String>
     // Scan ingested files into DB
     let db = state.db.lock().map_err(|e| e.to_string())?;
     for path in &ingested {
-        if let Ok(track) = cassette_core::library::read_track_metadata(std::path::Path::new(path)) {
-            let _ = db.upsert_track(&track);
+        match cassette_core::library::read_track_metadata(std::path::Path::new(path)) {
+            Ok(track) => {
+                if let Err(e) = db.upsert_track(&track) {
+                    tracing::warn!("[ingest_staging] failed to upsert {path}: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("[ingest_staging] failed to read metadata from {path}: {e}"),
         }
     }
 

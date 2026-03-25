@@ -5,15 +5,10 @@ use tauri::State;
 #[tauri::command]
 pub fn player_load(state: State<'_, AppState>, path: String) {
     state.player.load(path.clone());
-    // find track by path in db
     let db = state.db.lock().unwrap();
-    if let Ok(tracks) = db.search_tracks(&std::path::Path::new(&path)
-        .file_stem().unwrap_or_default().to_string_lossy())
-    {
-        if let Some(t) = tracks.into_iter().find(|t| t.path == path) {
-            let mut ps = state.playback_state.lock().unwrap();
-            ps.current_track = Some(t);
-        }
+    if let Ok(Some(t)) = db.get_track_by_path(&path) {
+        let mut ps = state.playback_state.lock().unwrap();
+        ps.current_track = Some(t);
     }
 }
 
