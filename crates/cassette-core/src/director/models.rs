@@ -119,6 +119,8 @@ pub struct CandidateScore {
     pub provider_points: i32,
     pub validation_points: i32,
     pub size_points: i32,
+    pub bitrate_points: i32,
+    pub format_points: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +144,8 @@ pub struct CandidateSelection {
 pub enum CandidateSelectionMode {
     FirstValidWins,
     CompareAllCandidates,
+    /// Race the top N providers in parallel, pick the best candidate from responders.
+    CompareTopN(usize),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -41,19 +41,42 @@ pub fn score_candidate(
     let validation_points = if validation.is_valid { 20 } else { -50 };
     let size_points = if validation.file_size > 5 * 1024 * 1024 { 5 } else { 0 };
 
+    // Bitrate bonus: reward higher bitrate candidates (0-10 points)
+    let bitrate_points = match candidate.bitrate_kbps {
+        Some(kbps) if kbps >= 900 => 10,   // lossless-tier (FLAC ~900+)
+        Some(kbps) if kbps >= 320 => 7,    // high lossy (320 MP3/AAC)
+        Some(kbps) if kbps >= 256 => 4,    // medium lossy
+        Some(kbps) if kbps >= 128 => 2,    // acceptable lossy
+        _ => 0,
+    };
+
+    // Format preference bonus: reward preferred extensions (0-5 points)
+    let format_points = candidate.extension_hint.as_deref().map_or(0, |ext| {
+        let ext_lower = ext.to_ascii_lowercase();
+        if quality_policy.preferred_extensions.iter().any(|pref| pref == &ext_lower) {
+            5
+        } else {
+            0
+        }
+    });
+
     let score = CandidateScore {
         total: metadata_match_points
             + duration_points
             + codec_points
             + provider_points
             + validation_points
-            + size_points,
+            + size_points
+            + bitrate_points
+            + format_points,
         metadata_match_points,
         duration_points,
         codec_points,
         provider_points,
         validation_points,
         size_points,
+        bitrate_points,
+        format_points,
     };
 
     let mut details = BTreeMap::<String, String>::new();

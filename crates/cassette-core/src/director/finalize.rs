@@ -229,6 +229,8 @@ mod tests {
                 provider_points: 1,
                 validation_points: 1,
                 size_points: 1,
+                bitrate_points: 0,
+                format_points: 0,
             },
             reason: SelectionReason {
                 summary: "test".to_string(),

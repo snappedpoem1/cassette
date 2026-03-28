@@ -20,7 +20,7 @@ impl StrategyPlanner {
         &self,
         task: &TrackTask,
         providers: &[ProviderDescriptor],
-        _config: &DirectorConfig,
+        config: &DirectorConfig,
     ) -> StrategyPlan {
         let mut ordered = providers.to_vec();
 
@@ -89,19 +89,18 @@ impl StrategyPlanner {
         }
 
         let provider_order = ordered.into_iter().map(|descriptor| descriptor.id).collect();
+        let parallel_n = config.parallel_provider_count.max(1);
         let selection_mode = match task.strategy {
-            AcquisitionStrategy::Standard | AcquisitionStrategy::SingleTrackPriority => {
-                CandidateSelectionMode::FirstValidWins
+            AcquisitionStrategy::SingleTrackPriority => CandidateSelectionMode::FirstValidWins,
+            AcquisitionStrategy::Standard | AcquisitionStrategy::DiscographyBatch => {
+                CandidateSelectionMode::CompareTopN(parallel_n)
             }
             _ => CandidateSelectionMode::CompareAllCandidates,
         };
 
-        let collect_multiple_candidates = matches!(
-            task.strategy,
-            AcquisitionStrategy::HighQualityOnly
-                | AcquisitionStrategy::DiscographyBatch
-                | AcquisitionStrategy::RedownloadReplaceIfBetter
-                | AcquisitionStrategy::ObscureFallbackHeavy
+        let collect_multiple_candidates = !matches!(
+            selection_mode,
+            CandidateSelectionMode::FirstValidWins
         );
 
         let require_lossless = matches!(

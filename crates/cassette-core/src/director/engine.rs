@@ -3,10 +3,11 @@ use crate::director::error::{DirectorError, ProviderError};
 use crate::director::finalize::finalize_selected_candidate;
 use crate::director::metadata::apply_metadata;
 use crate::director::models::{
-    CandidateDisposition, CandidateRecord, CandidateSelection, DirectorEvent, DirectorProgress,
-    DirectorTaskResult, FinalizedTrack, FinalizedTrackDisposition, ProviderAttemptRecord,
-    ProviderDescriptor, ProviderHealthState, ProviderHealthStatus, ProviderSearchCandidate,
-    ProviderSearchRecord, ProvenanceRecord, TrackTask,
+    CandidateDisposition, CandidateRecord, CandidateSelection, CandidateSelectionMode,
+    DirectorEvent, DirectorProgress, DirectorTaskResult, FinalizedTrack,
+    FinalizedTrackDisposition, ProviderAttemptRecord, ProviderDescriptor, ProviderHealthState,
+    ProviderHealthStatus, ProviderSearchCandidate, ProviderSearchRecord, ProvenanceRecord,
+    TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::scoring::score_candidate;
@@ -23,8 +24,8 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
-const PROVIDER_HEALTH_INTERVAL_SECS: u64 = 60;
-const PROVIDER_HEALTH_STALE_SECS: i64 = 120;
+const PROVIDER_HEALTH_INTERVAL_SECS: u64 = 20;
+const PROVIDER_HEALTH_STALE_SECS: i64 = 60;
 
 #[derive(Debug, Clone)]
 pub struct DirectorSubmission {
@@ -171,8 +172,8 @@ impl Director {
         let provider_health_state = Arc::new(RwLock::new(HashMap::<String, ProviderHealthState>::new()));
         let search_cache = Arc::new(
             Cache::builder()
-                .max_capacity(1_000)
-                .time_to_live(std::time::Duration::from_secs(15 * 60))
+                .max_capacity(5_000)
+                .time_to_live(std::time::Duration::from_secs(30 * 60))
                 .build(),
         );
         let health_token = cancel_token.child_token();
@@ -277,11 +278,18 @@ impl Director {
             .iter()
             .map(|provider| {
                 let descriptor = provider.descriptor();
+                let default_concurrency = match descriptor.id.as_str() {
+                    "slskd" => 2,       // slskd can handle 2 concurrent searches
+                    "qobuz" => 4,       // streaming API, handles concurrency well
+                    "deezer" => 4,      // streaming API, handles concurrency well
+                    "local_archive" => 8, // filesystem — fast, parallelizes well
+                    _ => 3,             // sensible default for network providers
+                };
                 let limit = self
                     .config
                     .provider_policy(&descriptor.id)
                     .map(|policy| policy.max_concurrency.max(1))
-                    .unwrap_or(1);
+                    .unwrap_or(default_concurrency);
                 (descriptor.id, Arc::new(Semaphore::new(limit)))
             })
             .collect()
@@ -818,10 +826,10 @@ async fn try_provider(
     Ok(ProviderAttemptOutcome::Tried)
 }
 
-/// Two-pass waterfall: first pass tries providers non-blocking (skips busy ones),
-/// second pass blocks on deferred providers in priority order. This ensures all
-/// provider semaphores are utilized in parallel across concurrent tasks rather than
-/// all tasks queuing behind the first provider.
+/// Two-pass waterfall with optional parallel search prefetch. When the selection mode
+/// is CompareTopN(n), the top N providers are searched concurrently to warm the cache
+/// before the sequential waterfall begins. This eliminates sequential search latency
+/// for the most common providers while preserving the existing acquire/validate flow.
 #[allow(clippy::too_many_arguments)]
 async fn execute_waterfall(
     config: &DirectorConfig,
@@ -845,6 +853,68 @@ async fn execute_waterfall(
         .collect();
     let mut valid_candidates = Vec::<(CandidateDisposition, ProviderDescriptor)>::new();
     let mut deferred_providers = Vec::<String>::new();
+
+    // Parallel search prefetch: for CompareTopN, fire searches for top N providers
+    // concurrently. Results are cached by moka so the sequential waterfall below
+    // will hit cache and skip the network call entirely.
+    if let CandidateSelectionMode::CompareTopN(n) = plan.selection_mode {
+        let prefetch_count = n.min(plan.provider_order.len());
+        let mut prefetch_set = tokio::task::JoinSet::new();
+
+        for provider_id in plan.provider_order.iter().take(prefetch_count) {
+            // Skip unhealthy providers
+            if should_skip_provider(provider_health_state, provider_id).await.is_some() {
+                continue;
+            }
+            let Some(provider) = provider_map.get(provider_id).cloned() else { continue };
+            let Some(limit) = provider_limits.get(provider_id).cloned() else { continue };
+
+            let cache_key = provider_search_cache_key(&provider_id, task);
+            if search_cache.get(&cache_key).is_some() {
+                continue; // already cached
+            }
+
+            let config_clone = config.clone();
+            let task_clone = task.clone();
+            let plan_clone = plan.clone();
+            let cancel_clone = cancel_token.clone();
+            let cache_clone = Arc::clone(search_cache);
+            let provider_id_clone = provider_id.clone();
+
+            prefetch_set.spawn(async move {
+                // Acquire provider permit (blocking — these are prefetch, we want them all)
+                let permit = match limit.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => match limit.acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => return,
+                    },
+                };
+                let result = execute_with_retry(
+                    &config_clone,
+                    provider_id_clone.clone(),
+                    &cancel_clone,
+                    config_clone.search_timeout(),
+                    || provider.search(&task_clone, &plan_clone),
+                ).await;
+                drop(permit);
+                if let Ok(results) = result {
+                    let key = provider_search_cache_key(&provider_id_clone, &task_clone);
+                    cache_clone.insert(key, Arc::new(results));
+                }
+            });
+        }
+
+        // Wait for all prefetch searches (with cancellation support)
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                return Err(DirectorError::TaskCancelled);
+            }
+            _ = async {
+                while prefetch_set.join_next().await.is_some() {}
+            } => {}
+        }
+    }
 
     // Pass 1: Non-blocking — try each provider, skip if semaphore is full
     for (provider_order_index, provider_id) in plan.provider_order.iter().enumerate() {
@@ -907,6 +977,25 @@ async fn execute_waterfall(
                 deferred_providers.push(provider_id.clone());
             }
             ProviderAttemptOutcome::Tried => {}
+        }
+    }
+
+    // CompareTopN early exit: if we already have valid candidates from the top N
+    // providers, skip remaining providers and finalize the best one.
+    if let CandidateSelectionMode::CompareTopN(_) = plan.selection_mode {
+        if !valid_candidates.is_empty() {
+            let available_candidates: Vec<_> = valid_candidates
+                .into_iter()
+                .filter(|(candidate, _)| candidate.acquisition.temp_path.exists())
+                .collect();
+            if let Some((best, descriptor)) = available_candidates
+                .into_iter()
+                .max_by_key(|(candidate, _)| candidate.score.total)
+            {
+                return finalize_candidate(config, events, task, descriptor, best, attempts.len()).await;
+            }
+            // If all temp files gone, fall through to remaining providers
+            valid_candidates = Vec::new();
         }
     }
 
@@ -1126,7 +1215,7 @@ async fn execute_provider_search(
     }
 
     let _permit = acquire_provider_permit(&provider_limit, &provider.descriptor().id, blocking).await?;
-    let results = execute_with_retry(config, provider.descriptor().id.clone(), cancel_token, || {
+    let results = execute_with_retry(config, provider.descriptor().id.clone(), cancel_token, config.search_timeout(), || {
         provider.search(task, plan)
     })
     .await?;
@@ -1146,7 +1235,7 @@ async fn execute_provider_acquire(
     cancel_token: &CancellationToken,
 ) -> Result<crate::director::models::CandidateAcquisition, DirectorError> {
     let _permit = acquire_provider_permit(&provider_limit, &provider.descriptor().id, blocking).await?;
-    execute_with_retry(config, provider.descriptor().id.clone(), cancel_token, || {
+    execute_with_retry(config, provider.descriptor().id.clone(), cancel_token, config.provider_timeout(), || {
         provider.acquire(task, candidate, temp_context, plan)
     })
     .await
@@ -1156,6 +1245,7 @@ async fn execute_with_retry<F, Fut, T>(
     config: &DirectorConfig,
     provider_id: String,
     cancel_token: &CancellationToken,
+    timeout: std::time::Duration,
     mut operation: F,
 ) -> Result<T, DirectorError>
 where
@@ -1168,7 +1258,7 @@ where
     for attempt in 1..=max_attempts {
         let operation_fut = operation();
         tokio::pin!(operation_fut);
-        let timeout_fut = sleep(config.provider_timeout());
+        let timeout_fut = sleep(timeout);
         tokio::pin!(timeout_fut);
 
         let result = tokio::select! {
@@ -1193,7 +1283,8 @@ where
             }
         }
 
-        let backoff = config.retry_policy.base_backoff_millis * u64::from(attempt);
+        // Exponential backoff: base * 2^(attempt-1)
+        let backoff = config.retry_policy.base_backoff_millis * (1u64 << (attempt - 1).min(6));
         tokio::select! {
             _ = cancel_token.cancelled() => {
                 return Err(DirectorError::TaskCancelled);

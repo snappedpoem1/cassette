@@ -11,10 +11,12 @@ pub struct DirectorConfig {
     pub local_search_roots: Vec<PathBuf>,
     pub worker_concurrency: usize,
     pub provider_timeout_secs: u64,
+    pub search_timeout_secs: u64,
     pub retry_policy: RetryPolicy,
     pub quality_policy: QualityPolicy,
     pub duplicate_policy: DuplicatePolicy,
     pub temp_recovery: TempRecoveryPolicy,
+    pub parallel_provider_count: usize,
     pub provider_policies: Vec<ProviderPolicy>,
     pub staging_root: PathBuf,
     pub max_file_size_bytes: usize,
@@ -36,6 +38,10 @@ impl DirectorConfig {
         Duration::from_secs(self.provider_timeout_secs.max(1))
     }
 
+    pub fn search_timeout(&self) -> Duration {
+        Duration::from_secs(self.search_timeout_secs.max(1))
+    }
+
     pub fn provider_policy(&self, provider_id: &str) -> Option<&ProviderPolicy> {
         self.provider_policies
             .iter()
@@ -51,7 +57,9 @@ impl Default for DirectorConfig {
             local_search_roots: Vec::new(),
             worker_concurrency: 12,
             provider_timeout_secs: 45,
+            search_timeout_secs: 30,
             retry_policy: RetryPolicy::default(),
+            parallel_provider_count: 3,
             quality_policy: QualityPolicy::default(),
             duplicate_policy: DuplicatePolicy::KeepExisting,
             temp_recovery: TempRecoveryPolicy::default(),

@@ -2261,6 +2261,8 @@ mod tests {
                         provider_points: 11,
                         validation_points: 20,
                         size_points: 5,
+                        bitrate_points: 0,
+                        format_points: 0,
                     }),
                     score_reason: Some(reason.clone()),
                     outcome: "valid_candidate".to_string(),
