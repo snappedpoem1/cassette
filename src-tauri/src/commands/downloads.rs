@@ -791,6 +791,48 @@ fn release_type_allowed(
     true
 }
 
+#[tauri::command]
+pub async fn get_candidate_review(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Vec<cassette_core::db::CandidateReviewItem>, String> {
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    db.get_candidate_review(&task_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_task_provenance(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Option<String>, String> {
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    db.get_task_provenance(&task_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_recent_task_results(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    let results = db
+        .get_recent_task_results(limit.unwrap_or(50))
+        .map_err(|error| error.to_string())?;
+    Ok(results
+        .into_iter()
+        .map(|(task_id, disposition, provider, error)| {
+            serde_json::json!({
+                "task_id": task_id,
+                "disposition": disposition,
+                "provider": provider,
+                "error": error,
+            })
+        })
+        .collect())
+}
+
 fn normalize_job_text(value: &str) -> String {
     value
         .chars()

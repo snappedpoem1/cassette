@@ -260,6 +260,28 @@ export interface TagFix {
   applied: boolean;
 }
 
+export interface CandidateReviewItem {
+  task_id: string;
+  provider_id: string;
+  provider_display_name: string;
+  provider_trust_rank: number;
+  provider_candidate_id: string;
+  outcome: string;
+  rejection_reason: string | null;
+  is_selected: boolean;
+  score_total: number | null;
+  candidate_json: string;
+  validation_json: string | null;
+  score_reason_json: string | null;
+}
+
+export interface TaskResultSummary {
+  task_id: string;
+  disposition: string;
+  provider: string;
+  error: string | null;
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -363,6 +385,12 @@ export const api = {
       artist_mbid: artistMbid,
     }),
   getSlskdTransfers: () => invoke<object[]>('get_slskd_transfers'),
+  getCandidateReview: (taskId: string) =>
+    invoke<CandidateReviewItem[]>('get_candidate_review', { task_id: taskId }),
+  getTaskProvenance: (taskId: string) =>
+    invoke<string | null>('get_task_provenance', { task_id: taskId }),
+  getRecentTaskResults: (limit?: number) =>
+    invoke<TaskResultSummary[]>('get_recent_task_results', { limit }),
 
   // Import
   parseSpotifyHistory: (path: string) =>

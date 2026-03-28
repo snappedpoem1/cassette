@@ -6,11 +6,30 @@
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
   import { debounce } from '$lib/utils';
-  import type { DownloadAlbumResult } from '$lib/api/tauri';
+  import type { DownloadAlbumResult, CandidateReviewItem } from '$lib/api/tauri';
 
   let searchInput = '';
   let discogArtist: string | null = null;
   let queueNotice: string | null = null;
+  let expandedJob: string | null = null;
+  let candidateReview: CandidateReviewItem[] = [];
+  let reviewLoading = false;
+
+  async function toggleReview(taskId: string) {
+    if (expandedJob === taskId) {
+      expandedJob = null;
+      candidateReview = [];
+      return;
+    }
+    expandedJob = taskId;
+    reviewLoading = true;
+    try {
+      candidateReview = await api.getCandidateReview(taskId);
+    } catch {
+      candidateReview = [];
+    }
+    reviewLoading = false;
+  }
 
   const debouncedSearch = debounce((q: string) => {
     if (q.trim()) searchMetadata(q);
@@ -184,7 +203,15 @@
     {:else}
       <div class="job-list">
         {#each $downloadJobs as job}
-          <div class="job-row">
+          <!-- svelte-ignore a11y-no-static-element-interactions -->
+          <div
+            class="job-row"
+            class:job-expandable={['Done', 'Failed', 'Cancelled'].includes(job.status)}
+            on:click={() => { if (['Done', 'Failed', 'Cancelled'].includes(job.status)) toggleReview(job.id); }}
+            on:keydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ['Done', 'Failed', 'Cancelled'].includes(job.status)) { e.preventDefault(); toggleReview(job.id); } }}
+            role={['Done', 'Failed', 'Cancelled'].includes(job.status) ? 'button' : undefined}
+            tabindex={['Done', 'Failed', 'Cancelled'].includes(job.status) ? 0 : undefined}
+          >
             <div class="job-info">
               <div class="job-title">{job.title}</div>
               <div class="job-artist">{job.artist}{job.album ? ` · ${job.album}` : ''}</div>
@@ -201,7 +228,7 @@
               <span class="badge {statusColors[job.status] ?? 'badge-muted'}">{job.status}</span>
               {#if job.provider}<span class="job-provider">{job.provider}</span>{/if}
               {#if !['Done', 'Failed', 'Cancelled'].includes(job.status)}
-                <button class="btn btn-secondary job-cancel" on:click={() => cancelJob(job.id)}>
+                <button class="btn btn-secondary job-cancel" on:click|stopPropagation={() => cancelJob(job.id)}>
                   Cancel
                 </button>
               {/if}
@@ -209,6 +236,34 @@
           </div>
           {#if job.error}
             <div class="job-error">{job.error}</div>
+          {/if}
+          {#if expandedJob === job.id}
+            <div class="candidate-review-panel">
+              {#if reviewLoading}
+                <div class="review-loading">Loading candidates...</div>
+              {:else if candidateReview.length === 0}
+                <div class="review-empty">No candidate data recorded for this task.</div>
+              {:else}
+                <div class="review-header">Candidates ({candidateReview.length})</div>
+                {#each candidateReview as cand}
+                  <div class="review-candidate" class:review-selected={cand.is_selected}>
+                    <div class="review-cand-header">
+                      <span class="review-provider">{cand.provider_display_name}</span>
+                      <span class="review-trust">trust {cand.provider_trust_rank}</span>
+                      <span class="badge {cand.is_selected ? 'badge-success' : cand.outcome === 'validation_failed' ? 'badge-error' : 'badge-muted'}">
+                        {cand.is_selected ? 'SELECTED' : cand.outcome}
+                      </span>
+                      {#if cand.score_total != null}
+                        <span class="review-score">score {cand.score_total}</span>
+                      {/if}
+                    </div>
+                    {#if cand.rejection_reason}
+                      <div class="review-rejection">{cand.rejection_reason}</div>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+            </div>
           {/if}
         {/each}
       </div>
@@ -306,4 +361,30 @@
 .job-provider { font-size: 0.72rem; color: var(--text-muted); }
 .job-cancel { font-size: 0.72rem; padding: 4px 10px; }
 .job-error { font-size: 0.75rem; color: var(--error); padding: 4px 14px 8px; }
+.job-expandable { cursor: pointer; }
+.job-expandable:hover { border-color: var(--border-active); }
+
+.candidate-review-panel {
+  margin: -2px 0 8px;
+  padding: 12px 14px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 80%, var(--bg-primary));
+  border: 1px solid var(--border);
+  border-top: none;
+}
+.review-loading, .review-empty { font-size: 0.8rem; color: var(--text-muted); padding: 8px 0; }
+.review-header { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
+.review-candidate {
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+.review-candidate.review-selected { border-color: color-mix(in srgb, var(--success) 50%, var(--border)); }
+.review-cand-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.review-provider { font-weight: 600; font-size: 0.82rem; }
+.review-trust { font-size: 0.72rem; color: var(--text-muted); }
+.review-score { font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; }
+.review-rejection { font-size: 0.75rem; color: var(--error); margin-top: 4px; }
 </style>

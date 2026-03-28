@@ -6,6 +6,7 @@ use crate::Result;
 use chrono::{Duration, Utc};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub struct Db {
@@ -211,6 +212,84 @@ impl Db {
         self.ensure_column_exists("director_task_history", "request_strategy", "TEXT")?;
         self.ensure_column_exists("director_task_history", "request_signature", "TEXT")?;
         self.ensure_column_exists("director_pending_tasks", "request_signature", "TEXT")?;
+
+        // ── Schema convergence: canonical identity tables ────────────────────
+        self.conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS canonical_artists (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                musicbrainz_id  TEXT UNIQUE,
+                spotify_id      TEXT UNIQUE,
+                discogs_id      TEXT UNIQUE,
+                sort_name       TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_canonical_artists_normalized
+                ON canonical_artists(normalized_name);
+
+            CREATE TABLE IF NOT EXISTS canonical_releases (
+                id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_artist_id         INTEGER NOT NULL REFERENCES canonical_artists(id),
+                title                       TEXT NOT NULL,
+                normalized_title            TEXT NOT NULL,
+                release_group_mbid          TEXT,
+                release_mbid                TEXT UNIQUE,
+                spotify_id                  TEXT UNIQUE,
+                discogs_id                  TEXT UNIQUE,
+                release_type                TEXT,
+                year                        INTEGER,
+                release_date                TEXT,
+                track_count                 INTEGER,
+                cover_art_url               TEXT,
+                created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_canonical_releases_artist
+                ON canonical_releases(canonical_artist_id);
+            CREATE INDEX IF NOT EXISTS idx_canonical_releases_normalized
+                ON canonical_releases(normalized_title);
+            CREATE INDEX IF NOT EXISTS idx_canonical_releases_release_group
+                ON canonical_releases(release_group_mbid);
+
+            CREATE TABLE IF NOT EXISTS acquisition_requests (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope           TEXT NOT NULL,
+                artist          TEXT NOT NULL,
+                album           TEXT,
+                strategy        TEXT NOT NULL,
+                quality_floor   TEXT,
+                exclude_providers TEXT,
+                edition_policy  TEXT,
+                canonical_artist_id  INTEGER REFERENCES canonical_artists(id),
+                canonical_release_id INTEGER REFERENCES canonical_releases(id),
+                status          TEXT NOT NULL DEFAULT 'pending',
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_acquisition_requests_status
+                ON acquisition_requests(status, created_at DESC);
+        ")?;
+
+        // Add identity columns to tracks table (non-breaking migration)
+        self.ensure_column_exists("tracks", "isrc", "TEXT")?;
+        self.ensure_column_exists("tracks", "musicbrainz_recording_id", "TEXT")?;
+        self.ensure_column_exists("tracks", "musicbrainz_release_id", "TEXT")?;
+        self.ensure_column_exists("tracks", "canonical_artist_id", "INTEGER")?;
+        self.ensure_column_exists("tracks", "canonical_release_id", "INTEGER")?;
+        self.ensure_column_exists("tracks", "quality_tier", "TEXT")?;
+        self.ensure_column_exists("tracks", "content_hash", "TEXT")?;
+
+        // Create indexes for new track columns (IF NOT EXISTS is safe to repeat)
+        let _ = self.conn.execute_batch("
+            CREATE INDEX IF NOT EXISTS idx_tracks_isrc ON tracks(isrc);
+            CREATE INDEX IF NOT EXISTS idx_tracks_mb_recording ON tracks(musicbrainz_recording_id);
+            CREATE INDEX IF NOT EXISTS idx_tracks_canonical_artist ON tracks(canonical_artist_id);
+            CREATE INDEX IF NOT EXISTS idx_tracks_canonical_release ON tracks(canonical_release_id);
+            CREATE INDEX IF NOT EXISTS idx_tracks_content_hash ON tracks(content_hash);
+        ");
+
         Ok(())
     }
 
@@ -1518,6 +1597,343 @@ fn summarize_provider_memory(
         retryable: false,
         candidate_count: provider_candidates.len(),
     })
+}
+
+// ── Canonical Identity ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalArtist {
+    pub id: i64,
+    pub name: String,
+    pub normalized_name: String,
+    pub musicbrainz_id: Option<String>,
+    pub spotify_id: Option<String>,
+    pub discogs_id: Option<String>,
+    pub sort_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalRelease {
+    pub id: i64,
+    pub canonical_artist_id: i64,
+    pub title: String,
+    pub normalized_title: String,
+    pub release_group_mbid: Option<String>,
+    pub release_mbid: Option<String>,
+    pub spotify_id: Option<String>,
+    pub discogs_id: Option<String>,
+    pub release_type: Option<String>,
+    pub year: Option<i32>,
+    pub track_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcquisitionRequest {
+    pub id: i64,
+    pub scope: String,
+    pub artist: String,
+    pub album: Option<String>,
+    pub strategy: String,
+    pub quality_floor: Option<String>,
+    pub exclude_providers: Option<String>,
+    pub edition_policy: Option<String>,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateReviewItem {
+    pub task_id: String,
+    pub provider_id: String,
+    pub provider_display_name: String,
+    pub provider_trust_rank: i32,
+    pub provider_candidate_id: String,
+    pub outcome: String,
+    pub rejection_reason: Option<String>,
+    pub is_selected: bool,
+    pub score_total: Option<i32>,
+    pub candidate_json: String,
+    pub validation_json: Option<String>,
+    pub score_reason_json: Option<String>,
+}
+
+impl Db {
+    // ── Canonical Artists ─────────────────────────────────────────────────
+
+    pub fn upsert_canonical_artist(
+        &self,
+        name: &str,
+        musicbrainz_id: Option<&str>,
+        spotify_id: Option<&str>,
+        discogs_id: Option<&str>,
+        sort_name: Option<&str>,
+    ) -> Result<i64> {
+        let normalized = normalize_canonical(name);
+
+        // Try to find by MB ID first, then spotify, then normalized name
+        let existing_id = if let Some(mbid) = musicbrainz_id {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_artists WHERE musicbrainz_id = ?1",
+                    params![mbid],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        } else if let Some(sid) = spotify_id {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_artists WHERE spotify_id = ?1",
+                    params![sid],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_artists WHERE normalized_name = ?1",
+                    params![&normalized],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        };
+
+        if let Some(id) = existing_id {
+            self.conn.execute(
+                "UPDATE canonical_artists SET
+                    name = COALESCE(?2, name),
+                    musicbrainz_id = COALESCE(?3, musicbrainz_id),
+                    spotify_id = COALESCE(?4, spotify_id),
+                    discogs_id = COALESCE(?5, discogs_id),
+                    sort_name = COALESCE(?6, sort_name),
+                    updated_at = datetime('now')
+                WHERE id = ?1",
+                params![id, name, musicbrainz_id, spotify_id, discogs_id, sort_name],
+            )?;
+            Ok(id)
+        } else {
+            self.conn.execute(
+                "INSERT INTO canonical_artists
+                    (name, normalized_name, musicbrainz_id, spotify_id, discogs_id, sort_name)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![name, &normalized, musicbrainz_id, spotify_id, discogs_id, sort_name],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        }
+    }
+
+    pub fn get_canonical_artist_by_name(&self, name: &str) -> Result<Option<CanonicalArtist>> {
+        let normalized = normalize_canonical(name);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, normalized_name, musicbrainz_id, spotify_id, discogs_id, sort_name
+             FROM canonical_artists WHERE normalized_name = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![&normalized], |row| {
+            Ok(CanonicalArtist {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                normalized_name: row.get(2)?,
+                musicbrainz_id: row.get(3)?,
+                spotify_id: row.get(4)?,
+                discogs_id: row.get(5)?,
+                sort_name: row.get(6)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    // ── Canonical Releases ───────────────────────────────────────────────
+
+    pub fn upsert_canonical_release(
+        &self,
+        canonical_artist_id: i64,
+        title: &str,
+        release_mbid: Option<&str>,
+        release_group_mbid: Option<&str>,
+        spotify_id: Option<&str>,
+        release_type: Option<&str>,
+        year: Option<i32>,
+        track_count: Option<i32>,
+    ) -> Result<i64> {
+        let normalized = normalize_canonical(title);
+
+        let existing_id = if let Some(mbid) = release_mbid {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_releases WHERE release_mbid = ?1",
+                    params![mbid],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_releases WHERE canonical_artist_id = ?1 AND normalized_title = ?2",
+                    params![canonical_artist_id, &normalized],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        };
+
+        if let Some(id) = existing_id {
+            self.conn.execute(
+                "UPDATE canonical_releases SET
+                    title = COALESCE(?2, title),
+                    release_group_mbid = COALESCE(?3, release_group_mbid),
+                    release_mbid = COALESCE(?4, release_mbid),
+                    spotify_id = COALESCE(?5, spotify_id),
+                    release_type = COALESCE(?6, release_type),
+                    year = COALESCE(?7, year),
+                    track_count = COALESCE(?8, track_count),
+                    updated_at = datetime('now')
+                WHERE id = ?1",
+                params![id, title, release_group_mbid, release_mbid, spotify_id, release_type, year, track_count],
+            )?;
+            Ok(id)
+        } else {
+            self.conn.execute(
+                "INSERT INTO canonical_releases
+                    (canonical_artist_id, title, normalized_title, release_group_mbid, release_mbid,
+                     spotify_id, release_type, year, track_count)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![canonical_artist_id, title, &normalized, release_group_mbid, release_mbid,
+                        spotify_id, release_type, year, track_count],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        }
+    }
+
+    // ── Acquisition Requests ─────────────────────────────────────────────
+
+    pub fn create_acquisition_request(
+        &self,
+        scope: &str,
+        artist: &str,
+        album: Option<&str>,
+        strategy: &str,
+        quality_floor: Option<&str>,
+        exclude_providers: Option<&str>,
+        edition_policy: Option<&str>,
+        canonical_artist_id: Option<i64>,
+        canonical_release_id: Option<i64>,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO acquisition_requests
+                (scope, artist, album, strategy, quality_floor, exclude_providers,
+                 edition_policy, canonical_artist_id, canonical_release_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![scope, artist, album, strategy, quality_floor, exclude_providers,
+                    edition_policy, canonical_artist_id, canonical_release_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_acquisition_requests(&self, status: &str, limit: usize) -> Result<Vec<AcquisitionRequest>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, scope, artist, album, strategy, quality_floor, exclude_providers,
+                    edition_policy, canonical_artist_id, canonical_release_id, status, created_at
+             FROM acquisition_requests WHERE status = ?1
+             ORDER BY created_at DESC LIMIT ?2"
+        )?;
+        let rows = stmt.query_map(params![status, limit as i64], |row| {
+            Ok(AcquisitionRequest {
+                id: row.get(0)?,
+                scope: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                strategy: row.get(4)?,
+                quality_floor: row.get(5)?,
+                exclude_providers: row.get(6)?,
+                edition_policy: row.get(7)?,
+                canonical_artist_id: row.get(8)?,
+                canonical_release_id: row.get(9)?,
+                status: row.get(10)?,
+                created_at: row.get(11)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn update_acquisition_request_status(&self, id: i64, status: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE acquisition_requests SET status = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![id, status],
+        )?;
+        Ok(())
+    }
+
+    // ── Candidate Review ─────────────────────────────────────────────────
+
+    pub fn get_candidate_review(&self, task_id: &str) -> Result<Vec<CandidateReviewItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, provider_id, provider_display_name, provider_trust_rank,
+                    provider_candidate_id, outcome, rejection_reason, is_selected,
+                    score_total, candidate_json, validation_json, score_reason_json
+             FROM director_candidate_items
+             WHERE task_id = ?1
+             ORDER BY provider_order_index, search_rank"
+        )?;
+        let rows = stmt.query_map(params![task_id], |row| {
+            Ok(CandidateReviewItem {
+                task_id: row.get(0)?,
+                provider_id: row.get(1)?,
+                provider_display_name: row.get(2)?,
+                provider_trust_rank: row.get(3)?,
+                provider_candidate_id: row.get(4)?,
+                outcome: row.get(5)?,
+                rejection_reason: row.get(6)?,
+                is_selected: row.get::<_, i64>(7)? != 0,
+                score_total: row.get(8)?,
+                candidate_json: row.get(9)?,
+                validation_json: row.get(10)?,
+                score_reason_json: row.get(11)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_task_provenance(&self, task_id: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT result_json FROM director_task_history WHERE task_id = ?1",
+            params![task_id],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(json) => Ok(Some(json)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn get_recent_task_results(&self, limit: usize) -> Result<Vec<(String, String, String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, disposition, COALESCE(provider, ''), error
+             FROM director_task_history
+             ORDER BY updated_at DESC LIMIT ?1"
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+fn normalize_canonical(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || ch == ' ' { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
