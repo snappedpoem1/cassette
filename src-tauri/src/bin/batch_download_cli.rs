@@ -92,10 +92,10 @@ fn album_track_task_key(
 }
 
 async fn resolve_album_track_tasks(
+    metadata: &MetadataService,
     artist: &str,
     album: &str,
 ) -> Result<Vec<TrackTask>, Box<dyn std::error::Error>> {
-    let metadata = MetadataService::new()?;
     let releases = metadata.search_release(artist, album).await?;
     let release = releases
         .into_iter()
@@ -217,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .windows(2)
         .find(|w| w[0] == "--limit")
         .and_then(|w| w[1].parse().ok())
+        .map(|n: usize| if n == 0 { usize::MAX } else { n })
         .unwrap_or(250);
 
     let db_path = app_db_path()?;
@@ -241,34 +242,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         completed_keys.len()
     );
 
+    // Resolve album tracklists with a shared MetadataService (single rate limiter).
+    // MB allows 1 req/sec — the governor in MetadataService enforces this globally.
     let mut tasks = Vec::<TrackTask>::new();
-    for album in &missing_albums {
+    let metadata = Arc::new(MetadataService::new().map_err(|e| e.to_string())?);
+
+    let albums_to_resolve: Vec<_> = missing_albums
+        .iter()
+        .filter(|a| !a.artist.trim().is_empty() && !a.album.trim().is_empty())
+        .map(|a| (a.artist.trim().to_string(), a.album.trim().to_string()))
+        .collect();
+
+    println!("Resolving {} album tracklists via MusicBrainz...", albums_to_resolve.len());
+
+    let mut skipped_albums = 0usize;
+    for (artist, title) in &albums_to_resolve {
         if tasks.len() >= limit {
             break;
         }
-        let artist = album.artist.trim();
-        let title = album.album.trim();
-        if artist.is_empty() || title.is_empty() {
-            continue;
-        }
-
-        let resolved_tasks = match resolve_album_track_tasks(artist, title).await {
-            Ok(tasks) => tasks,
+        let result = resolve_album_track_tasks(&metadata, artist, title)
+            .await
+            .map_err(|e| e.to_string());
+        match result {
+            Ok(resolved_tasks) => {
+                let new_count = resolved_tasks.iter()
+                    .filter(|t| !completed_keys.contains(&t.task_id))
+                    .count();
+                if new_count > 0 {
+                    print!("\r\x1b[K  {} - {}: {} tracks", artist, title, new_count);
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                }
+                for task in resolved_tasks {
+                    if tasks.len() >= limit {
+                        break;
+                    }
+                    if completed_keys.contains(&task.task_id) {
+                        continue;
+                    }
+                    tasks.push(task);
+                }
+            }
             Err(error) => {
+                print!("\r\x1b[K");
                 println!("  Skip {artist} - {title}: {error}");
-                continue;
+                skipped_albums += 1;
             }
-        };
-
-        for task in resolved_tasks {
-            if tasks.len() >= limit {
-                break;
-            }
-            if completed_keys.contains(&task.task_id) {
-                continue;
-            }
-            tasks.push(task);
         }
+    }
+    print!("\r\x1b[K");
+
+    // Results already collected above in the sequential loop.
+    if skipped_albums > 0 {
+        println!("  ({skipped_albums} albums skipped due to MusicBrainz errors)");
     }
 
     println!("Will submit {} tasks (limit: {limit})", tasks.len());

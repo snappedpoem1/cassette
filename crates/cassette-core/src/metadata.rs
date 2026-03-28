@@ -87,6 +87,36 @@ impl MetadataService {
         })
     }
 
+    /// Execute a MusicBrainz request with retry on 429/503 (up to 3 attempts with backoff).
+    async fn mb_request_with_retry(
+        &self,
+        request_builder: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<serde_json::Value> {
+        let max_attempts = 3u32;
+        for attempt in 1..=max_attempts {
+            self.rate_limiter.until_ready().await;
+            let resp = request_builder().send().await?;
+            let status = resp.status();
+
+            if status.is_success() {
+                return Ok(resp.json().await?);
+            }
+
+            // Retry on 429 (rate limited) and 503 (service unavailable)
+            if (status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || status == reqwest::StatusCode::SERVICE_UNAVAILABLE)
+                && attempt < max_attempts
+            {
+                let backoff = StdDuration::from_millis(1500 * (1u64 << (attempt - 1)));
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+
+            return Err(anyhow!("MusicBrainz returned HTTP {}", status));
+        }
+        Err(anyhow!("MusicBrainz request failed after {max_attempts} attempts"))
+    }
+
     /// Search MusicBrainz for a release matching artist + album.
     pub async fn search_release(&self, artist: &str, album: &str) -> Result<Vec<MbRelease>> {
         let cache_key = cache_key_pair(artist, album);
@@ -94,21 +124,15 @@ impl MetadataService {
             return Ok(cached);
         }
 
-        self.rate_limiter.until_ready().await;
-
         let query = format!("artist:\"{}\" AND release:\"{}\"", artist, album);
-        let resp = self
-            .client
-            .get(format!("{MB_BASE}/release"))
-            .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
-            .send()
+        let body = self
+            .mb_request_with_retry(|| {
+                self.client
+                    .get(format!("{MB_BASE}/release"))
+                    .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
+            })
             .await?;
 
-        if !resp.status().is_success() {
-            return Err(anyhow!("MusicBrainz returned HTTP {}", resp.status()));
-        }
-
-        let body: serde_json::Value = resp.json().await?;
         let releases: Vec<MbRelease> = body
             .get("releases")
             .and_then(|v| v.as_array())
@@ -134,26 +158,19 @@ impl MetadataService {
             return Ok(cached);
         }
 
-        self.rate_limiter.until_ready().await;
-
         let query = format!("recording:\"{}\" AND artist:\"{}\"", track_title, artist);
-        let resp = self
-            .client
-            .get(format!("{MB_BASE}/recording"))
-            .query(&[
-                ("query", query.as_str()),
-                ("fmt", "json"),
-                ("limit", "5"),
-                ("inc", "releases+release-groups"),
-            ])
-            .send()
+        let body = self
+            .mb_request_with_retry(|| {
+                self.client
+                    .get(format!("{MB_BASE}/recording"))
+                    .query(&[
+                        ("query", query.as_str()),
+                        ("fmt", "json"),
+                        ("limit", "5"),
+                        ("inc", "releases+release-groups"),
+                    ])
+            })
             .await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!("MusicBrainz returned HTTP {}", resp.status()));
-        }
-
-        let body: serde_json::Value = resp.json().await?;
         let recordings = body
             .get("recordings")
             .and_then(|v| v.as_array())
@@ -200,20 +217,14 @@ impl MetadataService {
             return Ok(cached);
         }
 
-        self.rate_limiter.until_ready().await;
-
-        let resp = self
-            .client
-            .get(format!("{MB_BASE}/release/{release_id}"))
-            .query(&[("inc", "recordings+artist-credits"), ("fmt", "json")])
-            .send()
+        let release_url = format!("{MB_BASE}/release/{release_id}");
+        let body = self
+            .mb_request_with_retry(|| {
+                self.client
+                    .get(&release_url)
+                    .query(&[("inc", "recordings+artist-credits"), ("fmt", "json")])
+            })
             .await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!("MusicBrainz returned HTTP {}", resp.status()));
-        }
-
-        let body: serde_json::Value = resp.json().await?;
         let release = mb_release_from_value(&body);
 
         let mut tracks = Vec::new();
