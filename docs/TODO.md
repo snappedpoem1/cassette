@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.
 **Rule**: If a task is not in this file, it is not committed project scope yet.
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-03-28
 
 ---
 
@@ -27,12 +27,11 @@ Status:
 
 ## P0
 
-### [P0] [todo] Prove Deezer full-track acquisition end-to-end
+### [P0] [done] Prove Deezer full-track acquisition end-to-end
 
 Why:
 
-- The current Deezer path falls back to preview MP3s. The ARL-decrypted full-track flow is
-  wired but not proven against a live session on this machine.
+- This was a hard shipping blocker. The path is now proven live on this machine.
 
 What good looks like:
 
@@ -48,8 +47,8 @@ Touchpoints:
 
 Acceptance:
 
-- [ ] End-to-end live proof documented in PROJECT_STATE.md
-- [ ] Any remaining partial paths named and tracked
+- [x] End-to-end live proof documented in PROJECT_STATE.md
+- [x] Any remaining partial paths named and tracked
 
 ### [P0] [todo] Prove audit completeness across organization and admission flows
 
@@ -77,6 +76,34 @@ Acceptance:
 - [ ] Validation/logging proof is repeatable
 - [ ] Documentation updated if expectations change
 
+### [P0] [done] Prove pending-task crash recovery end-to-end
+
+Why:
+
+- The runtime now persists pending director tasks and resubmits them on startup.
+- This is now proven through a deterministic startup-recovery probe plus filtering tests for stale
+  pending rows versus newer terminal history.
+
+What good looks like:
+
+- Pending rows rehydrate visible jobs before resubmission
+- Resubmission order is deterministic (`created_at`, `task_id`)
+- Stale pending rows do not resurrect when a newer terminal history row already exists
+- A resumed task can finalize successfully after startup recovery
+
+Touchpoints:
+
+- `crates/cassette-core/src/db/mod.rs`
+- `crates/cassette-core/src/director/engine.rs`
+- `src-tauri/src/state.rs`
+- `src-tauri/src/bin/recovery_probe_cli.rs`
+
+Acceptance:
+
+- [x] Startup recovery proof captured via `recovery_probe_cli`
+- [x] Recovery ordering and stale-terminal filtering documented
+- [x] PROJECT_STATE.md updated with exact observed behavior
+
 ---
 
 ## P1
@@ -100,6 +127,33 @@ Acceptance:
 - [ ] Tests cover at least one interruption or retry path
 - [ ] Retry thresholds are named constants with documented rationale
 - [ ] Recovery behavior is explicit, not implied
+
+### [P1] [done] Clean the remaining warning budget
+
+Why:
+
+- The build and test gates are green, and `cargo check --workspace` is now warning-free.
+- CLI bins now import shared library state instead of path-including `state.rs`, and the
+  Real-Debrid dead-field warnings are gone.
+
+Acceptance:
+
+- [x] `cargo check --workspace` is warning-free
+- [x] Real-Debrid dead fields resolved
+- [x] CLI bin warnings caused by `state.rs` inclusion removed
+
+### [P1] [done] Add provider health awareness to the director waterfall
+
+Why:
+
+- The director now tracks provider health, emits health events, and skips known-down providers
+  while keeping unknown or stale providers eligible for normal execution.
+
+Acceptance:
+
+- [x] Health state is tracked per provider with a timestamp
+- [x] The waterfall can skip known-down providers
+- [x] Health changes are visible to the UI or logs
 
 ### [P1] [todo] Raise packaging and clean-machine confidence
 
@@ -138,6 +192,19 @@ Acceptance:
 - [ ] Core commands benchmarked or timed (scan, organize, validation)
 - [ ] Baselines recorded in TELEMETRY.md
 - [ ] Regression thresholds documented
+
+### [P1] [done] Deepen active-runtime provenance persistence
+
+Why:
+
+- The runtime now persists request signatures, full candidate sets, normalized provider search outcomes,
+  and durable negative-result memory instead of only terminal result blobs.
+
+Acceptance:
+
+- [x] Candidate-set and candidate-item tables exist in the active runtime DB
+- [x] Provider search outcomes and provider-negative memory persist on normalized request signatures
+- [x] Terminal save path is transactional and covered by tests
 
 ---
 

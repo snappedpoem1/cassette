@@ -2,7 +2,7 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-03-28
 
 ---
 
@@ -200,6 +200,95 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Revisit Condition**:
 
 - If slskd config format becomes more complex, switch its parser too
+
+---
+
+## Decision 11: Operation Start Events Are Part Of The Audit Trail
+
+**Status**: approved (confirmed 2026-03-27)
+**Rationale**:
+
+- `start_operation()` intentionally emits `operation_started` into `operation_events`
+- That means an operation with one explicit business event should produce at least two audit events
+- The library test was updated to reflect the intended audit trail instead of treating the start event as accidental duplication
+
+**Tradeoffs**:
+
+- Event counts are slightly higher than a naive "only explicit events" model
+- Tests must assert lifecycle semantics, not raw convenience counts
+
+**Revisit Condition**:
+
+- Only if the audit model is intentionally redesigned
+
+---
+
+## Decision 12: Startup Recovery Must Prefer Newer Terminal History Over Stale Pending Rows
+
+**Status**: approved (applied 2026-03-28)
+**Rationale**:
+
+- `director_pending_tasks` and `director_task_history` can both exist briefly if the app crashes
+  after a terminal result is persisted but before the pending row is deleted.
+- Recovery cannot just blacklist a few dispositions by task ID; stable task keys are reused in some
+  flows, so older failed history must not suppress a newer retry.
+- Startup recovery now compares pending-row timestamps against the latest terminal history per task
+  and only resubmits rows that are still newer than any terminal result.
+
+**Tradeoffs**:
+
+- Slightly more recovery logic at startup
+- Recovery correctness now depends on timestamp ordering staying queryable and deterministic
+
+**Revisit Condition**:
+
+- If the runtime moves from task-level replay to deeper phase checkpointing
+
+---
+
+## Decision 13: Terminal Director History Must Preserve The Original Request Payload
+
+**Status**: approved (applied 2026-03-28)
+**Rationale**:
+
+- `director_task_history` previously preserved result/provenance state but could lose the original
+  request intent for failed or cancelled tasks once the pending row was deleted.
+- The active runtime now copies the original `TrackTask` JSON and strategy into terminal history
+  so request intent remains queryable after completion.
+- This is not full candidate/request memory yet, but it gives the current runtime a stronger and
+  more durable audit spine without waiting for full schema convergence.
+
+**Tradeoffs**:
+
+- Slightly larger terminal history rows
+- The runtime still lacks durable full candidate-set persistence and richer negative-result memory
+
+**Revisit Condition**:
+
+- If the active runtime moves to a richer normalized request/candidate schema
+
+---
+
+## Decision 14: Active Runtime Provenance Should Converge On A Request-Signature Spine
+
+**Status**: approved (applied 2026-03-28)
+**Rationale**:
+
+- Persisting only `director_task_history.result_json` was not enough to explain why a task failed,
+  which candidates were rejected, or which providers should be treated as recently exhausted.
+- The active runtime now carries a normalized `request_signature` across pending tasks, terminal history,
+  candidate sets, provider searches, provider attempts, and provider-negative memory.
+- This keeps the current Tauri runtime on a richer provenance path without waiting for a wholesale move onto
+  the larger librarian/library schema.
+
+**Tradeoffs**:
+
+- More runtime tables and larger terminal writes
+- Persistence is now materially better than reuse; candidate-review UX and TTL-driven query skipping still need wiring
+
+**Revisit Condition**:
+
+- If the active runtime fully converges onto the richer normalized reconciliation schema already present elsewhere in the repo
 
 ---
 

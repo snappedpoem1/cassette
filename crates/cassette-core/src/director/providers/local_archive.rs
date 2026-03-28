@@ -1,7 +1,7 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderSearchCandidate,
-    TrackTask,
+    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
+    ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
@@ -35,6 +35,23 @@ impl Provider for LocalArchiveProvider {
                 supports_batch: true,
             },
         }
+    }
+
+    async fn health_check(&self) -> Result<ProviderHealthState, ProviderError> {
+        let existing_roots = self.roots.iter().filter(|root| root.exists()).count();
+        if existing_roots == 0 {
+            return Err(ProviderError::TemporaryOutage {
+                provider_id: "local_archive".to_string(),
+                message: "no local archive roots are available".to_string(),
+            });
+        }
+
+        Ok(ProviderHealthState {
+            provider_id: "local_archive".to_string(),
+            status: ProviderHealthStatus::Healthy,
+            checked_at: chrono::Utc::now(),
+            message: Some(format!("{existing_roots} roots available")),
+        })
     }
 
     async fn search(

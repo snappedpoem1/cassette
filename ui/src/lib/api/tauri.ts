@@ -102,10 +102,32 @@ export interface DownloadJob {
   artist: string;
   title: string;
   album: string | null;
-  status: 'Queued' | 'Searching' | 'Downloading' | 'Verifying' | 'Done' | 'Failed';
+  status: 'Queued' | 'Searching' | 'Downloading' | 'Verifying' | 'Done' | 'Cancelled' | 'Failed';
   provider: string | null;
   progress: number;
   error: string | null;
+}
+
+export interface DirectorEvent {
+  task_id: string;
+  progress: string;
+  provider_id: string | null;
+  message: string;
+}
+
+export interface DirectorTaskResult {
+  task_id: string;
+  disposition: 'Finalized' | 'AlreadyPresent' | 'MetadataOnly' | 'Cancelled' | 'Failed';
+  error: string | null;
+  candidate_records?: unknown[];
+  provider_searches?: unknown[];
+}
+
+export interface ProviderHealthEvent {
+  provider_id: string;
+  status: 'Unknown' | 'Healthy' | 'Down';
+  checked_at: string;
+  message: string | null;
 }
 
 export interface DownloadConfig {
@@ -331,6 +353,7 @@ export const api = {
       artist_filter: artistFilter,
       limit,
     }),
+  cancelDownload: (taskId: string) => invoke<boolean>('cancel_download', { task_id: taskId }),
   getDownloadJobs: () => invoke<DownloadJob[]>('get_download_jobs'),
   searchDownloadMetadata: (query: string) =>
     invoke<DownloadMetadataSearchResult>('search_download_metadata', { query }),

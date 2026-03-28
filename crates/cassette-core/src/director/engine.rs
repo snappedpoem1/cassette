@@ -3,9 +3,10 @@ use crate::director::error::{DirectorError, ProviderError};
 use crate::director::finalize::finalize_selected_candidate;
 use crate::director::metadata::apply_metadata;
 use crate::director::models::{
-    CandidateDisposition, CandidateSelection, DirectorEvent, DirectorProgress, DirectorTaskResult,
-    FinalizedTrack, FinalizedTrackDisposition, ProviderAttemptRecord, ProviderDescriptor,
-    ProviderSearchCandidate, ProvenanceRecord, TrackTask,
+    CandidateDisposition, CandidateRecord, CandidateSelection, DirectorEvent, DirectorProgress,
+    DirectorTaskResult, FinalizedTrack, FinalizedTrackDisposition, ProviderAttemptRecord,
+    ProviderDescriptor, ProviderHealthState, ProviderHealthStatus, ProviderSearchCandidate,
+    ProviderSearchRecord, ProvenanceRecord, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::scoring::score_candidate;
@@ -13,12 +14,17 @@ use crate::director::strategy::{StrategyPlan, StrategyPlanner};
 use crate::director::temp::{TaskTempContext, TempManager};
 use crate::director::validation::validate_candidate;
 use chrono::Utc;
+use moka::sync::Cache;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, Semaphore};
-use tokio::task::JoinSet;
-use tokio::time::{sleep, timeout};
+use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
+
+const PROVIDER_HEALTH_INTERVAL_SECS: u64 = 60;
+const PROVIDER_HEALTH_STALE_SECS: i64 = 120;
 
 #[derive(Debug, Clone)]
 pub struct DirectorSubmission {
@@ -38,6 +44,9 @@ pub struct DirectorHandle {
     pub submitter: DirectorSubmission,
     pub events: broadcast::Sender<DirectorEvent>,
     pub results: broadcast::Sender<DirectorTaskResult>,
+    pub provider_health: broadcast::Sender<ProviderHealthState>,
+    cancel_token: CancellationToken,
+    task_tokens: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
     manager: tokio::task::JoinHandle<Result<(), DirectorError>>,
 }
 
@@ -50,9 +59,40 @@ impl DirectorHandle {
         self.results.subscribe()
     }
 
+    pub fn subscribe_health(&self) -> broadcast::Receiver<ProviderHealthState> {
+        self.provider_health.subscribe()
+    }
+
+    pub fn cancel_task(&self, task_id: &str) -> bool {
+        self.task_tokens
+            .lock()
+            .map(|tokens| tokens.get(task_id).cloned())
+            .ok()
+            .flatten()
+            .map(|token| {
+                token.cancel();
+                true
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn cancel_batch(&self) {
+        self.cancel_token.cancel();
+    }
+
     pub async fn shutdown(self) -> Result<(), DirectorError> {
-        drop(self.submitter);
-        self.manager.await?
+        let DirectorHandle {
+            submitter,
+            events: _,
+            results: _,
+            provider_health: _,
+            cancel_token,
+            task_tokens: _,
+            manager,
+        } = self;
+        cancel_token.cancel();
+        drop(submitter);
+        manager.await?
     }
 }
 
@@ -89,12 +129,27 @@ impl Director {
         let (tx, rx) = mpsc::channel::<TrackTask>(128);
         let (events, _) = broadcast::channel::<DirectorEvent>(256);
         let (results, _) = broadcast::channel::<DirectorTaskResult>(256);
-        let manager = tokio::spawn(self.run(rx, events.clone(), results.clone()));
+        let (provider_health, _) = broadcast::channel::<ProviderHealthState>(64);
+        let cancel_token = CancellationToken::new();
+        let tracker = Arc::new(TaskTracker::new());
+        let task_tokens = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let manager = tokio::spawn(self.run(
+            rx,
+            events.clone(),
+            results.clone(),
+            provider_health.clone(),
+            cancel_token.clone(),
+            Arc::clone(&task_tokens),
+            Arc::clone(&tracker),
+        ));
 
         DirectorHandle {
             submitter: DirectorSubmission { tx },
             events,
             results,
+            provider_health,
+            cancel_token,
+            task_tokens,
             manager,
         }
     }
@@ -104,45 +159,114 @@ impl Director {
         mut rx: mpsc::Receiver<TrackTask>,
         events: broadcast::Sender<DirectorEvent>,
         results: broadcast::Sender<DirectorTaskResult>,
+        provider_health: broadcast::Sender<ProviderHealthState>,
+        cancel_token: CancellationToken,
+        task_tokens: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
+        task_tracker: Arc<TaskTracker>,
     ) -> Result<(), DirectorError> {
         self.recover_temp().await?;
 
         let semaphore = Arc::new(Semaphore::new(self.config.worker_concurrency.max(1)));
         let provider_limits = self.build_provider_limits();
-        let mut join_set = JoinSet::<Result<(), DirectorError>>::new();
+        let provider_health_state = Arc::new(RwLock::new(HashMap::<String, ProviderHealthState>::new()));
+        let search_cache = Arc::new(
+            Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(std::time::Duration::from_secs(15 * 60))
+                .build(),
+        );
+        let health_token = cancel_token.child_token();
+        let health_providers = self.providers.clone();
+        let health_state = Arc::clone(&provider_health_state);
+        let health_events = provider_health.clone();
+        task_tracker.spawn(async move {
+            run_provider_health_loop(health_providers, health_state, health_events, health_token).await;
+        });
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    info!("director cancellation requested");
+                    break;
+                }
+                maybe_task = rx.recv() => {
+                    let Some(task) = maybe_task else {
+                        break;
+                    };
 
-        while let Some(task) = rx.recv().await {
-            send_event(&events, &task.task_id, DirectorProgress::Queued, None, "task queued");
-            let permit = semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|error| DirectorError::Queue(error.to_string()))?;
+                    send_event(&events, &task.task_id, DirectorProgress::Queued, None, "task queued");
+                    let task_token = cancel_token.child_token();
+                    if let Ok(mut tokens) = task_tokens.lock() {
+                        tokens.insert(task.task_id.clone(), task_token.clone());
+                    }
+                    let permit = tokio::select! {
+                        _ = cancel_token.cancelled() => {
+                            info!(task_id = %task.task_id, "skipping task scheduling because cancellation was requested");
+                            break;
+                        }
+                        _ = task_token.cancelled() => {
+                            send_event(
+                                &events,
+                                &task.task_id,
+                                DirectorProgress::Cancelled,
+                                None,
+                                "task cancelled while queued",
+                            );
+                            let _ = results.send(DirectorTaskResult {
+                                task_id: task.task_id.clone(),
+                                disposition: FinalizedTrackDisposition::Cancelled,
+                                finalized: None,
+                                attempts: Vec::new(),
+                                error: Some("task cancelled".to_string()),
+                                candidate_records: Vec::new(),
+                                provider_searches: Vec::new(),
+                            });
+                            unregister_task_token(&task_tokens, &task.task_id);
+                            continue;
+                        }
+                        permit = semaphore.clone().acquire_owned() => permit
+                            .map_err(|error| DirectorError::Queue(error.to_string()))?,
+                    };
 
-            let config = self.config.clone();
-            let providers = self.providers.clone();
-            let planner = self.planner.clone();
-            let events_clone = events.clone();
-            let results_clone = results.clone();
-            let provider_limits_clone = provider_limits.clone();
+                    if cancel_token.is_cancelled() {
+                        break;
+                    }
 
-            join_set.spawn(async move {
-                let _permit = permit;
-                process_task(
-                    config,
-                    providers,
-                    planner,
-                    provider_limits_clone,
-                    events_clone,
-                    results_clone,
-                    task,
-                )
-                .await
-            });
+                    let config = self.config.clone();
+                    let providers = self.providers.clone();
+                    let planner = self.planner.clone();
+                    let search_cache_clone = Arc::clone(&search_cache);
+                    let provider_health_state_clone = Arc::clone(&provider_health_state);
+                    let events_clone = events.clone();
+                    let results_clone = results.clone();
+                    let provider_limits_clone = provider_limits.clone();
+                    let task_tokens_clone = Arc::clone(&task_tokens);
+
+                    task_tracker.spawn(async move {
+                        let _permit = permit;
+                        let _ = process_task(
+                            config,
+                            providers,
+                            planner,
+                            search_cache_clone,
+                            provider_health_state_clone,
+                            provider_limits_clone,
+                            events_clone,
+                            results_clone,
+                            task_token,
+                            task_tokens_clone,
+                            task,
+                        )
+                        .await;
+                    });
+                }
+            }
         }
 
-        while let Some(result) = join_set.join_next().await {
-            result??;
+        task_tracker.close();
+        task_tracker.wait().await;
+
+        if cancel_token.is_cancelled() {
+            return Ok(());
         }
 
         Ok(())
@@ -168,9 +292,13 @@ async fn process_task(
     config: DirectorConfig,
     providers: Vec<Arc<dyn Provider>>,
     planner: StrategyPlanner,
+    search_cache: Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_health_state: Arc<RwLock<HashMap<String, ProviderHealthState>>>,
     provider_limits: HashMap<String, Arc<Semaphore>>,
     events: broadcast::Sender<DirectorEvent>,
     results: broadcast::Sender<DirectorTaskResult>,
+    cancel_token: CancellationToken,
+    task_tokens: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
     task: TrackTask,
 ) -> Result<(), DirectorError> {
     let provider_descriptors = providers
@@ -187,6 +315,27 @@ async fn process_task(
         &format!("strategy {:?} selected", plan.strategy),
     );
 
+    if cancel_token.is_cancelled() {
+        send_event(
+            &events,
+            &task.task_id,
+            DirectorProgress::Cancelled,
+            None,
+            "task cancelled before execution",
+        );
+        let _ = results.send(DirectorTaskResult {
+            task_id: task.task_id.clone(),
+            disposition: FinalizedTrackDisposition::Cancelled,
+            finalized: None,
+            attempts: Vec::new(),
+            error: Some("task cancelled".to_string()),
+            candidate_records: Vec::new(),
+            provider_searches: Vec::new(),
+        });
+        unregister_task_token(&task_tokens, &task.task_id);
+        return Ok(());
+    }
+
     if matches!(task.strategy, crate::director::models::AcquisitionStrategy::MetadataRepairOnly) {
         send_event(
             &events,
@@ -201,12 +350,37 @@ async fn process_task(
             finalized: None,
             attempts: Vec::new(),
             error: None,
+            candidate_records: Vec::new(),
+            provider_searches: Vec::new(),
         });
+        unregister_task_token(&task_tokens, &task.task_id);
         return Ok(());
     }
 
     let temp_manager = TempManager::new(config.temp_root.clone(), config.temp_recovery.clone());
-    let temp_context = match temp_manager.prepare_task(&task.task_id).await {
+    let temp_context = match tokio::select! {
+        _ = cancel_token.cancelled() => {
+            send_event(
+                &events,
+                &task.task_id,
+                DirectorProgress::Cancelled,
+                None,
+                "task cancelled before temp staging",
+            );
+            let _ = results.send(DirectorTaskResult {
+                task_id: task.task_id.clone(),
+                disposition: FinalizedTrackDisposition::Cancelled,
+                finalized: None,
+                attempts: Vec::new(),
+                error: Some("task cancelled".to_string()),
+                candidate_records: Vec::new(),
+                provider_searches: Vec::new(),
+            });
+            unregister_task_token(&task_tokens, &task.task_id);
+            return Ok(());
+        }
+        ctx = temp_manager.prepare_task(&task.task_id) => ctx
+    } {
         Ok(ctx) => ctx,
         Err(error) => {
             let msg = format!("failed to create temp dir: {error}");
@@ -217,24 +391,36 @@ async fn process_task(
                 finalized: None,
                 attempts: Vec::new(),
                 error: Some(msg.clone()),
+                candidate_records: Vec::new(),
+                provider_searches: Vec::new(),
             });
+            unregister_task_token(&task_tokens, &task.task_id);
             return Err(DirectorError::Queue(msg));
         }
     };
+    let mut attempts = Vec::<ProviderAttemptRecord>::new();
+    let mut candidate_records = Vec::<CandidateRecord>::new();
+    let mut provider_searches = Vec::<ProviderSearchRecord>::new();
     let result = execute_waterfall(
         &config,
         &providers,
         &provider_limits,
+        &search_cache,
+        &provider_health_state,
         &events,
         &task,
         &plan,
         &temp_manager,
         &temp_context,
+        &cancel_token,
+        &mut attempts,
+        &mut candidate_records,
+        &mut provider_searches,
     )
     .await;
 
     match result {
-        Ok((finalized, attempts)) => {
+        Ok(finalized) => {
             send_event(
                 &events,
                 &task.task_id,
@@ -248,8 +434,32 @@ async fn process_task(
                 finalized: Some(finalized.clone()),
                 attempts,
                 error: None,
+                candidate_records,
+                provider_searches,
             });
             temp_manager.cleanup_task(&temp_context).await?;
+            unregister_task_token(&task_tokens, &task.task_id);
+            Ok(())
+        }
+        Err(DirectorError::TaskCancelled) => {
+            send_event(
+                &events,
+                &task.task_id,
+                DirectorProgress::Cancelled,
+                None,
+                "task cancelled",
+            );
+            let _ = results.send(DirectorTaskResult {
+                task_id: task.task_id.clone(),
+                disposition: FinalizedTrackDisposition::Cancelled,
+                finalized: None,
+                attempts,
+                error: Some("task cancelled".to_string()),
+                candidate_records,
+                provider_searches,
+            });
+            let _ = temp_manager.cleanup_task(&temp_context).await;
+            unregister_task_token(&task_tokens, &task.task_id);
             Ok(())
         }
         Err(error) => {
@@ -271,12 +481,15 @@ async fn process_task(
                 task_id: task.task_id.clone(),
                 disposition,
                 finalized: None,
-                attempts: Vec::new(),
+                attempts,
                 error: Some(error.to_string()),
+                candidate_records,
+                provider_searches,
             });
             if !config.temp_recovery.quarantine_failures {
                 temp_manager.cleanup_task(&temp_context).await?;
             }
+            unregister_task_token(&task_tokens, &task.task_id);
             Err(error)
         }
     }
@@ -284,12 +497,12 @@ async fn process_task(
 
 /// Outcome of attempting a single provider in the waterfall.
 enum ProviderAttemptOutcome {
-    /// Provider was busy (semaphore full) — should be deferred for second pass.
+    /// Provider was busy (semaphore full) - should be deferred for second pass.
     Busy,
     /// Provider was tried but produced no usable result (error, validation fail, etc.).
     Tried,
     /// Provider produced a valid candidate that was immediately finalized (FirstValidWins).
-    Finalized(FinalizedTrack, Vec<ProviderAttemptRecord>),
+    Finalized(FinalizedTrack),
 }
 
 /// Try a single provider: search → acquire → validate → score.
@@ -299,16 +512,21 @@ enum ProviderAttemptOutcome {
 async fn try_provider(
     provider: &dyn Provider,
     provider_id: &str,
+    provider_order_index: usize,
     limit: &Arc<Semaphore>,
     blocking: bool,
     config: &DirectorConfig,
+    search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
     events: &broadcast::Sender<DirectorEvent>,
     task: &TrackTask,
     plan: &StrategyPlan,
     temp_manager: &TempManager,
     temp_context: &TaskTempContext,
+    cancel_token: &CancellationToken,
     valid_candidates: &mut Vec<(CandidateDisposition, ProviderDescriptor)>,
     attempts: &mut Vec<ProviderAttemptRecord>,
+    candidate_records: &mut Vec<CandidateRecord>,
+    provider_searches: &mut Vec<ProviderSearchRecord>,
 ) -> Result<ProviderAttemptOutcome, DirectorError> {
     let descriptor = provider.descriptor();
     if !descriptor.capabilities.supports_download {
@@ -316,6 +534,16 @@ async fn try_provider(
             provider_id: provider_id.to_string(),
             attempt: 0,
             outcome: "skipped: provider is metadata-only".to_string(),
+        });
+        provider_searches.push(ProviderSearchRecord {
+            provider_id: provider_id.to_string(),
+            provider_display_name: descriptor.display_name.clone(),
+            provider_trust_rank: descriptor.trust_rank,
+            provider_order_index,
+            outcome: "metadata_only".to_string(),
+            candidate_count: 0,
+            error: None,
+            retryable: false,
         });
         return Ok(ProviderAttemptOutcome::Tried);
     }
@@ -333,24 +561,65 @@ async fn try_provider(
         task,
         plan,
         config,
+        search_cache,
         Arc::clone(limit),
         blocking,
+        cancel_token,
     )
     .await
     {
         Ok(candidates) => candidates,
-        Err(error) if error.is_busy() => return Ok(ProviderAttemptOutcome::Busy),
+        Err(DirectorError::Provider(error)) if error.is_busy() => {
+            provider_searches.push(ProviderSearchRecord {
+                provider_id: provider_id.to_string(),
+                provider_display_name: descriptor.display_name.clone(),
+                provider_trust_rank: descriptor.trust_rank,
+                provider_order_index,
+                outcome: "busy".to_string(),
+                candidate_count: 0,
+                error: Some(error.to_string()),
+                retryable: true,
+            });
+            return Ok(ProviderAttemptOutcome::Busy)
+        }
+        Err(DirectorError::TaskCancelled) => return Err(DirectorError::TaskCancelled),
         Err(error) => {
+            let retryable = matches!(&error, DirectorError::Provider(provider_error) if provider_error.retryable());
             attempts.push(ProviderAttemptRecord {
                 provider_id: provider_id.to_string(),
                 attempt: 1,
                 outcome: error.to_string(),
             });
+            provider_searches.push(ProviderSearchRecord {
+                provider_id: provider_id.to_string(),
+                provider_display_name: descriptor.display_name.clone(),
+                provider_trust_rank: descriptor.trust_rank,
+                provider_order_index,
+                outcome: "search_error".to_string(),
+                candidate_count: 0,
+                error: Some(error.to_string()),
+                retryable,
+            });
             return Ok(ProviderAttemptOutcome::Tried);
         }
     };
 
-    for candidate in search_candidates {
+    provider_searches.push(ProviderSearchRecord {
+        provider_id: provider_id.to_string(),
+        provider_display_name: descriptor.display_name.clone(),
+        provider_trust_rank: descriptor.trust_rank,
+        provider_order_index,
+        outcome: if search_candidates.is_empty() {
+            "no_candidates".to_string()
+        } else {
+            "candidates_found".to_string()
+        },
+        candidate_count: search_candidates.len(),
+        error: None,
+        retryable: false,
+    });
+
+    for (search_rank, candidate) in search_candidates.into_iter().enumerate() {
         match execute_provider_acquire(
             provider,
             task,
@@ -360,6 +629,7 @@ async fn try_provider(
             config,
             Arc::clone(limit),
             blocking,
+            cancel_token,
         )
         .await
         {
@@ -394,10 +664,26 @@ async fn try_provider(
                                 attempt: 1,
                                 outcome: "rejected non-lossless candidate".to_string(),
                             });
+                            candidate_records.push(CandidateRecord {
+                                provider_id: provider_id.to_string(),
+                                provider_display_name: descriptor.display_name.clone(),
+                                provider_trust_rank: descriptor.trust_rank,
+                                provider_order_index,
+                                search_rank,
+                                candidate,
+                                acquisition_temp_path: Some(acquisition.temp_path.clone()),
+                                validation: Some(validation),
+                                score: None,
+                                score_reason: None,
+                                outcome: "rejected_non_lossless".to_string(),
+                                rejection_reason: Some(
+                                    "strategy required lossless validation quality".to_string(),
+                                ),
+                            });
                             continue;
                         }
 
-                        let (score, _) = score_candidate(
+                        let (score, score_reason) = score_candidate(
                             &task.target,
                             &descriptor,
                             &candidate,
@@ -405,15 +691,34 @@ async fn try_provider(
                             &config.quality_policy,
                         );
                         let disposition = CandidateDisposition {
-                            candidate,
-                            acquisition,
-                            validation,
+                            candidate: candidate.clone(),
+                            acquisition: acquisition.clone(),
+                            validation: validation.clone(),
                             score,
+                            score_reason: score_reason.clone(),
                         };
                         attempts.push(ProviderAttemptRecord {
                             provider_id: provider_id.to_string(),
                             attempt: 1,
                             outcome: format!("valid candidate score {}", disposition.score.total),
+                        });
+                        candidate_records.push(CandidateRecord {
+                            provider_id: provider_id.to_string(),
+                            provider_display_name: descriptor.display_name.clone(),
+                            provider_trust_rank: descriptor.trust_rank,
+                            provider_order_index,
+                            search_rank,
+                            candidate,
+                            acquisition_temp_path: Some(acquisition.temp_path),
+                            validation: Some(validation),
+                            score: Some(disposition.score.clone()),
+                            score_reason: Some(score_reason),
+                            outcome: if plan.collect_multiple_candidates {
+                                "valid_candidate".to_string()
+                            } else {
+                                "selected_immediate".to_string()
+                            },
+                            rejection_reason: None,
                         });
 
                         if !plan.collect_multiple_candidates {
@@ -423,10 +728,10 @@ async fn try_provider(
                                 task,
                                 descriptor,
                                 disposition,
-                                std::mem::take(attempts),
+                                attempts.len(),
                             )
                             .await?;
-                            return Ok(ProviderAttemptOutcome::Finalized(result.0, result.1));
+                            return Ok(ProviderAttemptOutcome::Finalized(result));
                         }
                         valid_candidates.push((disposition, descriptor.clone()));
                     }
@@ -443,16 +748,69 @@ async fn try_provider(
                             attempt: 1,
                             outcome: format!("validation failed: {error}"),
                         });
+                        candidate_records.push(CandidateRecord {
+                            provider_id: provider_id.to_string(),
+                            provider_display_name: descriptor.display_name.clone(),
+                            provider_trust_rank: descriptor.trust_rank,
+                            provider_order_index,
+                            search_rank,
+                            candidate,
+                            acquisition_temp_path: Some(acquisition.temp_path),
+                            validation: None,
+                            score: None,
+                            score_reason: None,
+                            outcome: "validation_failed".to_string(),
+                            rejection_reason: Some(error.to_string()),
+                        });
                     }
                 }
             }
-            Err(error) if error.is_busy() => return Ok(ProviderAttemptOutcome::Busy),
+            Err(DirectorError::Provider(error)) if error.is_busy() => {
+                provider_searches.push(ProviderSearchRecord {
+                    provider_id: provider_id.to_string(),
+                    provider_display_name: descriptor.display_name.clone(),
+                    provider_trust_rank: descriptor.trust_rank,
+                    provider_order_index,
+                    outcome: "busy".to_string(),
+                    candidate_count: 0,
+                    error: Some(error.to_string()),
+                    retryable: true,
+                });
+                return Ok(ProviderAttemptOutcome::Busy)
+            }
             Err(error) => {
                 attempts.push(ProviderAttemptRecord {
                     provider_id: provider_id.to_string(),
                     attempt: 1,
                     outcome: error.to_string(),
                 });
+                let retryable = matches!(&error, DirectorError::Provider(provider_error) if provider_error.retryable());
+                candidate_records.push(CandidateRecord {
+                    provider_id: provider_id.to_string(),
+                    provider_display_name: descriptor.display_name.clone(),
+                    provider_trust_rank: descriptor.trust_rank,
+                    provider_order_index,
+                    search_rank,
+                    candidate,
+                    acquisition_temp_path: None,
+                    validation: None,
+                    score: None,
+                    score_reason: None,
+                    outcome: "acquire_failed".to_string(),
+                    rejection_reason: Some(error.to_string()),
+                });
+                if retryable {
+                    provider_searches.push(ProviderSearchRecord {
+                        provider_id: provider_id.to_string(),
+                        provider_display_name: descriptor.display_name.clone(),
+                        provider_trust_rank: descriptor.trust_rank,
+                        provider_order_index,
+                        outcome: "acquire_retryable_error".to_string(),
+                        candidate_count: 0,
+                        error: Some(error.to_string()),
+                        retryable,
+                    });
+                }
             }
         }
     }
@@ -469,22 +827,51 @@ async fn execute_waterfall(
     config: &DirectorConfig,
     providers: &[Arc<dyn Provider>],
     provider_limits: &HashMap<String, Arc<Semaphore>>,
+    search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
     events: &broadcast::Sender<DirectorEvent>,
     task: &TrackTask,
     plan: &StrategyPlan,
     temp_manager: &TempManager,
     temp_context: &TaskTempContext,
-) -> Result<(FinalizedTrack, Vec<ProviderAttemptRecord>), DirectorError> {
+    cancel_token: &CancellationToken,
+    attempts: &mut Vec<ProviderAttemptRecord>,
+    candidate_records: &mut Vec<CandidateRecord>,
+    provider_searches: &mut Vec<ProviderSearchRecord>,
+) -> Result<FinalizedTrack, DirectorError> {
     let provider_map: HashMap<String, Arc<dyn Provider>> = providers
         .iter()
         .map(|provider| (provider.descriptor().id.clone(), Arc::clone(provider)))
         .collect();
     let mut valid_candidates = Vec::<(CandidateDisposition, ProviderDescriptor)>::new();
-    let mut attempts = Vec::<ProviderAttemptRecord>::new();
     let mut deferred_providers = Vec::<String>::new();
 
     // Pass 1: Non-blocking — try each provider, skip if semaphore is full
-    for provider_id in &plan.provider_order {
+    for (provider_order_index, provider_id) in plan.provider_order.iter().enumerate() {
+        if let Some(state) = should_skip_provider(provider_health_state, provider_id).await {
+            attempts.push(ProviderAttemptRecord {
+                provider_id: provider_id.clone(),
+                attempt: 0,
+                outcome: format!(
+                    "skipped: provider health down{}",
+                    state.message
+                        .as_deref()
+                        .map(|message| format!(" - {message}"))
+                        .unwrap_or_default()
+                ),
+            });
+            provider_searches.push(ProviderSearchRecord {
+                provider_id: provider_id.clone(),
+                provider_display_name: provider_id.clone(),
+                provider_trust_rank: i32::MAX,
+                provider_order_index,
+                outcome: "skipped_health_down".to_string(),
+                candidate_count: 0,
+                error: state.message.clone(),
+                retryable: true,
+            });
+            continue;
+        }
         let Some(provider) = provider_map.get(provider_id) else {
             continue;
         };
@@ -495,21 +882,26 @@ async fn execute_waterfall(
         match try_provider(
             provider.as_ref(),
             provider_id,
+            provider_order_index,
             limit,
             false, // non-blocking
             config,
+            search_cache,
             events,
             task,
             plan,
             temp_manager,
             temp_context,
+            cancel_token,
             &mut valid_candidates,
-            &mut attempts,
+            attempts,
+            candidate_records,
+            provider_searches,
         )
         .await?
         {
-            ProviderAttemptOutcome::Finalized(track, final_attempts) => {
-                return Ok((track, final_attempts));
+            ProviderAttemptOutcome::Finalized(track) => {
+                return Ok(track);
             }
             ProviderAttemptOutcome::Busy => {
                 deferred_providers.push(provider_id.clone());
@@ -520,6 +912,33 @@ async fn execute_waterfall(
 
     // Pass 2: Blocking — try deferred providers (ones that were busy in pass 1)
     for provider_id in &deferred_providers {
+        let Some(provider_order_index) = plan.provider_order.iter().position(|id| id == provider_id) else {
+            continue;
+        };
+        if let Some(state) = should_skip_provider(provider_health_state, provider_id).await {
+            attempts.push(ProviderAttemptRecord {
+                provider_id: provider_id.clone(),
+                attempt: 0,
+                outcome: format!(
+                    "skipped: provider health down{}",
+                    state.message
+                        .as_deref()
+                        .map(|message| format!(" - {message}"))
+                        .unwrap_or_default()
+                ),
+            });
+            provider_searches.push(ProviderSearchRecord {
+                provider_id: provider_id.clone(),
+                provider_display_name: provider_id.clone(),
+                provider_trust_rank: i32::MAX,
+                provider_order_index,
+                outcome: "skipped_health_down".to_string(),
+                candidate_count: 0,
+                error: state.message.clone(),
+                retryable: true,
+            });
+            continue;
+        }
         let Some(provider) = provider_map.get(provider_id) else {
             continue;
         };
@@ -530,21 +949,26 @@ async fn execute_waterfall(
         match try_provider(
             provider.as_ref(),
             provider_id,
+            provider_order_index,
             limit,
             true, // blocking
             config,
+            search_cache,
             events,
             task,
             plan,
             temp_manager,
             temp_context,
+            cancel_token,
             &mut valid_candidates,
-            &mut attempts,
+            attempts,
+            candidate_records,
+            provider_searches,
         )
         .await?
         {
-            ProviderAttemptOutcome::Finalized(track, final_attempts) => {
-                return Ok((track, final_attempts));
+            ProviderAttemptOutcome::Finalized(track) => {
+                return Ok(track);
             }
             ProviderAttemptOutcome::Busy | ProviderAttemptOutcome::Tried => {}
         }
@@ -562,7 +986,7 @@ async fn execute_waterfall(
         .into_iter()
         .max_by_key(|(candidate, _)| candidate.score.total)
     {
-        finalize_candidate(config, events, task, descriptor, best, attempts).await
+        finalize_candidate(config, events, task, descriptor, best, attempts.len()).await
     } else {
         send_event(
             events,
@@ -583,20 +1007,14 @@ async fn finalize_candidate(
     task: &TrackTask,
     descriptor: ProviderDescriptor,
     best: CandidateDisposition,
-    attempts: Vec<ProviderAttemptRecord>,
-) -> Result<(FinalizedTrack, Vec<ProviderAttemptRecord>), DirectorError> {
-    let (_, reason) = score_candidate(
-        &task.target,
-        &descriptor,
-        &best.candidate,
-        &best.validation,
-        &config.quality_policy,
-    );
+    attempts_len: usize,
+) -> Result<FinalizedTrack, DirectorError> {
     let selection = CandidateSelection {
         provider_id: best.candidate.provider_id.clone(),
+        provider_candidate_id: best.candidate.provider_candidate_id.clone(),
         temp_path: best.acquisition.temp_path.clone(),
         score: best.score,
-        reason,
+        reason: best.score_reason,
         validation: best.validation,
         cover_art_url: best.candidate.cover_art_url.clone(),
     };
@@ -623,6 +1041,7 @@ async fn finalize_candidate(
         task_id: task.task_id.clone(),
         source_metadata: task.target.clone(),
         selected_provider: selection.provider_id.clone(),
+        selected_provider_candidate_id: Some(selection.provider_candidate_id.clone()),
         score_reason: selection.reason.clone(),
         validation_summary: selection.validation.clone(),
         final_path: Default::default(),
@@ -642,10 +1061,10 @@ async fn finalize_candidate(
             info!(
                 task_id = task.task_id,
                 provider = track.provenance.selected_provider,
-                attempts = attempts.len(),
+                attempts = attempts_len,
                 "director finalized track"
             );
-            Ok((track, attempts))
+            Ok(track)
         }
         Err(error) => match (&config.duplicate_policy, &error) {
             (DuplicatePolicy::KeepExisting, crate::director::error::FinalizationError::DestinationExists { .. }) => {
@@ -696,11 +1115,23 @@ async fn execute_provider_search(
     task: &TrackTask,
     plan: &StrategyPlan,
     config: &DirectorConfig,
+    search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
     provider_limit: Arc<Semaphore>,
     blocking: bool,
-) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
+    cancel_token: &CancellationToken,
+) -> Result<Vec<ProviderSearchCandidate>, DirectorError> {
+    let cache_key = provider_search_cache_key(&provider.descriptor().id, task);
+    if let Some(cached) = search_cache.get(&cache_key) {
+        return Ok(cached.as_ref().clone());
+    }
+
     let _permit = acquire_provider_permit(&provider_limit, &provider.descriptor().id, blocking).await?;
-    execute_with_retry(config, provider.descriptor().id.clone(), || provider.search(task, plan)).await
+    let results = execute_with_retry(config, provider.descriptor().id.clone(), cancel_token, || {
+        provider.search(task, plan)
+    })
+    .await?;
+    search_cache.insert(cache_key, Arc::new(results.clone()));
+    Ok(results)
 }
 
 async fn execute_provider_acquire(
@@ -712,9 +1143,10 @@ async fn execute_provider_acquire(
     config: &DirectorConfig,
     provider_limit: Arc<Semaphore>,
     blocking: bool,
-) -> Result<crate::director::models::CandidateAcquisition, ProviderError> {
+    cancel_token: &CancellationToken,
+) -> Result<crate::director::models::CandidateAcquisition, DirectorError> {
     let _permit = acquire_provider_permit(&provider_limit, &provider.descriptor().id, blocking).await?;
-    execute_with_retry(config, provider.descriptor().id.clone(), || {
+    execute_with_retry(config, provider.descriptor().id.clone(), cancel_token, || {
         provider.acquire(task, candidate, temp_context, plan)
     })
     .await
@@ -723,8 +1155,9 @@ async fn execute_provider_acquire(
 async fn execute_with_retry<F, Fut, T>(
     config: &DirectorConfig,
     provider_id: String,
+    cancel_token: &CancellationToken,
     mut operation: F,
-) -> Result<T, ProviderError>
+) -> Result<T, DirectorError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, ProviderError>>,
@@ -733,33 +1166,125 @@ where
     let mut last_error = None::<ProviderError>;
 
     for attempt in 1..=max_attempts {
-        match timeout(config.provider_timeout(), operation()).await {
-            Ok(Ok(value)) => return Ok(value),
-            Ok(Err(error)) => {
+        let operation_fut = operation();
+        tokio::pin!(operation_fut);
+        let timeout_fut = sleep(config.provider_timeout());
+        tokio::pin!(timeout_fut);
+
+        let result = tokio::select! {
+            _ = cancel_token.cancelled() => {
+                return Err(DirectorError::TaskCancelled);
+            }
+            result = &mut operation_fut => result,
+            _ = &mut timeout_fut => {
+                Err(ProviderError::TimedOut {
+                    provider_id: provider_id.clone(),
+                })
+            }
+        };
+
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error) => {
                 if !error.retryable() || attempt == max_attempts {
-                    return Err(error);
+                    return Err(DirectorError::Provider(error));
                 }
                 last_error = Some(error);
-            }
-            Err(_) => {
-                let timeout_error = ProviderError::TimedOut {
-                    provider_id: provider_id.clone(),
-                };
-                if attempt == max_attempts {
-                    return Err(timeout_error);
-                }
-                last_error = Some(timeout_error);
             }
         }
 
         let backoff = config.retry_policy.base_backoff_millis * u64::from(attempt);
-        sleep(std::time::Duration::from_millis(backoff)).await;
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                return Err(DirectorError::TaskCancelled);
+            }
+            _ = sleep(std::time::Duration::from_millis(backoff)) => {}
+        }
     }
 
-    Err(last_error.unwrap_or(ProviderError::Other {
-        provider_id,
-        message: "provider operation failed without explicit error".to_string(),
-    }))
+    Err(last_error
+        .map(DirectorError::Provider)
+        .unwrap_or(DirectorError::Provider(ProviderError::Other {
+            provider_id,
+            message: "provider operation failed without explicit error".to_string(),
+        })))
+}
+
+fn unregister_task_token(
+    task_tokens: &Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
+    task_id: &str,
+) {
+    if let Ok(mut tokens) = task_tokens.lock() {
+        tokens.remove(task_id);
+    }
+}
+
+async fn should_skip_provider(
+    provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
+    provider_id: &str,
+) -> Option<ProviderHealthState> {
+    let state = provider_health_state.read().await.get(provider_id).cloned()?;
+    let age_secs = chrono::Utc::now()
+        .signed_duration_since(state.checked_at)
+        .num_seconds();
+    if age_secs > PROVIDER_HEALTH_STALE_SECS {
+        return None;
+    }
+    matches!(state.status, ProviderHealthStatus::Down).then_some(state)
+}
+
+async fn run_provider_health_loop(
+    providers: Vec<Arc<dyn Provider>>,
+    provider_health_state: Arc<RwLock<HashMap<String, ProviderHealthState>>>,
+    provider_health_events: broadcast::Sender<ProviderHealthState>,
+    cancel_token: CancellationToken,
+) {
+    let mut ordered = providers
+        .into_iter()
+        .map(|provider| (provider.descriptor().id.clone(), provider))
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.0.cmp(&right.0));
+
+    loop {
+        for (provider_id, provider) in &ordered {
+            if cancel_token.is_cancelled() {
+                return;
+            }
+
+            let probe_result = provider.health_check().await;
+            let checked_at = Utc::now();
+            let next_state = match probe_result {
+                Ok(mut state) => {
+                    state.provider_id = provider_id.clone();
+                    state.checked_at = checked_at;
+                    state
+                }
+                Err(error) => ProviderHealthState {
+                    provider_id: provider_id.clone(),
+                    status: ProviderHealthStatus::Down,
+                    checked_at,
+                    message: Some(error.to_string()),
+                },
+            };
+
+            let changed = {
+                let mut states = provider_health_state.write().await;
+                let previous = states.insert(provider_id.clone(), next_state.clone());
+                previous
+                    .map(|state| state.status != next_state.status || state.message != next_state.message)
+                    .unwrap_or(true)
+            };
+
+            if changed {
+                let _ = provider_health_events.send(next_state);
+            }
+        }
+
+        tokio::select! {
+            _ = cancel_token.cancelled() => return,
+            _ = sleep(std::time::Duration::from_secs(PROVIDER_HEALTH_INTERVAL_SECS)) => {}
+        }
+    }
 }
 
 fn send_event(
@@ -777,27 +1302,60 @@ fn send_event(
     });
 }
 
+fn provider_search_cache_key(provider_id: &str, task: &TrackTask) -> String {
+    format!(
+        "{}::{}::{}::{}",
+        provider_id,
+        normalize_cache_component(&task.target.artist),
+        normalize_cache_component(task.target.album.as_deref().unwrap_or_default()),
+        normalize_cache_component(&task.target.title),
+    )
+}
+
+fn normalize_cache_component(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::director::config::{ProviderPolicy, TempRecoveryPolicy};
     use crate::director::models::{
-        AcquisitionStrategy, NormalizedTrack, ProviderCapabilities, TrackTaskSource,
+        AcquisitionStrategy, NormalizedTrack, ProviderCapabilities, ProviderHealthState,
+        ProviderHealthStatus, TrackTaskSource,
     };
     use async_trait::async_trait;
     use tempfile::tempdir;
+    use tokio::sync::Notify;
 
     #[derive(Clone)]
     struct MockProvider {
         descriptor: ProviderDescriptor,
         search_candidates: Vec<ProviderSearchCandidate>,
         payload: Vec<u8>,
+        acquire_gate: Option<Arc<Notify>>,
+        health_status: Option<ProviderHealthStatus>,
     }
 
     #[async_trait]
     impl Provider for MockProvider {
         fn descriptor(&self) -> ProviderDescriptor {
             self.descriptor.clone()
+        }
+
+        async fn health_check(&self) -> Result<ProviderHealthState, ProviderError> {
+            match self.health_status.unwrap_or(ProviderHealthStatus::Healthy) {
+                ProviderHealthStatus::Down => Err(ProviderError::TemporaryOutage {
+                    provider_id: self.descriptor.id.clone(),
+                    message: "mock provider marked down".to_string(),
+                }),
+                status => Ok(ProviderHealthState {
+                    provider_id: self.descriptor.id.clone(),
+                    status,
+                    checked_at: Utc::now(),
+                    message: None,
+                }),
+            }
         }
 
         async fn search(
@@ -815,6 +1373,9 @@ mod tests {
             temp_context: &TaskTempContext,
             _strategy: &StrategyPlan,
         ) -> Result<crate::director::models::CandidateAcquisition, ProviderError> {
+            if let Some(gate) = &self.acquire_gate {
+                gate.notified().await;
+            }
             let extension = candidate
                 .extension_hint
                 .clone()
@@ -890,6 +1451,76 @@ mod tests {
                 metadata_confidence: 0.95,
             }],
             payload,
+            acquire_gate: None,
+            health_status: None,
+        })
+    }
+
+    fn gated_provider(
+        id: &str,
+        trust_rank: i32,
+        payload: Vec<u8>,
+        extension_hint: &str,
+        acquire_gate: Arc<Notify>,
+    ) -> Arc<dyn Provider> {
+        Arc::new(MockProvider {
+            descriptor: ProviderDescriptor {
+                id: id.to_string(),
+                display_name: id.to_string(),
+                trust_rank,
+                capabilities: ProviderCapabilities {
+                    supports_search: true,
+                    supports_download: true,
+                    supports_lossless: extension_hint == "wav",
+                    supports_batch: false,
+                },
+            },
+            search_candidates: vec![ProviderSearchCandidate {
+                provider_id: id.to_string(),
+                provider_candidate_id: format!("{id}-candidate"),
+                artist: "Artist".to_string(),
+                title: "Song".to_string(),
+                album: Some("Album".to_string()),
+                duration_secs: Some(1.0),
+                extension_hint: Some(extension_hint.to_string()),
+                bitrate_kbps: Some(if extension_hint == "wav" { 1411 } else { 320 }),
+                cover_art_url: None,
+                metadata_confidence: 0.95,
+            }],
+            payload,
+            acquire_gate: Some(acquire_gate),
+            health_status: None,
+        })
+    }
+
+    fn unhealthy_provider(id: &str, trust_rank: i32) -> Arc<dyn Provider> {
+        Arc::new(MockProvider {
+            descriptor: ProviderDescriptor {
+                id: id.to_string(),
+                display_name: id.to_string(),
+                trust_rank,
+                capabilities: ProviderCapabilities {
+                    supports_search: true,
+                    supports_download: true,
+                    supports_lossless: true,
+                    supports_batch: false,
+                },
+            },
+            search_candidates: vec![ProviderSearchCandidate {
+                provider_id: id.to_string(),
+                provider_candidate_id: format!("{id}-candidate"),
+                artist: "Artist".to_string(),
+                title: "Song".to_string(),
+                album: Some("Album".to_string()),
+                duration_secs: Some(1.0),
+                extension_hint: Some("wav".to_string()),
+                bitrate_kbps: Some(1411),
+                cover_art_url: None,
+                metadata_confidence: 0.95,
+            }],
+            payload: build_wav_bytes(),
+            acquire_gate: None,
+            health_status: Some(ProviderHealthStatus::Down),
         })
     }
 
@@ -919,6 +1550,8 @@ mod tests {
                 metadata_confidence: 0.95,
             }],
             payload: build_wav_bytes(),
+            acquire_gate: None,
+            health_status: None,
         })
     }
 
@@ -1087,5 +1720,161 @@ mod tests {
             .iter()
             .any(|attempt| attempt.provider_id == "metadata"
                 && attempt.outcome == "skipped: provider is metadata-only"));
+    }
+
+    #[tokio::test]
+    async fn director_cancels_specific_queued_task_without_stopping_batch() {
+        let root = tempdir().expect("temp dir");
+        let gate = Arc::new(Notify::new());
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            provider_policies: vec![ProviderPolicy {
+                provider_id: "gated".to_string(),
+                max_concurrency: 1,
+            }],
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(
+            config.clone(),
+            vec![gated_provider("gated", 5, build_wav_bytes(), "wav", Arc::clone(&gate))],
+        );
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+        let first_task = task(AcquisitionStrategy::Standard);
+        let second_task = TrackTask {
+            task_id: "task-2".to_string(),
+            ..task(AcquisitionStrategy::Standard)
+        };
+
+        handle.submitter.submit(first_task).await.expect("submit first");
+        handle.submitter.submit(second_task.clone()).await.expect("submit second");
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(handle.cancel_task(&second_task.task_id));
+        gate.notify_waiters();
+
+        let mut saw_first_finalized = false;
+        let mut saw_second_cancelled = false;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !(saw_first_finalized && saw_second_cancelled) {
+                let result = results.recv().await.expect("receive result");
+                if result.task_id == "task-1"
+                    && matches!(result.disposition, FinalizedTrackDisposition::Finalized)
+                {
+                    saw_first_finalized = true;
+                }
+                if result.task_id == "task-2"
+                    && matches!(result.disposition, FinalizedTrackDisposition::Cancelled)
+                {
+                    saw_second_cancelled = true;
+                }
+            }
+        })
+        .await
+        .expect("results received");
+
+        handle.shutdown().await.expect("shutdown director");
+        assert!(saw_first_finalized);
+        assert!(saw_second_cancelled);
+    }
+
+    #[tokio::test]
+    async fn director_skips_provider_marked_down_by_health_check() {
+        let root = tempdir().expect("temp dir");
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            provider_policies: vec![
+                ProviderPolicy {
+                    provider_id: "down".to_string(),
+                    max_concurrency: 1,
+                },
+                ProviderPolicy {
+                    provider_id: "fallback".to_string(),
+                    max_concurrency: 1,
+                },
+            ],
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(
+            config.clone(),
+            vec![
+                unhealthy_provider("down", 10),
+                provider("fallback", 5, build_wav_bytes(), "wav"),
+            ],
+        );
+        let handle = director.start();
+        let mut health = handle.subscribe_health();
+        let mut results = handle.subscribe_results();
+
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let event = health.recv().await.expect("receive health");
+                if event.provider_id == "down" && matches!(event.status, ProviderHealthStatus::Down) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("health event");
+
+        handle
+            .submitter
+            .submit(task(AcquisitionStrategy::Standard))
+            .await
+            .expect("submit task");
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = results.recv().await.expect("receive result");
+                if matches!(result.disposition, FinalizedTrackDisposition::Finalized) {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("result received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        assert_eq!(
+            result.finalized.as_ref().map(|track| track.provenance.selected_provider.as_str()),
+            Some("fallback")
+        );
+        assert!(result
+            .attempts
+            .iter()
+            .any(|attempt| attempt.provider_id == "down"
+                && attempt.outcome.contains("skipped: provider health down")));
     }
 }

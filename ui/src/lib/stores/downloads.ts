@@ -1,8 +1,12 @@
 import { writable } from 'svelte/store';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   api,
+  type DirectorEvent,
+  type DirectorTaskResult,
   type DownloadJob,
   type DownloadConfig,
+  type ProviderHealthEvent,
   type ProviderStatus,
   type DownloadMetadataSearchResult,
   type DownloadArtistDiscography,
@@ -11,6 +15,7 @@ import {
 export const downloadJobs = writable<DownloadJob[]>([]);
 export const downloadConfig = writable<DownloadConfig | null>(null);
 export const providerStatuses = writable<ProviderStatus[]>([]);
+export const providerHealth = writable<Record<string, ProviderHealthEvent>>({});
 export const metadataSearchResults = writable<DownloadMetadataSearchResult | null>(null);
 export const artistDiscography = writable<DownloadArtistDiscography | null>(null);
 export const isSearchingMetadata = writable(false);
@@ -57,16 +62,93 @@ export async function loadDiscography(artist: string, mbid?: string) {
   }
 }
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let unlisteners: UnlistenFn[] = [];
+let visibilityHandler: (() => void) | null = null;
 
-export function startJobsPoll() {
-  if (pollTimer) return;
-  pollTimer = setInterval(loadDownloadJobs, 2000);
+function upsertJob(taskId: string, mutate: (job: DownloadJob) => DownloadJob) {
+  downloadJobs.update((jobs) => {
+    const index = jobs.findIndex((job) => job.id === taskId);
+    if (index === -1) {
+      return jobs;
+    }
+    const next = [...jobs];
+    next[index] = mutate(next[index]);
+    return next;
+  });
 }
 
-export function stopJobsPoll() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+function applyDirectorEvent(event: DirectorEvent) {
+  upsertJob(event.task_id, (job) => {
+    const next = { ...job, provider: event.provider_id, error: event.message ?? null };
+    switch (event.progress) {
+      case 'Queued':
+        return { ...next, status: 'Queued', progress: 0 };
+      case 'InProgress':
+      case 'ProviderAttempt':
+        return { ...next, status: 'Searching', progress: 0.15 };
+      case 'Validating':
+        return { ...next, status: 'Verifying', progress: 0.65 };
+      case 'Tagging':
+      case 'Finalizing':
+        return { ...next, status: 'Verifying', progress: 0.85 };
+      case 'Finalized':
+      case 'Skipped':
+        return { ...next, status: 'Done', progress: 1, error: null };
+      case 'Cancelled':
+        return { ...next, status: 'Cancelled', progress: 0, error: event.message };
+      case 'Failed':
+      case 'Exhausted':
+        return { ...next, status: 'Failed', progress: 0 };
+      default:
+        return next;
+    }
+  });
+}
+
+function applyDirectorResult(result: DirectorTaskResult) {
+  upsertJob(result.task_id, (job) => {
+    switch (result.disposition) {
+      case 'Finalized':
+      case 'AlreadyPresent':
+      case 'MetadataOnly':
+        return { ...job, status: 'Done', progress: 1, error: null };
+      case 'Cancelled':
+        return { ...job, status: 'Cancelled', progress: 0, error: result.error ?? 'Cancelled by user' };
+      case 'Failed':
+      default:
+        return { ...job, status: 'Failed', progress: 0, error: result.error };
+    }
+  });
+}
+
+export async function startDownloadSupervision() {
+  if (unlisteners.length > 0) {
+    return;
+  }
+
+  unlisteners = await Promise.all([
+    listen<DirectorEvent>('director-event', ({ payload }) => applyDirectorEvent(payload)),
+    listen<DirectorTaskResult>('director-result', ({ payload }) => applyDirectorResult(payload)),
+    listen<ProviderHealthEvent>('director-provider-health', ({ payload }) => {
+      providerHealth.update((current) => ({ ...current, [payload.provider_id]: payload }));
+    }),
+  ]);
+
+  visibilityHandler = () => {
+    if (document.visibilityState === 'visible') {
+      void loadDownloadJobs();
+    }
+  };
+  document.addEventListener('visibilitychange', visibilityHandler);
+}
+
+export function stopDownloadSupervision() {
+  for (const unlisten of unlisteners) {
+    unlisten();
+  }
+  unlisteners = [];
+  if (visibilityHandler) {
+    document.removeEventListener('visibilitychange', visibilityHandler);
+    visibilityHandler = null;
   }
 }

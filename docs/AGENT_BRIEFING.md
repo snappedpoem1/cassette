@@ -2,10 +2,10 @@
 
 ## Two-Minute Cassette Overview
 
-**Status**: Active — hardening, provider proof, and release confidence
+**Status**: Active - hardening, provider proof, and release confidence
 **Next Priority**: Deezer full-track proof, audit completeness, async recovery hardening
 **Codebase Shape**: Rust workspace + Tauri 2 + SvelteKit + SQLite
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-03-27
 
 ---
 
@@ -17,8 +17,8 @@ It is simultaneously:
 
 - a desktop app (Tauri 2 + SvelteKit)
 - a library organizer with staging and quarantine
-- a downloader and acquisition tool (multi-provider: Qobuz, Deezer, slskd, Usenet, yt-dlp, local archive)
-- a validation and audit system with full file lineage
+- a downloader and acquisition tool (multi-provider: Qobuz, Deezer, slskd, Usenet, yt-dlp, local archive, Real-Debrid)
+- a validation and audit system with file lineage goals
 - a playback and queue surface
 
 The most useful mental model is not "music player." It is "trustworthy personal library system."
@@ -27,10 +27,13 @@ The most useful mental model is not "music player." It is "trustworthy personal 
 
 ## Current Runtime Truth
 
+- Canonical project docs live under `docs/`, not the repo root.
 - Workspace layout is `src-tauri/` + `crates/cassette-core/` + `ui/`.
-- Domain modules: `librarian`, `custodian`, `orchestrator`, `director`, `gatekeeper`, `library`, `validation`, `metadata`.
-- `cargo check`, `cargo test`, `ui` production build, and desktop smoke checks all pass.
-- Provider acquisition proof is incomplete for Deezer (full-track), Tidal (not started), and others.
+- Domain modules include `librarian`, `custodian`, `orchestrator`, `director`, `gatekeeper`, `library`, `validation`, and `metadata`.
+- `cargo check` currently succeeds with warnings.
+- `cargo test` currently has failures.
+- UI production build and desktop smoke state should be verified before claiming green.
+- Provider acquisition proof is incomplete for Deezer full-track flow and other live-provider paths.
 - Packaging for a clean machine has not been proven.
 - This is a git repository. History is available.
 
@@ -38,7 +41,7 @@ The most useful mental model is not "music player." It is "trustworthy personal 
 
 ## Architecture
 
-```
+```text
 UI (ui/)
   ->
 Tauri shell (src-tauri/)
@@ -50,25 +53,25 @@ SQLite + filesystem + external providers
 
 Pipeline-oriented library flow:
 
-```
+```text
 Librarian -> Custodian -> Orchestrator -> Director -> Gatekeeper
 ```
 
 Supporting runtime responsibilities:
 
-- `library` — operations, locking, recovery, observability
-- `validation` — sandbox validation and logging proof
-- `metadata` — enrichment and tag-fix flows
+- `library` - operations, locking, recovery, observability
+- `validation` - sandbox validation and logging proof
+- `metadata` - enrichment and tag-fix flows
 
 ---
 
 ## Read These First
 
-1. [PROJECT_INDEX.md](PROJECT_INDEX.md) — project map, module status, quality gates
-2. [TODO.md](TODO.md) — prioritized task list with P0/P1/P2
-3. [PROJECT_STATE.md](PROJECT_STATE.md) — current runtime truth and known gaps
-4. [DECISIONS.md](DECISIONS.md) — why the codebase is shaped the way it is
-5. [PATTERNS.md](PATTERNS.md) — code, naming, and testing conventions
+1. [PROJECT_INDEX.md](PROJECT_INDEX.md) - project map, module status, quality gates
+2. [PROJECT_STATE.md](PROJECT_STATE.md) - current runtime truth and known gaps
+3. [TODO.md](TODO.md) - prioritized task list with P0/P1/P2
+4. [DECISIONS.md](DECISIONS.md) - why the codebase is shaped the way it is
+5. [PATTERNS.md](PATTERNS.md) - code, naming, and testing conventions
 
 ---
 
@@ -84,6 +87,8 @@ cd ui && npm run build
 .\scripts\smoke_desktop.ps1
 ```
 
+These are verification commands, not guaranteed pass indicators. Check fresh command output or `PROJECT_STATE.md` before claiming status.
+
 Validation and inspection CLI:
 
 ```bash
@@ -96,10 +101,10 @@ cargo run -p cassette-core --bin cassette -- operation --help
 
 ## Where To Focus First
 
-- Read `TODO.md`. Pick the top `P0` item.
-- Keep file and operation lineage provable — it is a core promise.
+- Read `TODO.md`. Pick the top `P0` item unless a higher-priority request overrides it.
+- Keep file and operation lineage provable - it is a core promise.
 - Treat provider reliability as an operational concern, not just a feature concern.
-- Prefer facts over inherited assumptions. Check the code before updating the docs.
+- Prefer facts over inherited assumptions. Check the code before updating docs.
 - Protect real files through reversible flows.
 
 ---
@@ -109,8 +114,8 @@ cargo run -p cassette-core --bin cassette -- operation --help
 You are done with a change when:
 
 - the task is scoped and implemented
-- relevant verification has been run (`cargo test`, smoke check if applicable)
-- docs reflect the new reality (update `TODO.md`, `PROJECT_STATE.md`, `TELEMETRY.md` as needed)
+- relevant verification has been run
+- docs reflect the new reality (`TODO.md`, `PROJECT_STATE.md`, `TELEMETRY.md` as needed)
 - the next agent can continue without rediscovery
 
 ---

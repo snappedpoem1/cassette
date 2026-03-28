@@ -1,7 +1,7 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderSearchCandidate,
-    TrackTask,
+    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
+    ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
@@ -34,6 +34,47 @@ impl Provider for UsenetProvider {
                 supports_batch: false,
             },
         }
+    }
+
+    async fn health_check(&self) -> Result<ProviderHealthState, ProviderError> {
+        let checked_at = chrono::Utc::now();
+        let Some(api_key) = self.api_key.as_deref() else {
+            return Ok(ProviderHealthState {
+                provider_id: "usenet".to_string(),
+                status: ProviderHealthStatus::Unknown,
+                checked_at,
+                message: Some("nzbgeek API key not configured".to_string()),
+            });
+        };
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get("https://api.nzbgeek.info/api")
+            .query(&[
+                ("t", "caps"),
+                ("o", "json"),
+                ("apikey", api_key),
+            ])
+            .send()
+            .await
+            .map_err(|error| ProviderError::Network {
+                provider_id: "usenet".to_string(),
+                message: error.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(ProviderError::TemporaryOutage {
+                provider_id: "usenet".to_string(),
+                message: format!("health probe returned HTTP {}", response.status()),
+            });
+        }
+
+        Ok(ProviderHealthState {
+            provider_id: "usenet".to_string(),
+            status: ProviderHealthStatus::Healthy,
+            checked_at,
+            message: None,
+        })
     }
 
     async fn search(

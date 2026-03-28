@@ -46,5 +46,7 @@ async fn logs_operation_event() {
         .get_events_for_operation(&operation_id)
         .await
         .expect("events");
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].event_type, "operation_started");
+    assert_eq!(events[1].event_type, "file_admitted");
 }

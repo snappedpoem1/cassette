@@ -1,7 +1,7 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderSearchCandidate,
-    TrackTask,
+    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
+    ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
@@ -37,6 +37,29 @@ impl Provider for YtDlpProvider {
                 supports_batch: false,
             },
         }
+    }
+
+    async fn health_check(&self) -> Result<ProviderHealthState, ProviderError> {
+        let output = tokio::process::Command::new(&self.binary)
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|_error| ProviderError::NotFound {
+                provider_id: "yt_dlp".to_string(),
+            })?;
+        if !output.status.success() {
+            return Err(ProviderError::TemporaryOutage {
+                provider_id: "yt_dlp".to_string(),
+                message: "yt-dlp --version failed".to_string(),
+            });
+        }
+
+        Ok(ProviderHealthState {
+            provider_id: "yt_dlp".to_string(),
+            status: ProviderHealthStatus::Healthy,
+            checked_at: chrono::Utc::now(),
+            message: None,
+        })
     }
 
     async fn search(

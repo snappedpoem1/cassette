@@ -1,11 +1,11 @@
 use crate::state::AppState;
-use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+use crate::commands::downloads::queue_album_tracks;
+use cassette_core::director::{AcquisitionStrategy, TrackTaskSource};
 use cassette_core::models::SpotifyAlbumHistory;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::State;
-use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 struct SpotifyStreamEntry {
@@ -175,46 +175,27 @@ pub async fn queue_spotify_albums(
     state: State<'_, AppState>,
     albums: Vec<SpotifyAlbumSummary>,
 ) -> Result<usize, String> {
+    let completed_keys = state
+        .db
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get_completed_task_keys()
+        .map_err(|error| error.to_string())?;
     let mut queued = 0;
     for album in &albums {
         if album.in_library {
             continue;
         }
-        let id = format!("job-{}", Uuid::new_v4());
-        let job = cassette_core::models::DownloadJob {
-            id: id.clone(),
-            query: format!("{} - {}", album.artist, album.album),
-            artist: album.artist.clone(),
-            title: album.album.clone(),
-            album: Some(album.album.clone()),
-            status: cassette_core::models::DownloadStatus::Queued,
-            provider: None,
-            progress: 0.0,
-            error: None,
-        };
-        state.download_jobs.lock().unwrap().insert(id.clone(), job);
-        let _ = state
-            .director_submitter
-            .submit(TrackTask {
-                task_id: id,
-                source: TrackTaskSource::SpotifyLibrary,
-                target: NormalizedTrack {
-                    spotify_track_id: None,
-                    source_playlist: None,
-                    artist: album.artist.clone(),
-                    album_artist: Some(album.artist.clone()),
-                    title: album.album.clone(),
-                    album: Some(album.album.clone()),
-                    track_number: None,
-                    disc_number: None,
-                    year: None,
-                    duration_secs: None,
-                    isrc: None,
-                },
-                strategy: AcquisitionStrategy::DiscographyBatch,
-            })
-            .await;
-        queued += 1;
+        let job_ids = queue_album_tracks(
+            state.clone(),
+            album.artist.as_str(),
+            album.album.as_str(),
+            TrackTaskSource::SpotifyLibrary,
+            AcquisitionStrategy::DiscographyBatch,
+            &completed_keys,
+        )
+        .await?;
+        queued += job_ids.len();
     }
     Ok(queued)
 }

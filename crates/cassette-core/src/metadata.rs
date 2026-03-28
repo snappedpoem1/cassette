@@ -1,7 +1,16 @@
 use crate::Result;
 use anyhow::anyhow;
+use governor::{
+    clock::DefaultClock,
+    state::{direct::NotKeyed, InMemoryState},
+    Quota, RateLimiter,
+};
+use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 const MB_BASE: &str = "https://musicbrainz.org/ws/2";
 const MB_USER_AGENT: &str = "CassettePlayer/0.1 (https://github.com/cassette-music)";
@@ -45,6 +54,10 @@ pub struct TagFix {
 
 pub struct MetadataService {
     client: reqwest::Client,
+    rate_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    release_search_cache: Cache<String, Vec<MbRelease>>,
+    parent_album_cache: Cache<String, Option<MbRelease>>,
+    release_tracks_cache: Cache<String, MbReleaseWithTracks>,
 }
 
 impl MetadataService {
@@ -53,13 +66,39 @@ impl MetadataService {
             .user_agent(MB_USER_AGENT)
             .timeout(std::time::Duration::from_secs(10))
             .build()?;
-        Ok(Self { client })
+
+        let quota = Quota::per_second(NonZeroU32::new(1).expect("non-zero quota"));
+
+        Ok(Self {
+            client,
+            rate_limiter: Arc::new(RateLimiter::direct(quota)),
+            release_search_cache: Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(StdDuration::from_secs(15 * 60))
+                .build(),
+            parent_album_cache: Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(StdDuration::from_secs(15 * 60))
+                .build(),
+            release_tracks_cache: Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(StdDuration::from_secs(15 * 60))
+                .build(),
+        })
     }
 
-    /// Search MusicBrainz for a release matching artist + album
+    /// Search MusicBrainz for a release matching artist + album.
     pub async fn search_release(&self, artist: &str, album: &str) -> Result<Vec<MbRelease>> {
+        let cache_key = cache_key_pair(artist, album);
+        if let Some(cached) = self.release_search_cache.get(&cache_key) {
+            return Ok(cached);
+        }
+
+        self.rate_limiter.until_ready().await;
+
         let query = format!("artist:\"{}\" AND release:\"{}\"", artist, album);
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{MB_BASE}/release"))
             .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
             .send()
@@ -70,22 +109,36 @@ impl MetadataService {
         }
 
         let body: serde_json::Value = resp.json().await?;
-        let releases = body.get("releases")
+        let releases: Vec<MbRelease> = body
+            .get("releases")
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().map(mb_release_from_value).collect())
             .unwrap_or_default();
+
+        self.release_search_cache
+            .insert(cache_key, releases.clone());
 
         Ok(releases)
     }
 
     /// Search MusicBrainz recordings by artist + track title and return their primary releases.
-    /// Used to find the parent album for single tracks (e.g. "Closer" → "Collage EP").
+    /// Used to find the parent album for single tracks (e.g. "Closer" -> "Collage EP").
     /// Prefers Album/EP primary types over Single or Compilation.
-    pub async fn find_parent_album(&self, artist: &str, track_title: &str) -> Result<Option<MbRelease>> {
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    pub async fn find_parent_album(
+        &self,
+        artist: &str,
+        track_title: &str,
+    ) -> Result<Option<MbRelease>> {
+        let cache_key = cache_key_pair(artist, track_title);
+        if let Some(cached) = self.parent_album_cache.get(&cache_key) {
+            return Ok(cached);
+        }
+
+        self.rate_limiter.until_ready().await;
 
         let query = format!("recording:\"{}\" AND artist:\"{}\"", track_title, artist);
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{MB_BASE}/recording"))
             .query(&[
                 ("query", query.as_str()),
@@ -101,20 +154,22 @@ impl MetadataService {
         }
 
         let body: serde_json::Value = resp.json().await?;
-        let recordings = body.get("recordings")
+        let recordings = body
+            .get("recordings")
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
 
-        // Walk recordings → releases, prefer Album/EP over Single/Compilation
         let mut best: Option<MbRelease> = None;
         for rec in &recordings {
-            let releases = rec.get("releases")
+            let releases = rec
+                .get("releases")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
             for rel in &releases {
-                let rtype = rel.pointer("/release-group/primary-type")
+                let rtype = rel
+                    .pointer("/release-group/primary-type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown");
                 let candidate = mb_release_from_value(rel);
@@ -126,22 +181,29 @@ impl MetadataService {
                     break;
                 }
             }
-            if best.as_ref().map_or(false, |r| {
-                matches!(r.release_group_type.as_deref(), Some("Album") | Some("EP"))
-            }) {
+            if best
+                .as_ref()
+                .map_or(false, |r| matches!(r.release_group_type.as_deref(), Some("Album") | Some("EP")))
+            {
                 break;
             }
         }
 
+        self.parent_album_cache.insert(cache_key, best.clone());
         Ok(best)
     }
 
-    /// Fetch full release details including track listing
+    /// Fetch full release details including track listing.
     pub async fn get_release_tracks(&self, release_id: &str) -> Result<MbReleaseWithTracks> {
-        // Rate limit: MusicBrainz requires 1 req/sec
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let cache_key = normalize_key(release_id);
+        if let Some(cached) = self.release_tracks_cache.get(&cache_key) {
+            return Ok(cached);
+        }
 
-        let resp = self.client
+        self.rate_limiter.until_ready().await;
+
+        let resp = self
+            .client
             .get(format!("{MB_BASE}/release/{release_id}"))
             .query(&[("inc", "recordings+artist-credits"), ("fmt", "json")])
             .send()
@@ -157,23 +219,27 @@ impl MetadataService {
         let mut tracks = Vec::new();
         if let Some(media) = body.get("media").and_then(|v| v.as_array()) {
             for (disc_idx, disc) in media.iter().enumerate() {
-                let disc_num = disc.get("position")
+                let disc_num = disc
+                    .get("position")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(disc_idx as u64 + 1) as u32;
 
                 if let Some(track_list) = disc.get("tracks").and_then(|v| v.as_array()) {
                     for t in track_list {
-                        let track_num = t.get("position")
+                        let track_num = t
+                            .get("position")
                             .or_else(|| t.get("number"))
                             .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                             .unwrap_or(0) as u32;
 
-                        let title = t.get("title")
+                        let title = t
+                            .get("title")
                             .and_then(|v| v.as_str())
                             .unwrap_or_default()
                             .to_string();
 
-                        let artist = t.get("artist-credit")
+                        let artist = t
+                            .get("artist-credit")
                             .and_then(|v| v.as_array())
                             .and_then(|arr| arr.first())
                             .and_then(|ac| ac.get("name"))
@@ -182,7 +248,8 @@ impl MetadataService {
                             .unwrap_or_default()
                             .to_string();
 
-                        let duration_ms = t.get("length")
+                        let duration_ms = t
+                            .get("length")
                             .or_else(|| t.pointer("/recording/length"))
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0);
@@ -199,10 +266,13 @@ impl MetadataService {
             }
         }
 
-        Ok(MbReleaseWithTracks { release, tracks })
+        let result = MbReleaseWithTracks { release, tracks };
+        self.release_tracks_cache
+            .insert(cache_key, result.clone());
+        Ok(result)
     }
 
-    /// Match local album tracks against MusicBrainz and return proposed fixes
+    /// Match local album tracks against MusicBrainz and return proposed fixes.
     pub async fn propose_tag_fixes(
         &self,
         artist: &str,
@@ -218,18 +288,20 @@ impl MetadataService {
         let mut fixes = Vec::new();
 
         for local in local_tracks {
-            let mb_track = mb.tracks.iter().find(|t| {
-                t.track_number == local.track_number.unwrap_or(0) as u32
-                    && t.disc_number == local.disc_number.unwrap_or(1) as u32
-            }).or_else(|| {
-                // Fuzzy: match by position in album
-                let idx = local.track_number.unwrap_or(1).max(1) as usize - 1;
-                mb.tracks.get(idx)
-            });
+            let mb_track = mb
+                .tracks
+                .iter()
+                .find(|t| {
+                    t.track_number == local.track_number.unwrap_or(0) as u32
+                        && t.disc_number == local.disc_number.unwrap_or(1) as u32
+                })
+                .or_else(|| {
+                    let idx = local.track_number.unwrap_or(1).max(1) as usize - 1;
+                    mb.tracks.get(idx)
+                });
 
             let Some(mb_t) = mb_track else { continue };
 
-            // Title fix
             if !mb_t.title.is_empty() && mb_t.title != local.title {
                 fixes.push(TagFix {
                     path: local.path.clone(),
@@ -240,7 +312,6 @@ impl MetadataService {
                 });
             }
 
-            // Artist fix
             if !mb_t.artist.is_empty() && mb_t.artist != local.artist {
                 fixes.push(TagFix {
                     path: local.path.clone(),
@@ -251,7 +322,6 @@ impl MetadataService {
                 });
             }
 
-            // Album fix
             if !mb.release.title.is_empty() && mb.release.title != local.album {
                 fixes.push(TagFix {
                     path: local.path.clone(),
@@ -262,7 +332,6 @@ impl MetadataService {
                 });
             }
 
-            // Year fix
             if let Some(year) = mb.release.year {
                 if local.year != Some(year) {
                     fixes.push(TagFix {
@@ -275,7 +344,6 @@ impl MetadataService {
                 }
             }
 
-            // Track number fix
             if local.track_number != Some(mb_t.track_number as i32) {
                 fixes.push(TagFix {
                     path: local.path.clone(),
@@ -291,7 +359,7 @@ impl MetadataService {
     }
 }
 
-/// Apply a tag fix to the actual file using lofty
+/// Apply a tag fix to the actual file using lofty.
 pub fn apply_tag_fix(fix: &TagFix) -> Result<()> {
     use lofty::prelude::*;
     use lofty::probe::Probe;
@@ -304,13 +372,21 @@ pub fn apply_tag_fix(fix: &TagFix) -> Result<()> {
     let tag = if has_primary {
         tagged.primary_tag_mut().unwrap()
     } else {
-        tagged.first_tag_mut().ok_or_else(|| anyhow!("No tag found in {}", fix.path))?
+        tagged
+            .first_tag_mut()
+            .ok_or_else(|| anyhow!("No tag found in {}", fix.path))?
     };
 
     match fix.field.as_str() {
-        "title" => { tag.set_title(fix.new_value.clone()); }
-        "artist" => { tag.set_artist(fix.new_value.clone()); }
-        "album" => { tag.set_album(fix.new_value.clone()); }
+        "title" => {
+            tag.set_title(fix.new_value.clone());
+        }
+        "artist" => {
+            tag.set_artist(fix.new_value.clone());
+        }
+        "album" => {
+            tag.set_album(fix.new_value.clone());
+        }
         "year" => {
             if let Ok(y) = fix.new_value.parse::<u32>() {
                 tag.set_year(y);
@@ -334,39 +410,53 @@ pub fn apply_tag_fix(fix: &TagFix) -> Result<()> {
     Ok(())
 }
 
+fn normalize_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn cache_key_pair(left: &str, right: &str) -> String {
+    format!("{}::{}", normalize_key(left), normalize_key(right))
+}
+
 fn mb_release_from_value(v: &serde_json::Value) -> MbRelease {
     MbRelease {
-        id: v.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        title: v.get("title").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        artist: v.get("artist-credit")
+        id: v
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        title: v
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        artist: v
+            .get("artist-credit")
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
             .and_then(|ac| ac.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string(),
-        year: v.get("date")
+        year: v
+            .get("date")
             .and_then(|v| v.as_str())
             .and_then(|d| d.split('-').next())
             .and_then(|y| y.parse().ok()),
-        track_count: v.get("track-count")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32),
-        release_group_type: v.pointer("/release-group/primary-type")
+        track_count: v.get("track-count").and_then(|v| v.as_u64()).map(|n| n as u32),
+        release_group_type: v
+            .pointer("/release-group/primary-type")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        label: v.get("label-info")
+        label: v
+            .get("label-info")
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
             .and_then(|li| li.pointer("/label/name"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        country: v.get("country")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        barcode: v.get("barcode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        country: v.get("country").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        barcode: v.get("barcode").and_then(|v| v.as_str()).map(|s| s.to_string()),
     }
 }
 
@@ -410,9 +500,6 @@ mod tests {
             applied: false,
         };
 
-        // Unknown field path exits before file I/O branch in apply function match.
-        // We still expect a result because opening file is attempted before match.
-        // This test validates that unsupported field is handled without panicking.
         let result = apply_tag_fix(&fix);
         assert!(result.is_err());
     }

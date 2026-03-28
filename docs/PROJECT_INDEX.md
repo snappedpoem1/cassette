@@ -1,8 +1,8 @@
 # Cassette Project Index
 
-**Status**: Active — hardening and provider proof
-**Next**: Deezer full-track path, async recovery hardening, packaging confidence
-**Last Updated**: 2026-03-25
+**Status**: Active - hardening, audit proof, and packaging confidence
+**Next**: audit completeness proof, packaging confidence, provenance reuse and review
+**Last Updated**: 2026-03-28
 **Owner**: Christian (Capn)
 
 ---
@@ -31,22 +31,22 @@ At its best, Cassette answers five questions clearly:
 
 ```text
 Cassette/
-├── Cargo.toml                  # workspace root
-├── crates/
-│   └── cassette-core/          # shared Rust domain logic
-├── src-tauri/                  # desktop shell and Tauri commands
-├── ui/                         # SvelteKit frontend
-├── docs/                       # project documentation
-├── scripts/                    # smoke tests and maintenance helpers
-└── test_data/                  # test fixtures (e.g. spotify_export.json)
+|- Cargo.toml                  # workspace root
+|- crates/
+|  `- cassette-core/           # shared Rust domain logic
+|- src-tauri/                  # desktop shell and Tauri commands
+|- ui/                         # SvelteKit frontend
+|- docs/                       # canonical project documentation
+|- scripts/                    # smoke tests and maintenance helpers
+`- test_data/                  # test fixtures
 ```
 
 Canonical implementation layers:
 
-- `crates/cassette-core` — scanning, organization, downloads, validation, metadata, orchestration, locking
-- `src-tauri` — app boot, command surface, state wiring, desktop plugins
-- `ui` — end-user interface
-- `scripts` — smoke runs, sandbox reset, operational helpers
+- `crates/cassette-core` - scanning, organization, downloads, validation, metadata, orchestration, locking
+- `src-tauri` - app boot, command surface, state wiring, desktop plugins
+- `ui` - end-user interface
+- `scripts` - smoke runs, sandbox reset, operational helpers
 
 ---
 
@@ -84,8 +84,8 @@ Desired state / user intent / import data
 Library state + audit trail + UI visibility
 ```
 
-The application also exposes: playback, queue management, playlists, downloads dashboard,
-Spotify history/import helpers, settings and provider health surfaces, library organization tooling.
+The application also exposes playback, queue management, playlists, a downloads dashboard,
+Spotify history/import helpers, settings, provider status, and library organization tooling.
 
 ---
 
@@ -94,11 +94,11 @@ Spotify history/import helpers, settings and provider health surfaces, library o
 | Area | Location | Status | What Is True Now | Main Gaps |
 |---|---|---|---|---|
 | Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Packaging proof incomplete |
-| UI | `ui` | Active | Library, downloads, settings, artists, playlists, tools routes exist | Long-session UX polish; artist deep-link from library tab navigates to /artists list |
+| UI | `ui` | Active | Library, downloads, settings, artists, playlists, tools routes exist | Long-session UX polish; richer provider health and troubleshooting views |
 | Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
-| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery exist | Deezer full-track path incomplete; MetadataRepairOnly stubbed; `downloader/` module overlap unresolved |
+| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, and startup recovery exist | `MetadataRepairOnly` stubbed; `downloader/` overlap unresolved |
 | Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
 | Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
 | Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
@@ -123,28 +123,32 @@ The Tauri command layer exposes commands across these areas:
 
 ## Known Issues And Technical Debt
 
-### P0 — Shipping Blockers
+### P0 - Shipping Blockers
 
 - [ ] Audit/event coverage must remain provable across organization and admission paths.
   Validation/logging checks should fail loudly if coverage regresses.
-- [ ] Provider live-proof coverage is incomplete. Deezer full-track path is the most
-  significant gap. Qobuz and slskd paths exist but are not clean-machine proven.
+- [ ] Provider and recovery proof coverage is still incomplete at the UX/package level.
+  Deezer full-track and startup recovery are now proven locally; audit completeness and
+  packaging confidence are the bigger remaining shipping gaps.
 
-### P1 — Important Hardening
+### P1 - Important Hardening
 
-- [ ] Async hardening incomplete across some acquisition/orchestration flows.
+- [ ] Async hardening is incomplete across some acquisition/orchestration flows.
   Cancellation safety, retry behavior, and temp/staging cleanup guarantees need test coverage.
-- [ ] Packaging and clean-machine confidence need proof. "Builds here" ≠ "ready to ship."
-- [ ] Performance telemetry not yet treated as a strict regression budget.
+- [ ] Packaging and clean-machine confidence need proof. "Builds here" is not the same as "ready to ship."
+- [ ] Performance telemetry is not yet treated as a strict regression budget.
+- [ ] Active runtime provenance now persists request signatures, candidate sets, provider search outcomes,
+  and durable negative-result memory, but the runtime still does not reuse that memory for staged
+  candidate review, query-cache TTLs, or user approval flows.
 
-### P2 — Improvement
+### P2 - Improvement
 
-- [ ] `downloader/` module and `director/providers/` have overlapping implementations.
-  The director/providers path is active; the older downloader path should be reconciled or removed.
-- [ ] `MetadataRepairOnly` acquisition strategy is explicitly stubbed in `director/engine.rs`.
-- [ ] Long-session desktop reliability not formally tested or documented.
+- [ ] `downloader/` and `director/providers/` have overlapping implementations.
+  The `director/providers` path is active; the older downloader path should be reconciled or removed.
+- [ ] `MetadataRepairOnly` in `director/engine.rs` is explicitly stubbed.
+- [ ] Long-session desktop reliability is not formally tested or documented.
 - [ ] `Album.id` is a computed `ROW_NUMBER()` from SQL, not a real primary key.
-  IDs are not stable across queries if data changes. Any code that caches Album IDs by value is fragile.
+  IDs are not stable across queries if data changes.
 
 ---
 
@@ -152,7 +156,7 @@ The Tauri command layer exposes commands across these areas:
 
 Before declaring a release candidate ready, all of the following must pass:
 
-- [ ] `cargo check` passes at workspace root (no warnings)
+- [ ] `cargo check` passes at workspace root with no actionable warnings
 - [ ] `cargo test` passes for the Rust workspace
 - [ ] `ui` build passes with `npm run build`
 - [ ] Desktop smoke script passes: `scripts/smoke_desktop.ps1`
@@ -179,9 +183,9 @@ Cassette handles real music files and real local state. Every implementation cho
 
 Current evidence is qualitative:
 
-- Rust workspace compiles cleanly
-- UI production build succeeds
-- Desktop smoke checks pass
+- Rust workspace compiles
+- UI production build is part of the verification surface
+- Desktop smoke checks are part of the verification surface
 
 Formal baselines live in [TELEMETRY.md](TELEMETRY.md) and should be updated when benchmarks are added.
 
@@ -195,7 +199,7 @@ Primary verification commands:
 cargo check
 cargo test
 cd ui && npm run build
-cd .. && ./scripts/smoke_desktop.ps1   # Windows
+cd .. && ./scripts/smoke_desktop.ps1
 ```
 
 Validation CLI surface:
@@ -235,4 +239,4 @@ Full rationale in [DECISIONS.md](DECISIONS.md).
 
 ---
 
-**This document is canonical project map material. Keep it factual, current, and tied to observed runtime truth.**
+**This is canonical project map material. Keep it factual, current, and tied to observed runtime truth. The canonical docs for this repo live under `docs/`.**

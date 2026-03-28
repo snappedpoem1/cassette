@@ -3,6 +3,8 @@
 
 If you are an agent touching this codebase, this is your operating manual. Read it first. Follow it unless a higher-priority instruction conflicts, and document the reason when you diverge.
 
+Canonical docs live under `docs/`. If another instruction says "read TODO.md" or similar, resolve that to `docs/TODO.md` in this repo.
+
 ---
 
 ## Core Principles
@@ -58,11 +60,12 @@ Build for recovery, not just for the happy path.
 Before substantial work:
 
 1. Read [PROJECT_INDEX.md](PROJECT_INDEX.md)
-2. Read [AGENT_BRIEFING.md](AGENT_BRIEFING.md)
-3. Read [TODO.md](TODO.md)
-4. Read [DECISIONS.md](DECISIONS.md) for relevant rationale
-5. Review [PATTERNS.md](PATTERNS.md)
-6. Run baseline verification if the task is not trivial
+2. Read [PROJECT_STATE.md](PROJECT_STATE.md)
+3. Read [AGENT_BRIEFING.md](AGENT_BRIEFING.md)
+4. Read [TODO.md](TODO.md)
+5. Read [DECISIONS.md](DECISIONS.md) for relevant rationale
+6. Review [PATTERNS.md](PATTERNS.md)
+7. Run baseline verification if the task is not trivial
 
 Baseline commands:
 
@@ -72,6 +75,8 @@ cargo test
 cd ui && npm run build
 # Windows: .\scripts\smoke_desktop.ps1
 ```
+
+These commands are the baseline verification surface, not a promise that the workspace is currently green. Check `PROJECT_STATE.md` or re-run them when the task depends on current pass/fail status.
 
 ---
 
@@ -187,7 +192,7 @@ Rust expectations:
 - favor deterministic ordering
 - name thresholds and retry policies
 - add tests for risky or failure-heavy paths
-- do not suppress errors with `let _ = ...` when the failure is actionable — log it
+- do not suppress errors with `let _ = ...` when the failure is actionable - log it
 
 SQL expectations:
 
@@ -255,4 +260,4 @@ Bias toward:
 
 ---
 
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-03-27

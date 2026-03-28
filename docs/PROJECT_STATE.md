@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
 
 ## Architecture
 
@@ -9,6 +9,7 @@ Last updated: 2026-03-27
 - **Core domain**: Rust workspace (`crates/cassette-core/`)
 - **Database**: SQLite via rusqlite (runtime) + sqlx (custodian subsystem)
 - **Active DB location**: Tauri app-data directory (`cassette.db`)
+- **Repo-local DB files**: Root-level `*.db` files in this workspace are local artifacts for tests, probes, or inspection; do not assume they are the live desktop runtime database
 
 ## What Works Today
 
@@ -31,12 +32,16 @@ Last updated: 2026-03-27
 - Two-pass waterfall orchestration with per-provider semaphores
 - 7 acquisition strategies (Standard, HighQualityOnly, ObscureFallbackHeavy, SingleTrackPriority, DiscographyBatch, RedownloadReplaceIfBetter, MetadataRepairOnly)
 - 6-factor candidate scoring (metadata confidence, duration match, codec quality, provider trust, validation result, file size)
+- Task-local cancellation via `CancellationToken` registry, with batch-wide cancel reserved for shutdown
 - Symphonia-based audio validation (format probing, magic bytes, duration extraction)
 - Post-acquisition metadata tagging via Lofty (artist, album, title, track#, disc#, year, cover art)
 - Atomic finalization with dedup policy (KeepExisting or ReplaceIfBetter)
 - Per-task temp directories with stale recovery and quarantine
 - Retry with linear backoff (configurable max attempts and base delay)
-- Broadcast event channel for real-time progress tracking
+- Search-result caching in the director waterfall
+- Provider health monitoring with skip-on-down behavior
+- Broadcast event channels for progress, results, and provider health
+- Deezer full-track acquisition is live-proven on this machine as of 2026-03-27 via `provider_acquire_probe_cli`
 
 ### Providers (7 active)
 
@@ -63,9 +68,16 @@ Last updated: 2026-03-27
 - Spotify play history import from external SQLite DB
 - Missing album detection (Spotify albums not in local library)
 - Album-level batch download submission
+- Album and Spotify-missing queues now expand releases into per-track `TrackTask` submissions via MusicBrainz release tracklists instead of treating the album title as a single-track query
 - Director task result persistence to `director_task_history` table
+- Terminal history now retains the original `TrackTask` request payload and strategy for failed/cancelled/finalized results
+- Pending director task persistence in `director_pending_tasks` for startup recovery
+- Startup recovery filters stale pending rows against newer terminal history before resubmission
+- Request-signature persistence now threads through pending tasks, terminal history, candidate sets, and provider memory
+- Full candidate-set persistence now captures scored, rejected, and selected candidates in `director_candidate_sets` and `director_candidate_items`
+- Provider search outcomes and normalized negative-result memory now persist in `director_provider_searches`, `director_provider_attempts`, and `director_provider_memory`
 
-## Database Schema (9 tables)
+## Active Runtime Database Schema (14 tables)
 
 | Table | Purpose |
 |-------|---------|
@@ -76,7 +88,15 @@ Last updated: 2026-03-27
 | `playlists` | Playlist definitions |
 | `playlist_items` | Playlist track membership |
 | `spotify_album_history` | Imported Spotify listening data |
-| `director_task_history` | Completed acquisition results with provenance |
+| `director_task_history` | Completed acquisition results with provenance plus original request payload and request signature |
+| `director_pending_tasks` | In-flight acquisition tasks for deterministic startup recovery |
+| `director_candidate_sets` | One persisted candidate-set envelope per terminal director task |
+| `director_candidate_items` | All searched/acquired/rejected/selected candidates for a terminal task |
+| `director_provider_searches` | Per-provider search outcomes including empty-result and error paths |
+| `director_provider_attempts` | Normalized provider attempt trail per terminal task |
+| `director_provider_memory` | Latest durable negative-result memory per request signature and provider |
+
+Separate richer schemas also exist in the `library`, `librarian`, and `gatekeeper` subsystems. Those are part of the architecture-convergence story, not the current active Tauri runtime table set.
 
 ## Concurrency Model
 
@@ -85,6 +105,7 @@ Last updated: 2026-03-27
 - slskd global search semaphore: OnceLock<Semaphore(1)> — one search at a time
 - Two-pass provider acquisition: Pass 1 non-blocking try_acquire, Pass 2 blocking on deferred
 - Download concurrency: configurable (default 16 parallel downloads)
+- MusicBrainz rate limiting via `governor` (1 request/second)
 
 ## Configuration
 
@@ -97,17 +118,33 @@ Settings resolved in priority order (highest wins):
 
 ## Known Limitations
 
-- No cancellation support for in-flight tasks (must wait for timeouts)
-- Frontend polls for download status instead of receiving push events
-- Hand-rolled rate limiting (fixed sleep) instead of proper token bucket
-- No search result caching across provider fallthrough
-- No provider health monitoring (discovers dead providers only on timeout)
-- No crash recovery for in-flight tasks (only completed results persisted)
+- Frontend still keeps `get_download_jobs` as a catch-up and resume fallback even though push events are now primary
 - Dual schema: richer librarian/library model exists but isn't wired to active runtime
 - `MetadataRepairOnly` strategy is stubbed
 - Discogs/Last.fm enrichers are no-op stubs
 - Bandcamp source is placeholder-only
-- `cargo test` has failures; `cargo check` has warnings
+- Pending-task startup recovery is now proven with a deterministic probe, but a full UI-driven kill/relaunch capture is still worth recording
+- Download supervision is proven by automated tests and local probes; a full UI-driven proof pass is still worth capturing
+- Candidate persistence now exists in the active runtime path, but the app still does not reuse that memory for pre-acquisition review, query-cache TTLs, or user override/exclusion decisions
+- Usenet remains partially configured on this machine: `provider_probe_cli` reports `SKIP` because `nzbgeek_api_key` and/or `usenet_host` are missing
+
+## Verification Snapshot
+
+Verified on 2026-03-28:
+
+- `cargo check --workspace` passes
+- `cargo test --workspace` passes
+- `npm run build` in `ui/` passes
+- `.\scripts\smoke_desktop.ps1` passes
+- Active runtime DB migrations now create and populate `director_candidate_sets`, `director_candidate_items`,
+  `director_provider_searches`, `director_provider_attempts`, and `director_provider_memory`
+- A new DB test proves the terminal save path persists both selected/rejected candidates and normalized provider-negative memory on the request signature
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin recovery_probe_cli` proves:
+  - pending jobs are restored visibly before replay
+  - stale cancelled rows are filtered instead of resurrected
+  - a resumed task finalizes successfully after startup recovery
+- `cargo run --bin provider_probe_cli` shows `OK` for `slskd`, `qobuz`, `deezer`, `spotify`, and `yt-dlp` on this machine
+- `cargo run --bin provider_acquire_probe_cli -- --provider deezer` acquired a full-length FLAC for `Brand New - Sic Transit Gloria... Glory Fades` (`24,324,054` bytes, `186.49s`)
 
 ## Documentation
 

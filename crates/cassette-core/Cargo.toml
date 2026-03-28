@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 symphonia = { version = "0.5", features = ["all"] }
 lofty = "0.21"
@@ -40,3 +41,5 @@ url = "2"
 sha2 = "0.10"
 strsim = "0.11"
 clap = { version = "4", features = ["derive"] }
+governor = "0.8"
+moka = { version = "0.12", features = ["sync"] }

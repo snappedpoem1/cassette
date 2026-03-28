@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import {
-    downloadJobs, metadataSearchResults, artistDiscography, isSearchingMetadata,
-    loadDownloadJobs, searchMetadata, loadDiscography, startJobsPoll, stopJobsPoll,
+    downloadJobs, metadataSearchResults, artistDiscography, isSearchingMetadata, providerHealth,
+    loadDownloadJobs, searchMetadata, loadDiscography, startDownloadSupervision, stopDownloadSupervision,
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
   import { debounce } from '$lib/utils';
@@ -20,9 +20,9 @@
 
   onMount(() => {
     loadDownloadJobs();
-    startJobsPoll();
+    startDownloadSupervision();
   });
-  onDestroy(stopJobsPoll);
+  onDestroy(stopDownloadSupervision);
 
   async function downloadAlbum(album: DownloadAlbumResult) {
     await api.startDownload(album.artist, album.title);
@@ -48,12 +48,17 @@
     await loadDownloadJobs();
   }
 
+  async function cancelJob(taskId: string) {
+    await api.cancelDownload(taskId);
+  }
+
   const statusColors: Record<string, string> = {
     Queued: 'badge-muted',
     Searching: 'badge-warning',
     Downloading: 'badge-accent',
     Verifying: 'badge-warning',
     Done: 'badge-success',
+    Cancelled: 'badge-muted',
     Failed: 'badge-error',
   };
 </script>
@@ -64,6 +69,18 @@
   <div class="page-header">
     <h2 style="flex:1">Downloads</h2>
   </div>
+
+  {#if Object.keys($providerHealth).length > 0}
+    <div class="provider-health-strip">
+      {#each Object.values($providerHealth) as health}
+        <div class="provider-health-chip" class:is-down={health.status === 'Down'}>
+          <span class="provider-health-name">{health.provider_id}</span>
+          <span class="provider-health-state">{health.status}</span>
+          {#if health.message}<span class="provider-health-msg">{health.message}</span>{/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Search -->
   <div class="dl-search-section">
@@ -183,6 +200,11 @@
               {/if}
               <span class="badge {statusColors[job.status] ?? 'badge-muted'}">{job.status}</span>
               {#if job.provider}<span class="job-provider">{job.provider}</span>{/if}
+              {#if !['Done', 'Failed', 'Cancelled'].includes(job.status)}
+                <button class="btn btn-secondary job-cancel" on:click={() => cancelJob(job.id)}>
+                  Cancel
+                </button>
+              {/if}
             </div>
           </div>
           {#if job.error}
@@ -196,6 +218,41 @@
 
 <style>
 .downloads-page { display: flex; flex-direction: column; min-height: 100%; }
+
+.provider-health-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 1.5rem 1rem;
+}
+
+.provider-health-chip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font-size: 0.75rem;
+}
+
+.provider-health-chip.is-down {
+  border-color: color-mix(in srgb, var(--error) 50%, var(--border));
+}
+
+.provider-health-name {
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.provider-health-state {
+  color: var(--text-muted);
+}
+
+.provider-health-msg {
+  color: var(--text-secondary);
+}
 
 .dl-search-section { display: flex; align-items: center; padding: 0 1.5rem 1rem; }
 .dl-notice {
@@ -247,5 +304,6 @@
 .job-progress { display: flex; align-items: center; gap: 6px; }
 .job-pct    { font-size: 0.75rem; color: var(--text-muted); min-width: 32px; }
 .job-provider { font-size: 0.72rem; color: var(--text-muted); }
+.job-cancel { font-size: 0.72rem; padding: 4px 10px; }
 .job-error { font-size: 0.75rem; color: var(--error); padding: 4px 14px 8px; }
 </style>

@@ -219,6 +219,7 @@ mod tests {
     fn selection(path: PathBuf) -> CandidateSelection {
         CandidateSelection {
             provider_id: "mock".to_string(),
+            provider_candidate_id: "mock-candidate".to_string(),
             temp_path: path,
             score: CandidateScore {
                 total: 10,
@@ -253,6 +254,7 @@ mod tests {
             task_id: "task-1".to_string(),
             source_metadata: target(),
             selected_provider: "mock".to_string(),
+            selected_provider_candidate_id: Some("mock-candidate".to_string()),
             score_reason: SelectionReason {
                 summary: "test".to_string(),
                 details: BTreeMap::new(),

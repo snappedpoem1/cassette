@@ -1,17 +1,15 @@
-#[path = "../state.rs"]
-mod state;
-
 use cassette_core::db::Db;
-use cassette_core::director::{
-    AcquisitionStrategy, Director, DirectorConfig, DuplicatePolicy, NormalizedTrack, ProviderPolicy,
-    QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask, TrackTaskSource,
-};
 use cassette_core::director::providers::{
     DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
     UsenetProvider, YtDlpProvider,
 };
+use cassette_core::director::{
+    AcquisitionStrategy, Director, DirectorConfig, DuplicatePolicy, NormalizedTrack, ProviderPolicy,
+    QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask, TrackTaskSource,
+};
 use cassette_core::metadata::MetadataService;
 use cassette_core::sources::{RemoteProviderConfig, SlskdConnectionConfig};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,7 +26,7 @@ fn print_progress(
     let pct = if total > 0 { done * 100 / total } else { 0 };
     let bar_width = 36usize;
     let filled = if total > 0 { done * bar_width / total } else { 0 };
-    let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
+    let bar: String = "#".repeat(filled) + &"-".repeat(bar_width - filled);
 
     let eta = if rate > 0.0 && done < total {
         let secs_left = ((total - done) as f64 / rate * 60.0) as u64;
@@ -44,7 +42,7 @@ fn print_progress(
     };
 
     print!(
-        "\r[{bar}] {done}/{total} {pct}%  ✓{finalized} ✗{failed} ⤏{skipped}  {rate:.1}/min  {eta}\x1b[K"
+        "\r[{bar}] {done}/{total} {pct}%  +{finalized} -{failed} ={skipped}  {rate:.1}/min  {eta}\x1b[K"
     );
     let _ = std::io::stdout().flush();
 }
@@ -64,6 +62,96 @@ fn read_setting(db: &Db, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+fn normalize_task_component(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn album_track_task_key(
+    artist: &str,
+    album: &str,
+    disc_number: u32,
+    track_number: u32,
+    title: &str,
+) -> String {
+    format!(
+        "spotify-album-track::{}::{}::{}::{:02}::{}",
+        artist.to_ascii_lowercase(),
+        album.to_ascii_lowercase(),
+        disc_number,
+        track_number,
+        normalize_task_component(title),
+    )
+}
+
+async fn resolve_album_track_tasks(
+    artist: &str,
+    album: &str,
+) -> Result<Vec<TrackTask>, Box<dyn std::error::Error>> {
+    let metadata = MetadataService::new()?;
+    let releases = metadata.search_release(artist, album).await?;
+    let release = releases
+        .into_iter()
+        .find(|release| release.track_count.unwrap_or(0) > 0)
+        .ok_or_else(|| format!("MusicBrainz could not resolve album: {artist} - {album}"))?;
+    let release_with_tracks = metadata.get_release_tracks(&release.id).await?;
+    if release_with_tracks.tracks.is_empty() {
+        return Err(format!("MusicBrainz returned no tracks for {artist} - {album}").into());
+    }
+
+    let mut tasks = release_with_tracks
+        .tracks
+        .into_iter()
+        .map(|track| TrackTask {
+            task_id: album_track_task_key(
+                artist,
+                album,
+                track.disc_number,
+                track.track_number,
+                &track.title,
+            ),
+            source: TrackTaskSource::SpotifyHistory,
+            target: NormalizedTrack {
+                spotify_track_id: None,
+                source_playlist: None,
+                artist: if track.artist.trim().is_empty() {
+                    artist.to_string()
+                } else {
+                    track.artist
+                },
+                album_artist: Some(artist.to_string()),
+                title: track.title,
+                album: Some(release.title.clone()),
+                track_number: Some(track.track_number),
+                disc_number: Some(track.disc_number),
+                year: release.year,
+                duration_secs: if track.duration_ms > 0 {
+                    Some(track.duration_ms as f64 / 1000.0)
+                } else {
+                    None
+                },
+                isrc: None,
+            },
+            strategy: AcquisitionStrategy::DiscographyBatch,
+        })
+        .collect::<Vec<_>>();
+    tasks.sort_by_key(|task| {
+        (
+            task.target.disc_number.unwrap_or(0),
+            task.target.track_number.unwrap_or(0),
+            task.target.title.to_ascii_lowercase(),
+        )
+    });
+    Ok(tasks)
+}
+
 /// For each Failed task where album == title (likely a single), query MusicBrainz for the
 /// parent album and insert it into spotify_album_history so the next batch run downloads it.
 async fn resolve_failed_singles(db: &Db) -> Result<(), Box<dyn std::error::Error>> {
@@ -79,20 +167,22 @@ async fn resolve_failed_singles(db: &Db) -> Result<(), Box<dyn std::error::Error
     let mut unresolved = 0usize;
 
     for task_id in &failed {
-        // task_id format: "spotify-batch::{artist}::{album}"
         let parts: Vec<&str> = task_id.splitn(3, "::").collect();
         if parts.len() != 3 {
             continue;
         }
         let (artist, track_title) = (parts[1], parts[2]);
 
-        print!("  Looking up: {} — {}... ", artist, track_title);
+        print!("  Looking up: {} - {}... ", artist, track_title);
         match mb.find_parent_album(artist, track_title).await {
             Ok(Some(release)) => {
                 let parent_album = &release.title;
-                // Insert into spotify_album_history — use 1 play_count so it qualifies for download
                 let _ = db.upsert_spotify_album_history(artist, parent_album, 60_000, 1);
-                println!("→ {} ({})", parent_album, release.release_group_type.as_deref().unwrap_or("?"));
+                println!(
+                    "-> {} ({})",
+                    parent_album,
+                    release.release_group_type.as_deref().unwrap_or("?")
+                );
                 resolved += 1;
             }
             Ok(None) => {
@@ -134,8 +224,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db = Db::open(&db_path).map_err(|e| e.to_string())?;
 
-    // --resolve-singles: use MusicBrainz to find parent albums for failed single-track tasks,
-    // then insert the resolved albums into spotify_album_history so the next run downloads them.
     if resolve_singles {
         return resolve_failed_singles(&db).await;
     }
@@ -144,7 +232,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let staging_folder =
         read_setting(&db, "staging_folder").unwrap_or_else(|| "A:\\Staging".to_string());
 
-    // Fetch missing albums and completed task keys
     let missing_albums = db.get_missing_spotify_albums(limit + 100)?;
     let completed_keys = db.get_completed_task_keys()?;
 
@@ -154,8 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         completed_keys.len()
     );
 
-    // Filter and build task list
-    let mut tasks: Vec<(String, String, String)> = Vec::new();
+    let mut tasks = Vec::<TrackTask>::new();
     for album in &missing_albums {
         if tasks.len() >= limit {
             break;
@@ -165,23 +251,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if artist.is_empty() || title.is_empty() {
             continue;
         }
-        let task_key = format!(
-            "spotify-batch::{}::{}",
-            artist.to_ascii_lowercase(),
-            title.to_ascii_lowercase()
-        );
-        if completed_keys.contains(&task_key) {
-            continue;
+
+        let resolved_tasks = match resolve_album_track_tasks(artist, title).await {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                println!("  Skip {artist} - {title}: {error}");
+                continue;
+            }
+        };
+
+        for task in resolved_tasks {
+            if tasks.len() >= limit {
+                break;
+            }
+            if completed_keys.contains(&task.task_id) {
+                continue;
+            }
+            tasks.push(task);
         }
-        tasks.push((task_key, artist.to_string(), title.to_string()));
     }
 
     println!("Will submit {} tasks (limit: {limit})", tasks.len());
 
     if dry_run {
-        println!("\n=== DRY RUN — showing first 20 tasks ===");
-        for (i, (key, artist, title)) in tasks.iter().enumerate().take(20) {
-            println!("  [{:>3}] {artist} — {title}  (key: {key})", i + 1);
+        println!("\n=== DRY RUN - showing first 20 tasks ===");
+        for (i, task) in tasks.iter().enumerate().take(20) {
+            println!(
+                "  [{:>3}] {} - {} - {}  (key: {})",
+                i + 1,
+                task.target.artist,
+                task.target.album.clone().unwrap_or_default(),
+                task.target.title,
+                task.task_id
+            );
         }
         if tasks.len() > 20 {
             println!("  ... and {} more", tasks.len() - 20);
@@ -190,7 +292,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Build Director with same config as AppState
     let remote_config = RemoteProviderConfig {
         qobuz_email: read_setting(&db, "qobuz_email"),
         qobuz_password: read_setting(&db, "qobuz_password"),
@@ -233,13 +334,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             quarantine_failures: true,
         },
         provider_policies: vec![
-            ProviderPolicy { provider_id: "qobuz".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "deezer".to_string(), max_concurrency: 4 },
-            ProviderPolicy { provider_id: "slskd".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "usenet".to_string(), max_concurrency: 1 },
-            ProviderPolicy { provider_id: "local_archive".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "yt_dlp".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "real_debrid".to_string(), max_concurrency: 3 },
+            ProviderPolicy {
+                provider_id: "qobuz".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "deezer".to_string(),
+                max_concurrency: 4,
+            },
+            ProviderPolicy {
+                provider_id: "slskd".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "usenet".to_string(),
+                max_concurrency: 1,
+            },
+            ProviderPolicy {
+                provider_id: "local_archive".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "yt_dlp".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "real_debrid".to_string(),
+                max_concurrency: 3,
+            },
         ],
         staging_root: PathBuf::from(&staging_folder),
         ..DirectorConfig::default()
@@ -275,55 +397,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = Director::new(config, providers).start();
     let mut result_rx = handle.subscribe_results();
 
-    // Submit all tasks
     let total = tasks.len();
+    let mut submitted_tasks = HashMap::<String, TrackTask>::new();
     println!("\nSubmitting {total} tasks to Director...");
-    for (i, (task_key, artist, title)) in tasks.iter().enumerate() {
-        let task = TrackTask {
-            task_id: task_key.clone(),
-            source: TrackTaskSource::SpotifyHistory,
-            target: NormalizedTrack {
-                spotify_track_id: None,
-                source_playlist: None,
-                artist: artist.clone(),
-                album_artist: Some(artist.clone()),
-                title: title.clone(),
-                album: Some(title.clone()),
-                track_number: None,
-                disc_number: None,
-                year: None,
-                duration_secs: None,
-                isrc: None,
-            },
-            strategy: AcquisitionStrategy::DiscographyBatch,
-        };
+    for (i, task) in tasks.iter().enumerate() {
+        submitted_tasks.insert(task.task_id.clone(), task.clone());
 
         handle
             .submitter
-            .submit(task)
+            .submit(task.clone())
             .await
             .map_err(|e| e.to_string())?;
 
         if (i + 1) % 50 == 0 {
-            println!("  Submitted {}/{total}", i + 1);
+            println!("  Submitted {}/{}", i + 1, total);
         }
     }
     println!("All {total} tasks submitted. Waiting for results...\n");
 
-    // Monitor results
     let mut finalized = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
     let start = std::time::Instant::now();
 
-    // Print initial empty bar
     print_progress(0, total, 0, 0, 0, 0, 0.0);
 
     while finalized + failed + skipped < total {
         match result_rx.recv().await {
             Ok(result) => {
-                // Persist to DB
-                let _ = db.save_director_task_result(&result);
+                let request = submitted_tasks.get(&result.task_id);
+                let _ = db.save_director_task_result(&result, request);
                 if let Some(ref finalized_track) = result.finalized {
                     if let Ok(track) =
                         cassette_core::library::read_track_metadata(&finalized_track.path)
@@ -348,21 +451,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .as_ref()
                             .map(|f| f.provenance.selected_provider.as_str())
                             .unwrap_or("?");
-                        // Clear bar line, print result, reprint bar
                         print!("\r\x1b[K");
-                        println!("  ✓  {} ({})", result.task_id, provider);
+                        println!("  +  {} ({})", result.task_id, provider);
                     }
                     cassette_core::director::FinalizedTrackDisposition::AlreadyPresent => {
                         skipped += 1;
                         print!("\r\x1b[K");
-                        println!("  ⤏  {} (already present)", result.task_id);
+                        println!("  =  {} (already present)", result.task_id);
                     }
                     cassette_core::director::FinalizedTrackDisposition::Failed => {
                         failed += 1;
                         let err = result.error.as_deref().unwrap_or("unknown");
                         let short_err = if err.len() > 60 { &err[..60] } else { err };
                         print!("\r\x1b[K");
-                        println!("  ✗  {} — {}", result.task_id, short_err);
+                        println!("  -  {} - {}", result.task_id, short_err);
                     }
                     _ => {
                         skipped += 1;
@@ -378,14 +480,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => break,
         }
     }
-    print!("\r\x1b[K"); // clear bar line before final summary
+    print!("\r\x1b[K");
 
     let elapsed = start.elapsed().as_secs();
     println!("\n=== COMPLETE ===");
     println!("Finalized: {finalized} | Failed: {failed} | Skipped: {skipped}");
     println!("Total time: {elapsed}s");
 
-    // Graceful shutdown
     drop(handle);
 
     Ok(())

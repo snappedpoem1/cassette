@@ -1,7 +1,7 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderSearchCandidate,
-    TrackTask,
+    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
+    ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
@@ -87,6 +87,16 @@ impl Provider for QobuzProvider {
                 supports_batch: false,
             },
         }
+    }
+
+    async fn health_check(&self) -> Result<ProviderHealthState, ProviderError> {
+        self.ensure_session().await?;
+        Ok(ProviderHealthState {
+            provider_id: "qobuz".to_string(),
+            status: ProviderHealthStatus::Healthy,
+            checked_at: chrono::Utc::now(),
+            message: None,
+        })
     }
 
     async fn search(

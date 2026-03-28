@@ -3,18 +3,19 @@
 This file tracks what we know about build, runtime, and operational confidence.
 It is not a dashboard — it is a record of observed facts with dates.
 
-**Last Updated**: 2026-03-25
+**Last Updated**: 2026-03-28
 
 ---
 
-## Build Baseline (as of 2026-03-25)
+## Build Baseline (as of 2026-03-27)
 
 | Check | Status | Notes |
 |---|---|---|
-| `cargo check` | Passing | No warnings |
+| `cargo check` | Passing | Warning-free on 2026-03-28 |
 | `cargo test` | Passing | All unit and integration tests pass |
 | `npm run build` (ui) | Passing | Production build clean |
-| Desktop smoke (`scripts/smoke_desktop.ps1`) | Passing | On developer machine |
+| Desktop smoke (`scripts/smoke_desktop.ps1`) | Passing | Confirmed on developer machine |
+| Startup recovery probe (`recovery_probe_cli`) | Passing | Resumed job finalized; stale cancelled row was filtered |
 
 ---
 
@@ -26,10 +27,11 @@ It is not a dashboard — it is a record of observed facts with dates.
 | Playback | Working | Symphonia decode + CPAL output, seek confirmed |
 | Queue | Working | Persist/restore across sessions |
 | Downloads dashboard | Working | Director events surface correctly |
-| Qobuz acquisition | Partial | Wired; not clean-machine proven |
-| Deezer acquisition | Partial | Fallback to preview MP3s; full ARL path not proven |
+| Pending-task startup recovery | Working | Deterministic startup replay proven with `recovery_probe_cli` |
+| Qobuz acquisition | Partial | Wired and provider probe passes on this machine |
+| Deezer acquisition | Working | Live full-track FLAC probe succeeded on 2026-03-27 |
 | Tidal acquisition | Not started | OAuth device flow not implemented |
-| slskd acquisition | Partial | Session-token flow wired; live transfer acceptance varies by peer |
+| slskd acquisition | Partial | Health/probe path passes when daemon is up; transfer acceptance still varies by peer |
 | Usenet acquisition | Partial | SABnzbd handoff wired; end-to-end not formally proven |
 | yt-dlp acquisition | Wired | Depends on yt-dlp binary in PATH |
 | Spotify import | Working | JSON export parsing and album queue confirmed |
@@ -84,6 +86,8 @@ No formal benchmarks exist yet. Qualitative observations:
 - Provider reliability is configuration-dependent and machine-dependent.
 - Packaging confidence is not yet a repeatable telemetry artifact.
 - Long-session stability has not been tested beyond a single smoke run.
+- Full UI-driven crash/relaunch capture is still worth recording even though startup replay is now proven with a deterministic probe.
+- Full candidate-set persistence and negative-result memory are still absent from the active runtime path.
 
 ---
 

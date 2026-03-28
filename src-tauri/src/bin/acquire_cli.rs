@@ -1,6 +1,4 @@
-#[path = "../state.rs"]
-mod state;
-
+use cassette_lib::state::AppState;
 use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use cassette_core::models::{DownloadJob, DownloadStatus};
 use std::path::PathBuf;
@@ -41,6 +39,7 @@ fn status_label(status: &DownloadStatus) -> &'static str {
         DownloadStatus::Downloading => "Downloading",
         DownloadStatus::Verifying => "Verifying",
         DownloadStatus::Done => "Done",
+        DownloadStatus::Cancelled => "Cancelled",
         DownloadStatus::Failed => "Failed",
     }
 }
@@ -49,7 +48,7 @@ fn status_label(status: &DownloadStatus) -> &'static str {
 async fn main() -> Result<(), String> {
     let (artist, title, album) = parse_args()?;
     let db_path = app_db_path()?;
-    let app_state = state::AppState::new(&db_path).map_err(|error| error.to_string())?;
+    let app_state = AppState::new(&db_path, None).map_err(|error| error.to_string())?;
 
     let id = format!("job-{}", Uuid::new_v4());
     let query = match album.as_deref() {
@@ -133,7 +132,10 @@ async fn main() -> Result<(), String> {
             last_report = report_line;
         }
 
-        if matches!(job.status, DownloadStatus::Done | DownloadStatus::Failed) {
+        if matches!(
+            job.status,
+            DownloadStatus::Done | DownloadStatus::Cancelled | DownloadStatus::Failed
+        ) {
             break;
         }
 

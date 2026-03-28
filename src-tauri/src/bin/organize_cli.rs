@@ -1,6 +1,3 @@
-#[path = "../state.rs"]
-mod state;
-
 use cassette_core::db::Db;
 use cassette_core::library::organizer;
 use cassette_core::models::Track;

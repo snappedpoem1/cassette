@@ -1,6 +1,6 @@
 # Worklist
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
 
 ## Execution Rule
 
@@ -27,15 +27,14 @@ Prioritize architecture convergence, request fidelity, and provenance memory ove
 9. [ ] Replace placeholder enrichers and explicitly retire dead ones.
        Either implement Discogs/Last.fm enrichers for real or leave them clearly dormant. Remove or absorb `downloader/` and `ProviderBridge` overlap.
 10. [ ] Re-run proof and quality gates after architecture convergence.
-        Fix the failing Rust test, remove current warnings, then document real end-to-end provider proof on this machine.
+        The Rust test gate is green again and Deezer full-track is live-proven on this machine.
+        The remaining quality work is audit-completeness and packaging proof.
 
 ## Confirmed Gaps To Track
 
-- [ ] `cargo test` is currently failing; fix and keep green.
-- [ ] `cargo check` is currently warning-bearing; clean it up.
 - [ ] `MetadataRepairOnly` remains stubbed.
 - [ ] No candidate-review UX contract exists.
-- [ ] No durable request/query/candidate cache exists in the active runtime path.
+- [ ] Terminal request payload is now retained in `director_task_history`, but no durable full request/query/candidate cache exists in the active runtime path.
 - [ ] No canonical release identity spine exists in the active runtime path.
 
 ## Deferred But Preserved

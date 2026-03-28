@@ -1,7 +1,7 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderSearchCandidate,
-    TrackTask,
+    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
+    ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
@@ -61,6 +61,33 @@ impl Provider for SlskdProvider {
                 supports_batch: false,
             },
         }
+    }
+
+    async fn health_check(&self) -> Result<ProviderHealthState, ProviderError> {
+        let client = reqwest::Client::new();
+        let response = send_slskd_request(
+            client.get(format!("{}/api/v0/server", self.config.url)),
+            &self.config,
+        )
+        .await
+        .map_err(|message| ProviderError::Network {
+            provider_id: "slskd".to_string(),
+            message,
+        })?;
+
+        if !response.status().is_success() {
+            return Err(ProviderError::TemporaryOutage {
+                provider_id: "slskd".to_string(),
+                message: format!("health probe returned HTTP {}", response.status()),
+            });
+        }
+
+        Ok(ProviderHealthState {
+            provider_id: "slskd".to_string(),
+            status: ProviderHealthStatus::Healthy,
+            checked_at: Utc::now(),
+            message: None,
+        })
     }
 
     async fn search(

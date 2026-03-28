@@ -11,12 +11,13 @@ The active app DB stores final task history, but not the memory needed for durab
 | Surface | Current state |
 | --- | --- |
 | Final task result | Stored in `director_task_history` |
+| Request signatures | Stored in `director_pending_tasks`, `director_task_history`, and candidate/provider tables |
 | Track library | Stored in `tracks` |
 | User/provider settings | Stored in `settings` |
 | Spotify album import summaries | Stored in `spotify_album_history` |
-| Query signatures | Missing |
-| Candidate sets | Missing |
-| Negative search results | Missing |
+| Query signatures | Present for director track tasks via `request_signature` |
+| Candidate sets | Stored in `director_candidate_sets` and `director_candidate_items` |
+| Negative search results | Stored in `director_provider_searches` and `director_provider_memory` |
 | Canonical source IDs | Missing |
 | User exclusion rules | Missing |
 | Provider freshness TTLs | Missing |

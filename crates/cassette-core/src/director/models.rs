@@ -130,6 +130,7 @@ pub struct SelectionReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandidateSelection {
     pub provider_id: String,
+    pub provider_candidate_id: String,
     pub temp_path: PathBuf,
     pub score: CandidateScore,
     pub reason: SelectionReason,
@@ -155,6 +156,7 @@ pub struct ProvenanceRecord {
     pub task_id: String,
     pub source_metadata: NormalizedTrack,
     pub selected_provider: String,
+    pub selected_provider_candidate_id: Option<String>,
     pub score_reason: SelectionReason,
     pub validation_summary: ValidationReport,
     pub final_path: PathBuf,
@@ -173,6 +175,7 @@ pub enum FinalizedTrackDisposition {
     Finalized,
     AlreadyPresent,
     MetadataOnly,
+    Cancelled,
     Failed,
 }
 
@@ -183,6 +186,10 @@ pub struct DirectorTaskResult {
     pub finalized: Option<FinalizedTrack>,
     pub attempts: Vec<ProviderAttemptRecord>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub candidate_records: Vec<CandidateRecord>,
+    #[serde(default)]
+    pub provider_searches: Vec<ProviderSearchRecord>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -194,6 +201,7 @@ pub enum DirectorProgress {
     Tagging,
     Finalizing,
     Finalized,
+    Cancelled,
     Failed,
     Exhausted,
     Skipped,
@@ -207,10 +215,54 @@ pub struct DirectorEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProviderHealthStatus {
+    Unknown,
+    Healthy,
+    Down,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderHealthState {
+    pub provider_id: String,
+    pub status: ProviderHealthStatus,
+    pub checked_at: DateTime<Utc>,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandidateDisposition {
     pub candidate: ProviderSearchCandidate,
     pub acquisition: CandidateAcquisition,
     pub validation: ValidationReport,
     pub score: CandidateScore,
+    pub score_reason: SelectionReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateRecord {
+    pub provider_id: String,
+    pub provider_display_name: String,
+    pub provider_trust_rank: i32,
+    pub provider_order_index: usize,
+    pub search_rank: usize,
+    pub candidate: ProviderSearchCandidate,
+    pub acquisition_temp_path: Option<PathBuf>,
+    pub validation: Option<ValidationReport>,
+    pub score: Option<CandidateScore>,
+    pub score_reason: Option<SelectionReason>,
+    pub outcome: String,
+    pub rejection_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSearchRecord {
+    pub provider_id: String,
+    pub provider_display_name: String,
+    pub provider_trust_rank: i32,
+    pub provider_order_index: usize,
+    pub outcome: String,
+    pub candidate_count: usize,
+    pub error: Option<String>,
+    pub retryable: bool,
 }

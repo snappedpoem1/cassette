@@ -48,7 +48,6 @@ impl Default for SeedingQualifiers {
 
 #[derive(Debug, Clone)]
 pub struct RealDebridProvider {
-    api_key: String,
     client: reqwest::Client,
     qualifiers: SeedingQualifiers,
 }
@@ -66,7 +65,6 @@ impl RealDebridProvider {
             .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
-            api_key,
             client,
             qualifiers: SeedingQualifiers::default(),
         }
@@ -380,15 +378,9 @@ impl RealDebridProvider {
             .unwrap_or("download")
             .to_string();
 
-        let filesize = response
-            .get("filesize")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-
         Ok(UnrestrictedLink {
             download,
             filename,
-            filesize,
         })
     }
 
@@ -718,7 +710,6 @@ struct TorrentResult {
 struct UnrestrictedLink {
     download: String,
     filename: String,
-    filesize: u64,
 }
 
 fn sanitize(value: &str) -> String {

@@ -1,44 +1,83 @@
 use anyhow::Result;
 use cassette_core::{
-    db::Db,
+    db::{Db, PendingDirectorTask, TerminalDirectorTaskUpdate},
     director::{
         providers::{
             DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
             UsenetProvider, YtDlpProvider,
         },
-        Director, DirectorConfig, DirectorProgress, DirectorSubmission, DuplicatePolicy,
-        ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
+        models::ProviderHealthState,
+        Director, DirectorConfig, DirectorEvent, DirectorProgress, DirectorSubmission,
+        DirectorHandle, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy,
+        TempRecoveryPolicy, TrackTask,
     },
     downloader::DownloadConfig,
-    models::{DownloadJob, PlaybackState},
+    models::{DownloadJob, DownloadStatus, PlaybackState},
     player::Player,
     sources::{RemoteProviderConfig, SlskdConnectionConfig},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Table as TomlTable;
 use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter};
+use tracing::warn;
 
 pub struct AppState {
     pub db: Arc<Mutex<Db>>,
     pub player: Arc<Player>,
     pub playback_state: Arc<Mutex<PlaybackState>>,
     pub download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
+    pub cancelled_downloads: Arc<Mutex<HashSet<String>>>,
+    pub director_handle: Arc<Mutex<DirectorHandle>>,
     pub director_submitter: DirectorSubmission,
     pub download_config: DownloadConfig,
     pub http_client: reqwest::Client,
 }
 
 impl AppState {
-    pub fn new(db_path: &Path) -> Result<Self> {
+    pub fn new(db_path: &Path, app_handle: Option<AppHandle>) -> Result<Self> {
         let db = Db::open(db_path)?;
         bootstrap_library_roots(&db);
 
         let download_config = bootstrap_download_config(&db);
         let director_handle = build_director(&db, &download_config);
+        Ok(Self::from_parts(
+            db,
+            director_handle,
+            download_config,
+            app_handle,
+        ))
+    }
+
+    #[allow(dead_code)]
+    pub fn new_with_director(
+        db_path: &Path,
+        director_handle: DirectorHandle,
+        download_config: DownloadConfig,
+        app_handle: Option<AppHandle>,
+    ) -> Result<Self> {
+        let db = Db::open(db_path)?;
+        bootstrap_library_roots(&db);
+        Ok(Self::from_parts(
+            db,
+            director_handle,
+            download_config,
+            app_handle,
+        ))
+    }
+
+    fn from_parts(
+        db: Db,
+        director_handle: DirectorHandle,
+        download_config: DownloadConfig,
+        app_handle: Option<AppHandle>,
+    ) -> Self {
+        let director_submitter = director_handle.submitter.clone();
         let event_rx = director_handle.subscribe();
         let result_rx = director_handle.subscribe_results();
+        let provider_health_rx = director_handle.subscribe_health();
 
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
@@ -50,15 +89,168 @@ impl AppState {
             player: Arc::new(Player::new()),
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
             download_jobs: Arc::new(Mutex::new(HashMap::new())),
-            director_submitter: director_handle.submitter.clone(),
+            cancelled_downloads: Arc::new(Mutex::new(HashSet::new())),
+            director_handle: Arc::new(Mutex::new(director_handle)),
+            director_submitter,
             download_config,
             http_client,
         };
 
-        spawn_director_event_listener(Arc::clone(&state.download_jobs), event_rx);
-        spawn_director_result_listener(Arc::clone(&state.db), Arc::clone(&state.download_jobs), result_rx);
+        spawn_director_event_listener(
+            app_handle.clone(),
+            Arc::clone(&state.db),
+            Arc::clone(&state.download_jobs),
+            Arc::clone(&state.cancelled_downloads),
+            event_rx,
+        );
+        spawn_director_result_listener(
+            app_handle.clone(),
+            Arc::clone(&state.db),
+            Arc::clone(&state.download_jobs),
+            Arc::clone(&state.cancelled_downloads),
+            result_rx,
+        );
+        spawn_director_health_listener(provider_health_rx, app_handle.clone());
+        state.resume_pending_downloads();
 
-        Ok(state)
+        state
+    }
+
+    pub fn persist_pending_task(&self, task: &TrackTask, progress: DirectorProgress) -> Result<()> {
+        let db = self.db.lock().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        db.upsert_director_pending_task(task, director_progress_label(progress))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(())
+    }
+
+    pub fn delete_pending_task(&self, task_id: &str) -> Result<()> {
+        let db = self.db.lock().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        db.delete_director_pending_task(task_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(())
+    }
+
+    pub fn mark_download_cancelled(&self, task_id: &str) {
+        if let Ok(mut cancelled) = self.cancelled_downloads.lock() {
+            cancelled.insert(task_id.to_string());
+        }
+    }
+
+    pub fn is_download_cancelled(&self, task_id: &str) -> bool {
+        self.cancelled_downloads
+            .lock()
+            .map(|cancelled| cancelled.contains(task_id))
+            .unwrap_or(false)
+    }
+
+    pub fn cancel_download(&self, task_id: &str) -> Result<bool> {
+        let cancelled = self
+            .director_handle
+            .lock()
+            .map(|handle| handle.cancel_task(task_id))
+            .unwrap_or(false);
+        if !cancelled {
+            return Ok(false);
+        }
+        self.mark_download_cancelled(task_id);
+        self.delete_pending_task(task_id)?;
+        if let Ok(mut jobs) = self.download_jobs.lock() {
+            if let Some(job) = jobs.get_mut(task_id) {
+                job.status = DownloadStatus::Cancelled;
+                job.progress = 0.0;
+                job.error = Some("Cancellation requested".to_string());
+            }
+        }
+        Ok(true)
+    }
+
+    fn resume_pending_downloads(&self) {
+        let (pending, terminal_updates) = {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(error) => {
+                    warn!(error = %error, "failed to lock db while loading pending director tasks");
+                    return;
+                }
+            };
+
+            let pending = match db.get_pending_director_tasks() {
+                Ok(tasks) => tasks,
+                Err(error) => {
+                    warn!(error = %error, "failed to load pending director tasks");
+                    return;
+                }
+            };
+            let terminal_updates = db.get_terminal_director_task_updates().unwrap_or_default();
+            (pending, terminal_updates)
+        };
+
+        let recovery_plan = build_pending_recovery_plan(pending, &terminal_updates);
+
+        if let Ok(db) = self.db.lock() {
+            for task_id in &recovery_plan.stale_task_ids {
+                let _ = db.delete_director_pending_task(&task_id);
+            }
+        }
+
+        if recovery_plan.resumable_tasks.is_empty() {
+            return;
+        }
+
+        if let Ok(mut jobs) = self.download_jobs.lock() {
+            for pending_task in &recovery_plan.resumable_tasks {
+                jobs.insert(
+                    pending_task.task.task_id.clone(),
+                    download_job_from_task(&pending_task.task, &pending_task.progress),
+                );
+            }
+        }
+
+        let submitter = self.director_submitter.clone();
+        tokio::spawn(async move {
+            for pending_task in recovery_plan.resumable_tasks {
+                let task_id = pending_task.task.task_id.clone();
+                if let Err(error) = submitter.submit(pending_task.task).await {
+                    warn!(task_id = %task_id, error = %error, "failed to resubmit pending director task");
+                }
+            }
+        });
+    }
+}
+
+struct PendingRecoveryPlan {
+    resumable_tasks: Vec<PendingDirectorTask>,
+    stale_task_ids: Vec<String>,
+}
+
+fn build_pending_recovery_plan(
+    pending: Vec<PendingDirectorTask>,
+    terminal_updates: &HashMap<String, TerminalDirectorTaskUpdate>,
+) -> PendingRecoveryPlan {
+    let mut resumable_tasks = Vec::new();
+    let mut stale_task_ids = Vec::new();
+
+    for pending_task in pending {
+        let is_terminal_progress = matches!(
+            pending_task.progress.as_str(),
+            "Finalized" | "Cancelled" | "Failed" | "Exhausted" | "Skipped"
+        );
+        let has_newer_terminal_result = terminal_updates
+            .get(&pending_task.task.task_id)
+            .map(|update| update.updated_at >= pending_task.updated_at)
+            .unwrap_or(false);
+
+        if is_terminal_progress || has_newer_terminal_result {
+            stale_task_ids.push(pending_task.task.task_id);
+            continue;
+        }
+
+        resumable_tasks.push(pending_task);
+    }
+
+    PendingRecoveryPlan {
+        resumable_tasks,
+        stale_task_ids,
     }
 }
 
@@ -208,46 +400,45 @@ fn read_setting(db: &Db, key: &str) -> Option<String> {
 }
 
 fn spawn_director_event_listener(
+    app_handle: Option<AppHandle>,
+    db: Arc<Mutex<Db>>,
     download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
+    cancelled_downloads: Arc<Mutex<HashSet<String>>>,
     mut event_rx: tokio::sync::broadcast::Receiver<cassette_core::director::DirectorEvent>,
 ) {
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {
+            let is_cancelled = cancelled_downloads
+                .lock()
+                .map(|cancelled| cancelled.contains(&event.task_id))
+                .unwrap_or(false);
+            if is_cancelled && !matches!(event.progress, DirectorProgress::Cancelled) {
+                continue;
+            }
+
             if let Ok(mut jobs) = download_jobs.lock() {
                 if let Some(job) = jobs.get_mut(&event.task_id) {
-                    job.provider = event.provider_id.clone();
-                    job.error = Some(event.message.clone());
-                    match event.progress {
-                        DirectorProgress::Queued => {
-                            job.status = cassette_core::models::DownloadStatus::Queued;
-                            job.progress = 0.0;
-                        }
-                        DirectorProgress::InProgress | DirectorProgress::ProviderAttempt => {
-                            job.status = cassette_core::models::DownloadStatus::Searching;
-                            job.progress = 0.15;
-                        }
-                        DirectorProgress::Validating => {
-                            job.status = cassette_core::models::DownloadStatus::Verifying;
-                            job.progress = 0.65;
-                        }
-                        DirectorProgress::Tagging | DirectorProgress::Finalizing => {
-                            job.status = cassette_core::models::DownloadStatus::Verifying;
-                            job.progress = 0.85;
-                        }
-                        DirectorProgress::Finalized => {
-                            job.status = cassette_core::models::DownloadStatus::Done;
-                            job.progress = 1.0;
-                            job.error = None;
-                        }
-                        DirectorProgress::Failed | DirectorProgress::Exhausted => {
-                            job.status = cassette_core::models::DownloadStatus::Failed;
-                            job.progress = 0.0;
-                        }
-                        DirectorProgress::Skipped => {
-                            job.status = cassette_core::models::DownloadStatus::Done;
-                            job.progress = 1.0;
-                        }
-                    }
+                    apply_director_event_to_job(job, &event);
+                }
+            }
+
+            if let Ok(db) = db.lock() {
+                let progress = director_progress_label(event.progress);
+                if !matches!(
+                    event.progress,
+                    DirectorProgress::Finalized
+                        | DirectorProgress::Failed
+                        | DirectorProgress::Exhausted
+                        | DirectorProgress::Cancelled
+                        | DirectorProgress::Skipped
+                ) {
+                    let _ = db.update_director_pending_task_progress(&event.task_id, progress);
+                }
+            }
+
+            if let Some(app_handle) = &app_handle {
+                if let Err(error) = app_handle.emit("director-event", &event) {
+                    warn!(task_id = %event.task_id, error = %error, "failed to emit director event");
                 }
             }
         }
@@ -255,14 +446,34 @@ fn spawn_director_event_listener(
 }
 
 fn spawn_director_result_listener(
+    app_handle: Option<AppHandle>,
     db: Arc<Mutex<Db>>,
     download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
+    cancelled_downloads: Arc<Mutex<HashSet<String>>>,
     mut result_rx: tokio::sync::broadcast::Receiver<cassette_core::director::DirectorTaskResult>,
 ) {
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         while let Ok(result) = result_rx.recv().await {
+            let is_cancelled = cancelled_downloads
+                .lock()
+                .map(|cancelled| cancelled.contains(&result.task_id))
+                .unwrap_or(false);
+            if is_cancelled
+                && !matches!(
+                    result.disposition,
+                    cassette_core::director::FinalizedTrackDisposition::Cancelled
+                )
+            {
+                continue;
+            }
+
             if let Ok(db) = db.lock() {
-                let _ = db.save_director_task_result(&result);
+                let request = db
+                    .get_pending_director_task(&result.task_id)
+                    .ok()
+                    .flatten();
+                let _ = db.save_director_task_result(&result, request.as_ref().map(|task| &task.task));
+                let _ = db.delete_director_pending_task(&result.task_id);
                 if let Some(finalized) = &result.finalized {
                     if let Ok(track) = cassette_core::library::read_track_metadata(&finalized.path) {
                         let _ = db.upsert_track(&track);
@@ -272,7 +483,58 @@ fn spawn_director_result_listener(
 
             if let Ok(mut jobs) = download_jobs.lock() {
                 if let Some(job) = jobs.get_mut(&result.task_id) {
-                    job.error = result.error.clone();
+                    match result.disposition {
+                        cassette_core::director::FinalizedTrackDisposition::Finalized
+                        | cassette_core::director::FinalizedTrackDisposition::AlreadyPresent
+                        | cassette_core::director::FinalizedTrackDisposition::MetadataOnly => {
+                            job.status = DownloadStatus::Done;
+                            job.progress = 1.0;
+                            job.error = None;
+                        }
+                        cassette_core::director::FinalizedTrackDisposition::Cancelled => {
+                            job.status = DownloadStatus::Cancelled;
+                            job.progress = 0.0;
+                            job.error = result
+                                .error
+                                .clone()
+                                .or_else(|| Some("Cancelled by user".to_string()));
+                        }
+                        cassette_core::director::FinalizedTrackDisposition::Failed => {
+                            job.status = DownloadStatus::Failed;
+                            job.progress = 0.0;
+                        }
+                    }
+                    if !matches!(
+                        result.disposition,
+                        cassette_core::director::FinalizedTrackDisposition::Cancelled
+                    ) {
+                        job.error = result.error.clone();
+                    }
+                }
+            }
+
+            if let Ok(mut cancelled) = cancelled_downloads.lock() {
+                cancelled.remove(&result.task_id);
+            }
+
+            if let Some(app_handle) = &app_handle {
+                if let Err(error) = app_handle.emit("director-result", &result) {
+                    warn!(task_id = %result.task_id, error = %error, "failed to emit director result");
+                }
+            }
+        }
+    });
+}
+
+fn spawn_director_health_listener(
+    mut provider_health_rx: tokio::sync::broadcast::Receiver<ProviderHealthState>,
+    app_handle: Option<AppHandle>,
+) {
+    tokio::spawn(async move {
+        while let Ok(event) = provider_health_rx.recv().await {
+            if let Some(app_handle) = &app_handle {
+                if let Err(error) = app_handle.emit("director-provider-health", &event) {
+                    warn!(provider_id = %event.provider_id, error = %error, "failed to emit provider health event");
                 }
             }
         }
@@ -489,4 +751,170 @@ fn read_yaml_value(contents: &str, key: &str) -> Option<String> {
             .strip_prefix(&prefix)
             .map(|value| value.trim().trim_matches('"').trim_matches('\'').to_string())
     })
+}
+
+fn director_progress_label(progress: DirectorProgress) -> &'static str {
+    match progress {
+        DirectorProgress::Queued => "Queued",
+        DirectorProgress::InProgress => "InProgress",
+        DirectorProgress::ProviderAttempt => "ProviderAttempt",
+        DirectorProgress::Validating => "Validating",
+        DirectorProgress::Tagging => "Tagging",
+        DirectorProgress::Finalizing => "Finalizing",
+        DirectorProgress::Finalized => "Finalized",
+        DirectorProgress::Cancelled => "Cancelled",
+        DirectorProgress::Failed => "Failed",
+        DirectorProgress::Exhausted => "Exhausted",
+        DirectorProgress::Skipped => "Skipped",
+    }
+}
+
+fn download_job_from_task(task: &TrackTask, progress: &str) -> DownloadJob {
+    let (status, pct) = match progress {
+        "Queued" => (DownloadStatus::Queued, 0.0),
+        "InProgress" | "ProviderAttempt" => (DownloadStatus::Searching, 0.15),
+        "Validating" => (DownloadStatus::Verifying, 0.65),
+        "Tagging" | "Finalizing" => (DownloadStatus::Verifying, 0.85),
+        "Finalized" | "Skipped" => (DownloadStatus::Done, 1.0),
+        "Cancelled" => (DownloadStatus::Cancelled, 0.0),
+        "Failed" | "Exhausted" => (DownloadStatus::Failed, 0.0),
+        _ => (DownloadStatus::Queued, 0.0),
+    };
+
+    DownloadJob {
+        id: task.task_id.clone(),
+        query: format!(
+            "{} {}{}",
+            task.target.artist,
+            task.target.title,
+            task.target
+                .album
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!(" {value}"))
+                .unwrap_or_default()
+        )
+        .trim()
+        .to_string(),
+        artist: task.target.artist.clone(),
+        title: task.target.title.clone(),
+        album: task.target.album.clone(),
+        status,
+        provider: None,
+        progress: pct,
+        error: None,
+    }
+}
+
+fn apply_director_event_to_job(job: &mut DownloadJob, event: &DirectorEvent) {
+    job.provider = event.provider_id.clone();
+    job.error = Some(event.message.clone());
+    match event.progress {
+        DirectorProgress::Queued => {
+            job.status = DownloadStatus::Queued;
+            job.progress = 0.0;
+        }
+        DirectorProgress::InProgress | DirectorProgress::ProviderAttempt => {
+            job.status = DownloadStatus::Searching;
+            job.progress = 0.15;
+        }
+        DirectorProgress::Validating => {
+            job.status = DownloadStatus::Verifying;
+            job.progress = 0.65;
+        }
+        DirectorProgress::Tagging | DirectorProgress::Finalizing => {
+            job.status = DownloadStatus::Verifying;
+            job.progress = 0.85;
+        }
+        DirectorProgress::Finalized => {
+            job.status = DownloadStatus::Done;
+            job.progress = 1.0;
+            job.error = None;
+        }
+        DirectorProgress::Cancelled => {
+            job.status = DownloadStatus::Cancelled;
+            job.progress = 0.0;
+            job.error = Some(event.message.clone());
+        }
+        DirectorProgress::Failed | DirectorProgress::Exhausted => {
+            job.status = DownloadStatus::Failed;
+            job.progress = 0.0;
+        }
+        DirectorProgress::Skipped => {
+            job.status = DownloadStatus::Done;
+            job.progress = 1.0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+
+    fn pending_task(task_id: &str, progress: &str, updated_at: &str) -> PendingDirectorTask {
+        PendingDirectorTask {
+            task: TrackTask {
+                task_id: task_id.to_string(),
+                source: TrackTaskSource::Manual,
+                target: NormalizedTrack {
+                    spotify_track_id: None,
+                    source_playlist: None,
+                    artist: "Artist".to_string(),
+                    album_artist: Some("Artist".to_string()),
+                    title: "Song".to_string(),
+                    album: Some("Album".to_string()),
+                    track_number: Some(1),
+                    disc_number: Some(1),
+                    year: Some(2024),
+                    duration_secs: Some(35.0),
+                    isrc: None,
+                },
+                strategy: AcquisitionStrategy::ObscureFallbackHeavy,
+            },
+            strategy: "ObscureFallbackHeavy".to_string(),
+            progress: progress.to_string(),
+            created_at: updated_at.to_string(),
+            updated_at: updated_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn pending_recovery_plan_keeps_newer_retry_and_drops_stale_terminal_row() {
+        let pending = vec![
+            pending_task("stale-failed", "Queued", "2026-03-27 12:00:00"),
+            pending_task("retry-failed", "Queued", "2026-03-27 12:00:03"),
+            pending_task("terminal-progress", "Cancelled", "2026-03-27 12:00:04"),
+        ];
+        let terminal_updates = HashMap::from([
+            (
+                "stale-failed".to_string(),
+                TerminalDirectorTaskUpdate {
+                    disposition: "Failed".to_string(),
+                    updated_at: "2026-03-27 12:00:02".to_string(),
+                },
+            ),
+            (
+                "retry-failed".to_string(),
+                TerminalDirectorTaskUpdate {
+                    disposition: "Failed".to_string(),
+                    updated_at: "2026-03-27 12:00:01".to_string(),
+                },
+            ),
+        ]);
+
+        let plan = build_pending_recovery_plan(pending, &terminal_updates);
+
+        assert_eq!(
+            plan.resumable_tasks
+                .iter()
+                .map(|task| task.task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["retry-failed"]
+        );
+        assert_eq!(
+            plan.stale_task_ids,
+            vec!["stale-failed".to_string(), "terminal-progress".to_string()]
+        );
+    }
 }

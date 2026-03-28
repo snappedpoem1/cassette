@@ -1,5 +1,5 @@
 mod commands;
-mod state;
+pub mod state;
 
 use state::AppState;
 use tauri::Manager;
@@ -44,7 +44,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir)?;
             let db_path = data_dir.join("cassette.db");
-            let app_state = AppState::new(&db_path).map_err(|e| e.to_string())?;
+            let app_state = AppState::new(&db_path, Some(app.handle().clone())).map_err(|e| e.to_string())?;
             app.manage(app_state);
             #[cfg(desktop)]
             register_media_shortcuts(app).map_err(|e| e.to_string())?;
@@ -80,6 +80,7 @@ pub fn run() {
             commands::downloads::start_album_downloads,
             commands::downloads::start_discography_downloads,
             commands::downloads::start_artist_downloads,
+            commands::downloads::cancel_download,
             commands::downloads::build_library_acquisition_queue,
             commands::downloads::start_spotify_missing_batch,
             commands::downloads::get_download_jobs,

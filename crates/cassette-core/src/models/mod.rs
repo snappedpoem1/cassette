@@ -93,6 +93,7 @@ pub enum DownloadStatus {
     Downloading,
     Verifying,
     Done,
+    Cancelled,
     Failed,
 }
 

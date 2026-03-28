@@ -1,5 +1,9 @@
 use crate::state::AppState;
-use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+use cassette_core::director::{
+    AcquisitionStrategy, DirectorProgress, NormalizedTrack, TrackTask,
+    TrackTaskSource,
+};
+use cassette_core::metadata::MetadataService;
 use cassette_core::models::{
     AcquisitionQueueReport, DownloadArtistDiscography, DownloadJob, DownloadMetadataSearchResult,
     DownloadStatus,
@@ -17,6 +21,7 @@ pub async fn start_download(
     album: Option<String>,
 ) -> Result<String, String> {
     let id = format!("job-{}", Uuid::new_v4());
+    let task = build_track_task(&id, &artist, &title, album.clone(), AcquisitionStrategy::Standard);
     let job = DownloadJob {
         id: id.clone(),
         query: format!(
@@ -46,13 +51,37 @@ pub async fn start_download(
         .map_err(|error| error.to_string())?
         .insert(id.clone(), job);
 
+    if let Err(error) = state.persist_pending_task(&task, DirectorProgress::Queued) {
+        if let Ok(mut jobs) = state.download_jobs.lock() {
+            jobs.remove(&id);
+        }
+        return Err(error.to_string());
+    }
+
     state
         .director_submitter
-        .submit(build_track_task(&id, &artist, &title, album.clone(), AcquisitionStrategy::Standard))
+        .submit(task)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let _ = state.delete_pending_task(&id);
+            if let Ok(mut jobs) = state.download_jobs.lock() {
+                jobs.remove(&id);
+            }
+            error.to_string()
+        })?;
 
     Ok(id)
+}
+
+#[tauri::command]
+pub async fn cancel_download(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<bool, String> {
+    let cancelled = state
+        .cancel_download(task_id.as_str())
+        .map_err(|error| error.to_string())?;
+    Ok(cancelled)
 }
 
 #[tauri::command]
@@ -61,6 +90,10 @@ pub async fn start_album_downloads(
     albums: Vec<serde_json::Value>,
 ) -> Result<Vec<String>, String> {
     let mut job_ids = Vec::new();
+    let completed_keys = {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        db.get_completed_task_keys().map_err(|error| error.to_string())?
+    };
     for album in albums {
         let artist = album
             .get("artist")
@@ -76,8 +109,16 @@ pub async fn start_album_downloads(
         if artist.trim().is_empty() || title.trim().is_empty() {
             continue;
         }
-        let album_title = Some(title.clone());
-        job_ids.push(start_download(state.clone(), artist, title, album_title).await?);
+        let queued = queue_album_tracks(
+            state.clone(),
+            artist.as_str(),
+            title.as_str(),
+            TrackTaskSource::Manual,
+            AcquisitionStrategy::DiscographyBatch,
+            &completed_keys,
+        )
+        .await?;
+        job_ids.extend(queued);
     }
     Ok(job_ids)
 }
@@ -151,6 +192,12 @@ pub async fn build_library_acquisition_queue(
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase());
     let mut seen = std::collections::HashSet::<String>::new();
+    let completed_keys = state
+        .db
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get_completed_task_keys()
+        .map_err(|error| error.to_string())?;
     let mut report = AcquisitionQueueReport {
         scope: "library_database".to_string(),
         requested: albums.len(),
@@ -187,17 +234,22 @@ pub async fn build_library_acquisition_queue(
             continue;
         }
 
-        match start_download(
+        match queue_album_tracks(
             state.clone(),
-            artist.to_string(),
-            title.to_string(),
-            Some(title.to_string()),
+            artist,
+            title,
+            TrackTaskSource::Manual,
+            AcquisitionStrategy::DiscographyBatch,
+            &completed_keys,
         )
         .await
         {
-            Ok(job_id) => {
-                report.queued += 1;
-                report.job_ids.push(job_id);
+            Ok(job_ids) if !job_ids.is_empty() => {
+                report.queued += job_ids.len();
+                report.job_ids.extend(job_ids);
+            }
+            Ok(_) => {
+                report.skipped += 1;
             }
             Err(error) => {
                 report.skipped += 1;
@@ -247,47 +299,23 @@ pub async fn start_spotify_missing_batch(
             continue;
         }
 
-        // Build a stable task_id so we can deduplicate across runs
-        let task_key = format!(
-            "spotify-batch::{}::{}",
-            artist.to_ascii_lowercase(),
-            title.to_ascii_lowercase()
-        );
-        if completed_keys.contains(&task_key) {
-            report.skipped += 1;
-            continue;
-        }
-
-        let job = DownloadJob {
-            id: task_key.clone(),
-            query: format!("{artist} - {title}"),
-            artist: artist.to_string(),
-            title: title.to_string(),
-            album: Some(title.to_string()),
-            status: DownloadStatus::Queued,
-            provider: None,
-            progress: 0.0,
-            error: None,
-        };
-
-        state
-            .download_jobs
-            .lock()
-            .map_err(|error| error.to_string())?
-            .insert(task_key.clone(), job);
-
-        let task = build_track_task(
-            &task_key,
+        match queue_album_tracks(
+            state.clone(),
             artist,
             title,
-            Some(title.to_string()),
+            TrackTaskSource::SpotifyHistory,
             AcquisitionStrategy::DiscographyBatch,
-        );
-
-        match state.director_submitter.submit(task).await {
-            Ok(()) => {
-                report.queued += 1;
-                report.job_ids.push(task_key);
+            &completed_keys,
+        )
+        .await
+        {
+            Ok(job_ids) if !job_ids.is_empty() => {
+                report.queued += job_ids.len();
+                report.job_ids.extend(job_ids);
+            }
+            Ok(_) => {
+                report.skipped += 1;
+                report.notes.push(format!("{artist} - {title}: no queueable tracks"));
             }
             Err(error) => {
                 report.skipped += 1;
@@ -311,7 +339,14 @@ pub async fn get_download_jobs(state: State<'_, AppState>) -> Result<Vec<Downloa
 
     if let Ok(transfers) = fetch_slskd_transfers(&load_slskd_config(&state)?).await {
         for transfer in transfers.iter().map(slskd_transfer_to_job) {
+            if state.is_download_cancelled(&transfer.id) {
+                continue;
+            }
+
             if let Some(existing) = jobs.iter_mut().find(|job| download_jobs_match(job, &transfer)) {
+                if state.is_download_cancelled(&existing.id) {
+                    continue;
+                }
                 existing.status = transfer.status;
                 existing.progress = transfer.progress;
                 existing.provider = Some("slskd".to_string());
@@ -506,6 +541,12 @@ async fn queue_discography_with_rules(
     include_compilations: bool,
     max_albums: usize,
 ) -> Result<AcquisitionQueueReport, String> {
+    let completed_keys = state
+        .db
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get_completed_task_keys()
+        .map_err(|error| error.to_string())?;
     let mut report = AcquisitionQueueReport {
         scope: scope.to_string(),
         requested: discography.albums.len(),
@@ -546,17 +587,23 @@ async fn queue_discography_with_rules(
             continue;
         }
 
-        match start_download(
+        match queue_album_tracks(
             state.clone(),
-            artist.to_string(),
-            title.to_string(),
-            Some(title.to_string()),
+            artist,
+            title,
+            TrackTaskSource::Manual,
+            AcquisitionStrategy::DiscographyBatch,
+            &completed_keys,
         )
         .await
         {
-            Ok(job_id) => {
-                report.queued += 1;
-                report.job_ids.push(job_id);
+            Ok(job_ids) if !job_ids.is_empty() => {
+                report.queued += job_ids.len();
+                report.job_ids.extend(job_ids);
+            }
+            Ok(_) => {
+                report.skipped += 1;
+                report.notes.push(format!("{artist} - {title}: no queueable tracks"));
             }
             Err(error) => {
                 report.skipped += 1;
@@ -566,6 +613,156 @@ async fn queue_discography_with_rules(
     }
 
     Ok(report)
+}
+
+pub(crate) async fn queue_album_tracks(
+    state: State<'_, AppState>,
+    artist: &str,
+    album: &str,
+    source: TrackTaskSource,
+    strategy: AcquisitionStrategy,
+    completed_keys: &std::collections::HashSet<String>,
+) -> Result<Vec<String>, String> {
+    let track_tasks = resolve_album_track_tasks(artist, album, source, strategy).await?;
+    let mut queued_job_ids = Vec::new();
+
+    for task in track_tasks {
+        if completed_keys.contains(&task.task_id) {
+            continue;
+        }
+
+        let job = DownloadJob {
+            id: task.task_id.clone(),
+            query: format!("{} - {} - {}", task.target.artist, task.target.album.clone().unwrap_or_default(), task.target.title),
+            artist: task.target.artist.clone(),
+            title: task.target.title.clone(),
+            album: task.target.album.clone(),
+            status: DownloadStatus::Queued,
+            provider: None,
+            progress: 0.0,
+            error: None,
+        };
+
+        state
+            .download_jobs
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(task.task_id.clone(), job);
+
+        if let Err(error) = state.persist_pending_task(&task, DirectorProgress::Queued) {
+            if let Ok(mut jobs) = state.download_jobs.lock() {
+                jobs.remove(&task.task_id);
+            }
+            return Err(error.to_string());
+        }
+
+        match state.director_submitter.submit(task.clone()).await {
+            Ok(()) => {
+                queued_job_ids.push(task.task_id.clone());
+            }
+            Err(error) => {
+                let _ = state.delete_pending_task(&task.task_id);
+                if let Ok(mut jobs) = state.download_jobs.lock() {
+                    jobs.remove(&task.task_id);
+                }
+                return Err(error.to_string());
+            }
+        }
+    }
+
+    Ok(queued_job_ids)
+}
+
+pub(crate) async fn resolve_album_track_tasks(
+    artist: &str,
+    album: &str,
+    source: TrackTaskSource,
+    strategy: AcquisitionStrategy,
+) -> Result<Vec<TrackTask>, String> {
+    let metadata = MetadataService::new().map_err(|error| error.to_string())?;
+    let releases = metadata
+        .search_release(artist, album)
+        .await
+        .map_err(|error| error.to_string())?;
+    let release = releases
+        .into_iter()
+        .find(|release| release.track_count.unwrap_or(0) > 0)
+        .ok_or_else(|| format!("MusicBrainz could not resolve album: {artist} - {album}"))?;
+    let release_with_tracks = metadata
+        .get_release_tracks(&release.id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if release_with_tracks.tracks.is_empty() {
+        return Err(format!("MusicBrainz returned no tracks for {artist} - {album}"));
+    }
+
+    let mut tasks = release_with_tracks
+        .tracks
+        .into_iter()
+        .map(|track| TrackTask {
+            task_id: album_track_task_key(artist, album, track.disc_number, track.track_number, &track.title),
+            source: source.clone(),
+            target: NormalizedTrack {
+                spotify_track_id: None,
+                source_playlist: None,
+                artist: if track.artist.trim().is_empty() {
+                    artist.to_string()
+                } else {
+                    track.artist.clone()
+                },
+                album_artist: Some(artist.to_string()),
+                title: track.title,
+                album: Some(release.title.clone()),
+                track_number: Some(track.track_number),
+                disc_number: Some(track.disc_number),
+                year: release.year,
+                duration_secs: if track.duration_ms > 0 {
+                    Some(track.duration_ms as f64 / 1000.0)
+                } else {
+                    None
+                },
+                isrc: None,
+            },
+            strategy,
+        })
+        .collect::<Vec<_>>();
+    tasks.sort_by_key(|task| {
+        (
+            task.target.disc_number.unwrap_or(0),
+            task.target.track_number.unwrap_or(0),
+            task.target.title.to_ascii_lowercase(),
+        )
+    });
+    Ok(tasks)
+}
+
+pub(crate) fn album_track_task_key(
+    artist: &str,
+    album: &str,
+    disc_number: u32,
+    track_number: u32,
+    title: &str,
+) -> String {
+    format!(
+        "spotify-album-track::{}::{}::{}::{:02}::{}",
+        artist.to_ascii_lowercase(),
+        album.to_ascii_lowercase(),
+        disc_number,
+        track_number,
+        normalize_task_component(title),
+    )
+}
+
+pub(crate) fn normalize_task_component(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn release_type_allowed(

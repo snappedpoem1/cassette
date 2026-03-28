@@ -6,7 +6,7 @@ All notable changes to the Cassette project.
 
 ### Foundation
 - Tauri 2 desktop shell with SvelteKit frontend and Rust workspace backend
-- SQLite database with 9 tables (tracks, albums, queue, playlists, settings, spotify history, director task history)
+- SQLite database with 8 active runtime tables (`library_roots`, `tracks`, `queue_items`, `settings`, `playlists`, `playlist_items`, `spotify_album_history`, `director_task_history`)
 - Library scanning, search, playback, queue, and playlist management
 
 ### Director Acquisition Engine
@@ -14,12 +14,14 @@ All notable changes to the Cassette project.
 - 7 acquisition strategies: Standard, HighQualityOnly, ObscureFallbackHeavy, SingleTrackPriority, DiscographyBatch, RedownloadReplaceIfBetter, MetadataRepairOnly
 - 6-factor candidate scoring: metadata confidence, duration match, codec quality, provider trust rank, validation result, file size
 - Per-provider semaphore-based concurrency control with configurable limits
+- Batch-wide cancellation via `CancellationToken` plus graceful shutdown via `TaskTracker`
 - Retry with linear backoff (configurable attempts and base delay)
 - Symphonia-based audio validation with magic byte detection and duration extraction
 - Post-acquisition Lofty tag writing with cover art download and embedding
 - Atomic finalization with dedup policy (KeepExisting or ReplaceIfBetter)
 - Per-task temp directory management with stale recovery and quarantine
 - Broadcast event channels for progress tracking
+- Director search-result caching across waterfall attempts
 
 ### Providers
 - **Local Archive** (trust 0): Filesystem walk with normalized substring matching, batch support
@@ -43,6 +45,7 @@ All notable changes to the Cassette project.
 ### Data Pipeline
 - Spotify history import with missing album detection
 - Album-level batch download submission
+- Pending task persistence and startup recovery for in-flight director jobs
 - Director task result persistence with full provenance records
 - Library organization (atomic moves to Artist/Album/NN-Title.ext structure)
 
