@@ -33,7 +33,9 @@ pub fn organize_library(
     if !dry_run.unwrap_or(true) {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         for mv in &result.moved {
-            let _ = db.update_track_path(mv.track_id, &mv.new_path);
+            if let Err(e) = db.update_track_path(mv.track_id, &mv.new_path) {
+                tracing::warn!("[organize] failed to update DB path for track {}: {e}", mv.track_id);
+            }
         }
     }
 
@@ -130,7 +132,9 @@ pub fn apply_tag_fixes(
     let db = state.db.lock().map_err(|e| e.to_string())?;
     for fix in &fixes {
         if let Ok(track) = cassette_core::library::read_track_metadata(std::path::Path::new(&fix.path)) {
-            let _ = db.upsert_track(&track);
+            if let Err(e) = db.upsert_track(&track) {
+                tracing::warn!("[tag-fix] failed to upsert track after tag fix {}: {e}", fix.path);
+            }
         }
     }
 

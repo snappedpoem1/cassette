@@ -6,8 +6,9 @@ use crate::director::models::{
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
 use crate::director::temp::TaskTempContext;
+use crate::sources::is_audio_path;
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct LocalArchiveProvider {
@@ -151,13 +152,3 @@ fn normalize(value: &str) -> String {
         .join(" ")
 }
 
-fn is_audio_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "flac" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "wav" | "aiff"
-    )
-}

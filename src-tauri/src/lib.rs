@@ -81,6 +81,7 @@ pub fn run() {
             commands::downloads::start_discography_downloads,
             commands::downloads::start_artist_downloads,
             commands::downloads::build_library_acquisition_queue,
+            commands::downloads::start_spotify_missing_batch,
             commands::downloads::get_download_jobs,
             commands::downloads::search_download_metadata,
             commands::downloads::get_artist_discography,

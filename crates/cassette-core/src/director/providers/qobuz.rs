@@ -10,9 +10,10 @@ use crate::sources::{build_query, qobuz_search, qobuz_user_auth_token, RemotePro
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use tokio::sync::RwLock;
 
 /// Cached Qobuz session so we authenticate once, not per-request.
+/// Wrapped in RwLock so we can invalidate a stale token and re-auth.
 struct QobuzSessionCache {
     client: reqwest::Client,
     user_auth_token: String,
@@ -21,7 +22,7 @@ struct QobuzSessionCache {
 #[derive(Clone)]
 pub struct QobuzProvider {
     config: RemoteProviderConfig,
-    session: Arc<OnceCell<Result<QobuzSessionCache, String>>>,
+    session: Arc<RwLock<Option<QobuzSessionCache>>>,
 }
 
 impl std::fmt::Debug for QobuzProvider {
@@ -34,27 +35,41 @@ impl QobuzProvider {
     pub fn new(config: RemoteProviderConfig) -> Self {
         Self {
             config,
-            session: Arc::new(OnceCell::new()),
+            session: Arc::new(RwLock::new(None)),
         }
     }
 
-    async fn session(&self) -> Result<&QobuzSessionCache, ProviderError> {
-        let result = self
-            .session
-            .get_or_init(|| async {
-                let token = qobuz_user_auth_token(&self.config)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| "missing Qobuz credentials".to_string())?;
-                Ok(QobuzSessionCache {
-                    client: reqwest::Client::new(),
-                    user_auth_token: token,
-                })
-            })
-            .await;
-        result.as_ref().map_err(|_| ProviderError::AuthFailed {
-            provider_id: "qobuz".to_string(),
-        })
+    async fn ensure_session(&self) -> Result<(), ProviderError> {
+        // Fast path: session already exists
+        if self.session.read().await.is_some() {
+            return Ok(());
+        }
+
+        let mut guard = self.session.write().await;
+        // Double-check after acquiring write lock
+        if guard.is_some() {
+            return Ok(());
+        }
+
+        let token = qobuz_user_auth_token(&self.config)
+            .await
+            .map_err(|_| ProviderError::AuthFailed {
+                provider_id: "qobuz".to_string(),
+            })?
+            .ok_or_else(|| ProviderError::AuthFailed {
+                provider_id: "qobuz".to_string(),
+            })?;
+        *guard = Some(QobuzSessionCache {
+            client: reqwest::Client::new(),
+            user_auth_token: token,
+        });
+        Ok(())
+    }
+
+    /// Invalidate the cached session so the next call re-authenticates.
+    async fn invalidate_session(&self) {
+        let mut guard = self.session.write().await;
+        *guard = None;
     }
 }
 
@@ -79,8 +94,7 @@ impl Provider for QobuzProvider {
         task: &TrackTask,
         _strategy: &StrategyPlan,
     ) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
-        // Ensure session is valid (caches the auth token for acquire calls too).
-        let _session = self.session().await?;
+        self.ensure_session().await?;
 
         let mut albums = Vec::new();
         for query in qobuz_query_candidates(task) {
@@ -137,7 +151,11 @@ impl Provider for QobuzProvider {
                 provider_id: "qobuz".to_string(),
             });
         };
-        let session = self.session().await?;
+        self.ensure_session().await?;
+        let session_guard = self.session.read().await;
+        let session = session_guard.as_ref().ok_or_else(|| ProviderError::AuthFailed {
+            provider_id: "qobuz".to_string(),
+        })?;
         let client = &session.client;
         let user_auth_token = &session.user_auth_token;
 
@@ -154,6 +172,13 @@ impl Provider for QobuzProvider {
                 provider_id: "qobuz".to_string(),
                 message: error.to_string(),
             })?;
+        if album_response.status().as_u16() == 401 || album_response.status().as_u16() == 403 {
+            drop(session_guard);
+            self.invalidate_session().await;
+            return Err(ProviderError::AuthFailed {
+                provider_id: "qobuz".to_string(),
+            });
+        }
         if !album_response.status().is_success() {
             return Err(ProviderError::NotFound {
                 provider_id: "qobuz".to_string(),
@@ -173,15 +198,18 @@ impl Provider for QobuzProvider {
             .ok_or_else(|| ProviderError::NotFound {
                 provider_id: "qobuz".to_string(),
             })?;
-        let Some(track_item) = tracks.iter().find(|item| {
-            normalize(item.get("title").and_then(Value::as_str).unwrap_or_default())
-                .contains(&normalize(&task.target.title))
-        }) else {
-            return Err(ProviderError::MetadataMismatch {
+        // Try to find a track matching the task's title (for single-track tasks).
+        // If the title matches the album name (album-level task), fall back to the first track.
+        let track_item = tracks
+            .iter()
+            .find(|item| {
+                normalize(item.get("title").and_then(Value::as_str).unwrap_or_default())
+                    .contains(&normalize(&task.target.title))
+            })
+            .or_else(|| tracks.first())
+            .ok_or_else(|| ProviderError::NotFound {
                 provider_id: "qobuz".to_string(),
-                message: "matching album found, but no matching track title".to_string(),
-            });
-        };
+            })?;
 
         let track_id = track_item
             .get("id")
@@ -271,7 +299,16 @@ impl Provider for QobuzProvider {
         } else {
             "flac"
         };
-        let filename = format!("qobuz-{}.{}", sanitize(&task.target.title), extension);
+        // Include the track_id in the filename so that different candidates (different
+        // albums/tracks for the same task) each get a unique temp file. Without this,
+        // all candidates would overwrite the same path, and a later validation failure
+        // could quarantine a file that an earlier valid candidate was relying on.
+        let filename = format!(
+            "qobuz-{}-{}.{}",
+            sanitize(&track_id),
+            sanitize(&task.target.title),
+            extension
+        );
         let destination = temp_context.active_dir.join(filename);
         let bytes = client
             .get(&url)
@@ -337,7 +374,8 @@ fn qobuz_query_candidates(task: &TrackTask) -> Vec<String> {
     ));
     queries.push(format!("{} {}", task.target.artist, task.target.title));
     queries.push(task.target.artist.clone());
-    queries.sort();
-    queries.dedup();
+    // Preserve insertion order (most specific first) — only remove exact duplicates.
+    let mut seen = std::collections::HashSet::new();
+    queries.retain(|q| seen.insert(q.clone()));
     queries
 }

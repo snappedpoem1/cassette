@@ -1,17 +1,6 @@
 use crate::librarian::config::ScanBehavior;
-use std::path::{Path, PathBuf};
-
-const AUDIO_EXTENSIONS: &[&str] = &[
-    "flac", "wav", "alac", "dsf", "dff", "aiff", "ape", "wv", "m4a", "mp3", "aac", "ogg",
-    "opus",
-];
-
-pub fn is_audio_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
-}
+use crate::sources::is_audio_path as is_audio_file;
+use std::path::PathBuf;
 
 pub fn discover_audio_files(roots: &[PathBuf], behavior: &ScanBehavior) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -47,6 +36,7 @@ pub fn discover_audio_files(roots: &[PathBuf], behavior: &ScanBehavior) -> Vec<P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn classifies_audio_extensions() {

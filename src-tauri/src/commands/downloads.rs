@@ -212,6 +212,94 @@ pub async fn build_library_acquisition_queue(
 }
 
 #[tauri::command]
+pub async fn start_spotify_missing_batch(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<AcquisitionQueueReport, String> {
+    let limit = limit.unwrap_or(250);
+    let (missing_albums, completed_keys) = {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        let missing = db
+            .get_missing_spotify_albums(limit + 100) // fetch extra to account for skips
+            .map_err(|error| error.to_string())?;
+        let completed = db
+            .get_completed_task_keys()
+            .map_err(|error| error.to_string())?;
+        (missing, completed)
+    };
+
+    let mut report = AcquisitionQueueReport {
+        scope: "spotify_missing_batch".to_string(),
+        requested: missing_albums.len(),
+        ..AcquisitionQueueReport::default()
+    };
+
+    for album in &missing_albums {
+        if report.queued >= limit {
+            report.notes.push("Batch limit reached.".to_string());
+            break;
+        }
+
+        let artist = album.artist.trim();
+        let title = album.album.trim();
+        if artist.is_empty() || title.is_empty() {
+            report.skipped += 1;
+            continue;
+        }
+
+        // Build a stable task_id so we can deduplicate across runs
+        let task_key = format!(
+            "spotify-batch::{}::{}",
+            artist.to_ascii_lowercase(),
+            title.to_ascii_lowercase()
+        );
+        if completed_keys.contains(&task_key) {
+            report.skipped += 1;
+            continue;
+        }
+
+        let job = DownloadJob {
+            id: task_key.clone(),
+            query: format!("{artist} - {title}"),
+            artist: artist.to_string(),
+            title: title.to_string(),
+            album: Some(title.to_string()),
+            status: DownloadStatus::Queued,
+            provider: None,
+            progress: 0.0,
+            error: None,
+        };
+
+        state
+            .download_jobs
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(task_key.clone(), job);
+
+        let task = build_track_task(
+            &task_key,
+            artist,
+            title,
+            Some(title.to_string()),
+            AcquisitionStrategy::DiscographyBatch,
+        );
+
+        match state.director_submitter.submit(task).await {
+            Ok(()) => {
+                report.queued += 1;
+                report.job_ids.push(task_key);
+            }
+            Err(error) => {
+                report.skipped += 1;
+                report.notes.push(format!("{artist} - {title}: {error}"));
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+#[tauri::command]
 pub async fn get_download_jobs(state: State<'_, AppState>) -> Result<Vec<DownloadJob>, String> {
     let mut jobs = state
         .download_jobs

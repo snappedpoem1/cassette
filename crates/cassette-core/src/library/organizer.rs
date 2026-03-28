@@ -96,6 +96,14 @@ pub fn organize_tracks(library_base: &str, tracks: &[Track], dry_run: bool) -> O
     };
 
     for track in tracks {
+        // Skip files with no usable tags — moving them to "Unknown Artist" is destructive
+        let has_artist = !track.album_artist.trim().is_empty() || !track.artist.trim().is_empty();
+        let has_album = !track.album.trim().is_empty();
+        if !has_artist || !has_album {
+            result.skipped.push(format!("No tags (artist/album empty): {}", track.path));
+            continue;
+        }
+
         let dest = canonical_path(library_base, track);
         let src = Path::new(&track.path);
 

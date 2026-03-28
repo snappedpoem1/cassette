@@ -37,7 +37,8 @@ pub fn player_toggle(state: State<'_, AppState>) {
 
 #[tauri::command]
 pub fn player_next(state: State<'_, AppState>) {
-    let queue = state.db.lock().unwrap().get_queue().unwrap_or_default();
+    let db = state.db.lock().unwrap();
+    let queue = db.get_queue().unwrap_or_default();
     let next_pos = {
         let ps = state.playback_state.lock().unwrap();
         ps.queue_position + 1
@@ -48,7 +49,9 @@ pub fn player_next(state: State<'_, AppState>) {
             let mut ps = state.playback_state.lock().unwrap();
             ps.current_track = Some(track.clone());
             ps.queue_position = next_pos;
-            let _ = state.db.lock().unwrap().increment_play_count(track.id);
+            if let Err(e) = db.increment_play_count(track.id) {
+                tracing::warn!("[player_next] failed to increment play count for track {}: {e}", track.id);
+            }
         }
     }
 }
@@ -95,15 +98,12 @@ pub fn get_playback_state(state: State<'_, AppState>) -> PlaybackState {
 
 #[tauri::command]
 pub async fn get_now_playing_context(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     artist: String,
     title: String,
     album: Option<String>,
 ) -> Result<NowPlayingContext, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = state.http_client.clone();
 
     let mut ctx = NowPlayingContext {
         artist_name: artist.clone(),

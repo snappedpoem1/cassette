@@ -1,4 +1,5 @@
 use crate::library::{LibraryManager, ManagerConfig};
+use crate::sources::is_audio_path;
 use crate::validation::error::{Result, ValidationError};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -141,7 +142,7 @@ async fn copy_library_subset(source: &Path, destination: &Path, limit: usize) ->
         }
 
         let src_path = entry.path();
-        if !is_audio_file(src_path) {
+        if !is_audio_path(src_path) {
             continue;
         }
 
@@ -184,16 +185,6 @@ async fn copy_library_subset(source: &Path, destination: &Path, limit: usize) ->
     Ok(())
 }
 
-fn is_audio_file(path: &Path) -> bool {
-    const EXTENSIONS: &[&str] = &[
-        "flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "aiff", "wv", "ape",
-    ];
-
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
-}
 
 async fn remove_if_exists(path: &Path) -> Result<()> {
     if !path.exists() {

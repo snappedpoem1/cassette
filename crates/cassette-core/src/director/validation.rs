@@ -170,6 +170,10 @@ fn detect_signature_format(bytes: &[u8]) -> Option<String> {
         return Some("mp3".to_string());
     }
     if bytes.starts_with(b"OggS") {
+        // Opus uses the Ogg container but has "OpusHead" at byte 28
+        if bytes.len() >= 36 && &bytes[28..36] == b"OpusHead" {
+            return Some("opus".to_string());
+        }
         return Some("ogg".to_string());
     }
     if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {

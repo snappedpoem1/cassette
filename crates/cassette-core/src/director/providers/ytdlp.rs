@@ -6,6 +6,7 @@ use crate::director::models::{
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
 use crate::director::temp::TaskTempContext;
+use crate::sources::build_query;
 use async_trait::async_trait;
 use std::path::PathBuf;
 
@@ -56,21 +57,37 @@ impl Provider for YtDlpProvider {
             });
         }
 
-        Ok(vec![ProviderSearchCandidate {
+        let query = build_query(&task.target.artist, &task.target.title, task.target.album.as_deref());
+
+        // Search YouTube first, then SoundCloud as fallback for remixes/DJ/community content
+        let mut candidates = vec![ProviderSearchCandidate {
             provider_id: "yt_dlp".to_string(),
-            provider_candidate_id: format!(
-                "ytsearch1:{} audio",
-                build_query(&task.target.artist, &task.target.title, task.target.album.as_deref())
-            ),
+            provider_candidate_id: format!("ytsearch1:{query} audio"),
             artist: task.target.artist.clone(),
             title: task.target.title.clone(),
             album: task.target.album.clone(),
             duration_secs: task.target.duration_secs,
-            extension_hint: Some("mp3".to_string()),
-            bitrate_kbps: Some(320),
+            extension_hint: Some("best".to_string()),
+            bitrate_kbps: None,
             cover_art_url: None,
             metadata_confidence: 0.60,
-        }])
+        }];
+
+        // SoundCloud candidate — especially valuable for remixes, DJ sets, community content
+        candidates.push(ProviderSearchCandidate {
+            provider_id: "yt_dlp".to_string(),
+            provider_candidate_id: format!("scsearch1:{query}"),
+            artist: task.target.artist.clone(),
+            title: task.target.title.clone(),
+            album: task.target.album.clone(),
+            duration_secs: task.target.duration_secs,
+            extension_hint: Some("best".to_string()),
+            bitrate_kbps: None,
+            cover_art_url: None,
+            metadata_confidence: 0.50,
+        });
+
+        Ok(candidates)
     }
 
     async fn acquire(
@@ -86,13 +103,15 @@ impl Provider for YtDlpProvider {
             .join(format!("{output_stem}.%(ext)s"));
         let output_template_string = output_template.to_string_lossy().to_string();
 
+        // Use "best" audio format — lets yt-dlp pick optimal (FLAC/WAV when available,
+        // MP3/AAC otherwise). SoundCloud uploads can be WAV/FLAC from some uploaders.
         #[cfg(windows)]
         let output = tokio::process::Command::new(&self.binary)
             .creation_flags(0x08000000)
             .args([
                 "--extract-audio",
                 "--audio-format",
-                "mp3",
+                "best",
                 "--audio-quality",
                 "0",
                 "--no-playlist",
@@ -114,7 +133,7 @@ impl Provider for YtDlpProvider {
             .args([
                 "--extract-audio",
                 "--audio-format",
-                "mp3",
+                "best",
                 "--audio-quality",
                 "0",
                 "--no-playlist",
@@ -175,20 +194,19 @@ impl Provider for YtDlpProvider {
             .map(|metadata| metadata.len())
             .unwrap_or_default();
 
+        let extension = temp_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp3")
+            .to_string();
+
         Ok(CandidateAcquisition {
             provider_id: "yt_dlp".to_string(),
             provider_candidate_id: candidate.provider_candidate_id.clone(),
             temp_path,
             file_size,
-            extension_hint: Some("mp3".to_string()),
+            extension_hint: Some(extension),
         })
-    }
-}
-
-fn build_query(artist: &str, title: &str, album: Option<&str>) -> String {
-    match album.filter(|value| !value.trim().is_empty()) {
-        Some(album) => format!("{artist} {title} {album}"),
-        None => format!("{artist} {title}"),
     }
 }
 

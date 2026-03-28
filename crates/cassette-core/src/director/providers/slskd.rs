@@ -405,8 +405,10 @@ async fn ensure_slskd_connected(
         }
     }
 
-    // Let caller attempt search anyway; slskd state can flap quickly.
-    Ok(())
+    Err(ProviderError::TemporaryOutage {
+        provider_id: "slskd".to_string(),
+        message: "slskd server did not reach connected state after reconnect attempts".to_string(),
+    })
 }
 
 async fn create_search_with_recovery(
@@ -576,8 +578,9 @@ fn slskd_query_candidates(request: &SlskdTrackRequest) -> Vec<String> {
         queries.push(format!("{} {}", request.artist, album));
     }
     queries.push(request.artist.clone());
-    queries.sort();
-    queries.dedup();
+    // Preserve insertion order (most specific first) — only remove exact duplicates.
+    let mut seen = std::collections::HashSet::new();
+    queries.retain(|q| seen.insert(q.clone()));
     queries
 }
 

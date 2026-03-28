@@ -23,43 +23,70 @@ impl StrategyPlanner {
         _config: &DirectorConfig,
     ) -> StrategyPlan {
         let mut ordered = providers.to_vec();
-        ordered.sort_by_key(|descriptor| descriptor.trust_rank);
 
-        if matches!(task.strategy, AcquisitionStrategy::ObscureFallbackHeavy) {
-            ordered.sort_by_key(|descriptor| {
-                (
-                    !descriptor.capabilities.supports_search,
-                    descriptor.trust_rank,
-                )
-            });
-        }
-
-        if matches!(task.strategy, AcquisitionStrategy::SingleTrackPriority) {
-            ordered.sort_by_key(|descriptor| {
-                (
-                    !descriptor.capabilities.supports_download,
-                    descriptor.trust_rank,
-                )
-            });
-        }
-
-        if matches!(
-            task.strategy,
-            AcquisitionStrategy::Standard | AcquisitionStrategy::SingleTrackPriority
-        ) {
-            ordered.sort_by_key(|descriptor| {
-                let provider_priority = match descriptor.id.as_str() {
+        // Strategy-specific waterfall orders tuned to each provider's strengths
+        match task.strategy {
+            AcquisitionStrategy::Standard | AcquisitionStrategy::DiscographyBatch => {
+                // Mainstream albums: quality-first, lossy last
+                // Qobuz → Deezer → Local Archive → Usenet → Real Debrid → Slskd → yt-dlp
+                ordered.sort_by_key(|d| match d.id.as_str() {
+                    "qobuz" => 0,
+                    "deezer" => 1,
+                    "local_archive" => 2,
+                    "usenet" => 3,
+                    "real_debrid" => 4,
+                    "slskd" => 5,
+                    "yt_dlp" => 6,
+                    _ => 7,
+                });
+            }
+            AcquisitionStrategy::HighQualityOnly
+            | AcquisitionStrategy::RedownloadReplaceIfBetter => {
+                // Lossless only: yt-dlp excluded entirely
+                // Qobuz → Deezer → Usenet → Local Archive → Real Debrid → Slskd
+                ordered.sort_by_key(|d| match d.id.as_str() {
+                    "qobuz" => 0,
+                    "deezer" => 1,
+                    "usenet" => 2,
+                    "local_archive" => 3,
+                    "real_debrid" => 4,
+                    "slskd" => 5,
+                    "yt_dlp" => 99, // effectively excluded by require_lossless
+                    _ => 6,
+                });
+            }
+            AcquisitionStrategy::ObscureFallbackHeavy => {
+                // Rare/out-of-print: deep catalog providers promoted
+                // Local Archive → Real Debrid → Slskd → Usenet → Deezer → Qobuz → yt-dlp
+                ordered.sort_by_key(|d| match d.id.as_str() {
+                    "local_archive" => 0,
+                    "real_debrid" => 1,
+                    "slskd" => 2,
+                    "usenet" => 3,
+                    "deezer" => 4,
+                    "qobuz" => 5,
+                    "yt_dlp" => 6,
+                    _ => 7,
+                });
+            }
+            AcquisitionStrategy::SingleTrackPriority => {
+                // Individual tracks/remixes: yt-dlp promoted for community content
+                // Deezer → Qobuz → yt-dlp → Slskd → Real Debrid → Local Archive
+                ordered.sort_by_key(|d| match d.id.as_str() {
                     "deezer" => 0,
                     "qobuz" => 1,
-                    _ => 2,
-                };
-                (provider_priority, descriptor.trust_rank)
-            });
+                    "yt_dlp" => 2,
+                    "slskd" => 3,
+                    "real_debrid" => 4,
+                    "local_archive" => 5,
+                    _ => 6,
+                });
+            }
+            _ => {
+                // Default: trust_rank order
+                ordered.sort_by_key(|d| d.trust_rank);
+            }
         }
-
-        // Always keep slskd as final fallback. It is resilient but slower and more volatile
-        // than primary providers, so only use it after higher-priority sources are exhausted.
-        ordered.sort_by_key(|descriptor| descriptor.id == "slskd");
 
         let provider_order = ordered.into_iter().map(|descriptor| descriptor.id).collect();
         let selection_mode = match task.strategy {
@@ -137,29 +164,38 @@ mod tests {
         let planner = StrategyPlanner;
         let plan = planner.plan(
             &task(AcquisitionStrategy::HighQualityOnly),
-            &[provider("fallback", 5, true), provider("primary", 1, true)],
+            &[provider("deezer", 5, true), provider("qobuz", 1, true)],
             &DirectorConfig::default(),
         );
 
         assert_eq!(plan.selection_mode, CandidateSelectionMode::CompareAllCandidates);
-        assert_eq!(plan.provider_order, vec!["primary".to_string(), "fallback".to_string()]);
+        // HighQualityOnly: Qobuz before Deezer
+        assert_eq!(plan.provider_order, vec!["qobuz".to_string(), "deezer".to_string()]);
         assert!(plan.require_lossless);
     }
 
     #[test]
-    fn obscure_strategy_prefers_search_capable_providers() {
+    fn obscure_strategy_promotes_real_debrid_and_slskd() {
         let planner = StrategyPlanner;
         let plan = planner.plan(
             &task(AcquisitionStrategy::ObscureFallbackHeavy),
-            &[provider("no-search", 1, false), provider("search", 5, true)],
+            &[
+                provider("qobuz", 10, true),
+                provider("real_debrid", 80, true),
+                provider("slskd", 90, true),
+            ],
             &DirectorConfig::default(),
         );
 
-        assert_eq!(plan.provider_order.first().map(String::as_str), Some("search"));
+        // ObscureFallbackHeavy: Real Debrid and Slskd promoted before Qobuz
+        assert_eq!(
+            plan.provider_order,
+            vec!["real_debrid".to_string(), "slskd".to_string(), "qobuz".to_string()]
+        );
     }
 
     #[test]
-    fn standard_strategy_prefers_deezer_then_qobuz() {
+    fn standard_strategy_prefers_qobuz_then_deezer() {
         let planner = StrategyPlanner;
         let plan = planner.plan(
             &task(AcquisitionStrategy::Standard),
@@ -172,11 +208,12 @@ mod tests {
             &DirectorConfig::default(),
         );
 
+        // Standard: Qobuz → Deezer → Local Archive → Slskd
         assert_eq!(
             plan.provider_order,
             vec![
-                "deezer".to_string(),
                 "qobuz".to_string(),
+                "deezer".to_string(),
                 "local_archive".to_string(),
                 "slskd".to_string()
             ]
@@ -184,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn slskd_is_last_even_when_trust_rank_is_better() {
+    fn single_track_promotes_yt_dlp() {
         let planner = StrategyPlanner;
         let plan = planner.plan(
             &task(AcquisitionStrategy::SingleTrackPriority),
@@ -192,15 +229,18 @@ mod tests {
                 provider("slskd", 0, true),
                 provider("deezer", 10, true),
                 provider("qobuz", 20, true),
+                provider("yt_dlp", 50, true),
             ],
             &DirectorConfig::default(),
         );
 
+        // SingleTrackPriority: Deezer → Qobuz → yt-dlp → Slskd
         assert_eq!(
             plan.provider_order,
             vec![
                 "deezer".to_string(),
                 "qobuz".to_string(),
+                "yt_dlp".to_string(),
                 "slskd".to_string(),
             ]
         );

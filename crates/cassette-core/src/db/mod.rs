@@ -271,17 +271,26 @@ impl Db {
     }
 
     pub fn get_albums(&self) -> Result<Vec<Album>> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
         let mut stmt = self.conn.prepare("
-            SELECT album_artist, album, MIN(year), MIN(cover_art_path), COUNT(*),
-                   ROW_NUMBER() OVER (ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE)
+            SELECT album_artist, album, MIN(year), MIN(cover_art_path), COUNT(*)
             FROM tracks GROUP BY album_artist, album
             ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE
         ")?;
         let rows = stmt.query_map([], |row| {
+            let artist: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            // Stable id derived from the group key — survives re-ordering.
+            let mut hasher = DefaultHasher::new();
+            artist.to_ascii_lowercase().hash(&mut hasher);
+            title.to_ascii_lowercase().hash(&mut hasher);
+            let id = hasher.finish() as i64;
             Ok(Album {
-                id: row.get::<_, i64>(5)?,
-                title: row.get(1)?,
-                artist: row.get(0)?,
+                id,
+                title,
+                artist,
                 year: row.get(2)?,
                 cover_art_path: row.get(3)?,
                 track_count: row.get::<_, i64>(4)? as usize,
@@ -303,16 +312,22 @@ impl Db {
     }
 
     pub fn get_artists(&self) -> Result<Vec<Artist>> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
         let mut stmt = self.conn.prepare("
-            SELECT album_artist, COUNT(DISTINCT album), COUNT(*),
-                   ROW_NUMBER() OVER (ORDER BY album_artist COLLATE NOCASE)
+            SELECT album_artist, COUNT(DISTINCT album), COUNT(*)
             FROM tracks GROUP BY album_artist
             ORDER BY album_artist COLLATE NOCASE
         ")?;
         let rows = stmt.query_map([], |row| {
+            let name: String = row.get(0)?;
+            let mut hasher = DefaultHasher::new();
+            name.to_ascii_lowercase().hash(&mut hasher);
+            let id = hasher.finish() as i64;
             Ok(Artist {
-                id: row.get::<_, i64>(3)?,
-                name: row.get(0)?,
+                id,
+                name,
                 album_count: row.get::<_, i64>(1)? as usize,
                 track_count: row.get::<_, i64>(2)? as usize,
             })
@@ -599,6 +614,72 @@ impl Db {
                 attempts_json,
                 result_json,
             ],
+        )?;
+        Ok(())
+    }
+
+    // ── Batch Acquisition Helpers ──────────────────────────────────────────────
+
+    /// Returns missing albums from Spotify history that have significant listening
+    /// time (>30min) and play count (>10), ordered by play_count descending.
+    pub fn get_missing_spotify_albums(&self, limit: usize) -> Result<Vec<SpotifyAlbumHistory>> {
+        let mut stmt = self.conn.prepare("
+            SELECT artist, album, total_ms, play_count, skip_count, in_library, imported_at
+            FROM spotify_album_history
+            WHERE in_library = 0 AND total_ms > 1800000 AND play_count > 10
+            ORDER BY play_count DESC
+            LIMIT ?1
+        ")?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(SpotifyAlbumHistory {
+                artist: row.get(0)?,
+                album: row.get(1)?,
+                total_ms: row.get(2)?,
+                play_count: row.get(3)?,
+                skip_count: row.get(4)?,
+                in_library: row.get::<_, i64>(5)? != 0,
+                imported_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Returns task_ids from director_task_history that have already been finalized
+    /// or marked as already-present, so batch submissions can skip them.
+    pub fn get_completed_task_keys(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("
+            SELECT task_id FROM director_task_history
+            WHERE disposition IN ('Finalized', 'AlreadyPresent')
+        ")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()?)
+    }
+
+    /// Returns task_ids from director_task_history where disposition = 'Failed'.
+    pub fn get_failed_task_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id FROM director_task_history WHERE disposition = 'Failed'",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Insert or update a single row in spotify_album_history.
+    /// If the row already exists, only updates total_ms/play_count if the new values are higher.
+    pub fn upsert_spotify_album_history(
+        &self,
+        artist: &str,
+        album: &str,
+        total_ms: i64,
+        play_count: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO spotify_album_history (artist, album, total_ms, play_count)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(artist, album) DO UPDATE SET
+               total_ms   = MAX(total_ms,   excluded.total_ms),
+               play_count = MAX(play_count, excluded.play_count)",
+            params![artist, album, total_ms, play_count],
         )?;
         Ok(())
     }

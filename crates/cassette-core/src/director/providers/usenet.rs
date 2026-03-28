@@ -6,10 +6,10 @@ use crate::director::models::{
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
 use crate::director::temp::TaskTempContext;
-use crate::sources::{build_query, count_matching_terms, normalize_text};
+use crate::sources::{build_query, count_matching_terms, is_audio_path, normalize_text};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Clone)]
@@ -177,7 +177,21 @@ impl Provider for UsenetProvider {
                         .mime_str("application/x-nzb")
                         .unwrap_or_else(|_| unreachable!()),
                 );
-            let _ = client.post(format!("{sabnzbd_url}/api")).multipart(form).send().await;
+            let sab_response = client
+                .post(format!("{sabnzbd_url}/api"))
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|error| ProviderError::Network {
+                    provider_id: "usenet".to_string(),
+                    message: format!("SABnzbd submit failed: {error}"),
+                })?;
+            if !sab_response.status().is_success() {
+                return Err(ProviderError::Network {
+                    provider_id: "usenet".to_string(),
+                    message: format!("SABnzbd returned HTTP {}", sab_response.status()),
+                });
+            }
         }
 
         for _ in 0..24 {
@@ -246,17 +260,6 @@ fn find_matching_audio_file(roots: &[PathBuf], artist: &str, title: &str) -> Opt
                 }
             })
     })
-}
-
-fn is_audio_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "flac" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "wav" | "aiff"
-    )
 }
 
 fn sanitize(value: &str) -> String {

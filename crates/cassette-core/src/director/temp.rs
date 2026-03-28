@@ -34,8 +34,22 @@ impl TempManager {
         Self { root, policy }
     }
 
+    /// Sanitize a task_id into a safe directory name.
+    /// Replaces characters invalid in Windows/POSIX paths with `-`, and strips
+    /// trailing dots/spaces (Windows rejects directory names ending with `.` or ` `).
+    fn safe_dir_name(task_id: &str) -> String {
+        let sanitized: String = task_id
+            .chars()
+            .map(|c| match c {
+                ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\\' | '/' => '-',
+                c => c,
+            })
+            .collect();
+        sanitized.trim_end_matches(['.', ' ']).to_string()
+    }
+
     pub async fn prepare_task(&self, task_id: &str) -> Result<TaskTempContext, std::io::Error> {
-        let root = self.root.join(task_id);
+        let root = self.root.join(Self::safe_dir_name(task_id));
         let active_dir = root.join("active");
         let quarantine_dir = root.join("quarantine");
         tokio::fs::create_dir_all(&active_dir).await?;

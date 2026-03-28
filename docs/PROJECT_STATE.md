@@ -1,66 +1,124 @@
 # Cassette Project State
 
-Last audited: 2026-03-25
+Last updated: 2026-03-27
 
-## Runtime Truth
+## Architecture
 
-- Desktop shell: Tauri 2 (`src-tauri`)
-- Renderer: SvelteKit (`ui`)
-- Core domain: Rust (`crates/cassette-core`)
-- Local store: SQLite (WAL mode, in Tauri app data directory)
-- Workspace is a git repository with a full commit history.
+- **Desktop shell**: Tauri 2.10.3 (`src-tauri/`)
+- **Frontend**: SvelteKit (`ui/`)
+- **Core domain**: Rust workspace (`crates/cassette-core/`)
+- **Database**: SQLite via rusqlite (runtime) + sqlx (custodian subsystem)
+- **Active DB location**: Tauri app-data directory (`cassette.db`)
 
-## Verified As Built
+## What Works Today
 
-- Rust workspace compiles: `cargo check` passes, no warnings.
-- `cargo test` passes for the Rust workspace.
-- UI production build passes: `npm run build` in `ui/`.
-- Library scanning, queue, playback, playlists, downloads, Spotify import, settings,
-  and organizer command surfaces are implemented and wired through Tauri commands.
-- Primary navigation: `Library`, `Downloads`, `Settings`.
-  Advanced routes (`/playlists`, `/import`, `/tools`, `/artists`) exist and are functional.
+### Library Management
+- Library root scanning with recursive audio file discovery
+- Track metadata extraction (artist, album, title, track/disc number, year, duration, sample rate, bit depth, bitrate, format, file size)
+- Cover art path detection
+- Search across tracks by title/artist/album
+- Play count and skip count tracking
+- Library organization (move files to Artist/Album/NN-Title structure)
 
-## Current Gaps
+### Playback
+- Audio playback via Symphonia decode + cpal output
+- Queue management (add, remove, reorder, clear)
+- Playlist CRUD (create, list, add tracks, remove tracks, reorder)
+- Now-playing context from Last.fm (artist bio, album info)
+- Synced/plain lyrics from LRCLIB
 
-- **Deezer full-track path is incomplete.** The provider is wired up but the ARL-decrypted
-  full-track acquisition path is not proven end-to-end. Preview MP3 fallback is the current
-  runtime behavior for Deezer.
-- **Tidal is not implemented.** OAuth device flow has not been started.
-- **Provider live-proof is incomplete.** Qobuz and Soulseek (slskd) paths exist but have not
-  been formally proven on a clean machine. Failures are visible in the downloads dashboard but
-  recovery behavior needs more coverage.
-- **Async hardening is incomplete** in some acquisition and orchestration flows. Cancellation
-  safety and temp/staging cleanup guarantees are not formally tested.
-- **Packaging/release proof is incomplete.** Clean-machine install has not been documented or tested.
-- **MetadataRepairOnly acquisition strategy is stubbed.** Flagged in `director/engine.rs`.
-- **`downloader/` module vs `director/providers/` overlap.** Two partially parallel
-  implementation paths exist for slskd, usenet, and other providers. The `director/providers/`
-  path is the active one; `downloader/` contains earlier implementations that have not been
-  fully removed or reconciled.
+### Acquisition Pipeline (Director Engine)
+- Two-pass waterfall orchestration with per-provider semaphores
+- 7 acquisition strategies (Standard, HighQualityOnly, ObscureFallbackHeavy, SingleTrackPriority, DiscographyBatch, RedownloadReplaceIfBetter, MetadataRepairOnly)
+- 6-factor candidate scoring (metadata confidence, duration match, codec quality, provider trust, validation result, file size)
+- Symphonia-based audio validation (format probing, magic bytes, duration extraction)
+- Post-acquisition metadata tagging via Lofty (artist, album, title, track#, disc#, year, cover art)
+- Atomic finalization with dedup policy (KeepExisting or ReplaceIfBetter)
+- Per-task temp directories with stale recovery and quarantine
+- Retry with linear backoff (configurable max attempts and base delay)
+- Broadcast event channel for real-time progress tracking
 
-## Quality Signals
+### Providers (7 active)
 
-- `cargo check`: clean (no warnings)
-- `cargo test`: passing
-- `ui` production build: clean
-- Desktop smoke checks pass via `scripts/smoke_desktop.ps1`
+| Provider | Trust Rank | Capabilities | Status |
+|----------|------------|-------------|--------|
+| Local Archive | 0 | Filesystem walk + direct copy, batch support | Proven Working |
+| Deezer | 5 | Search + acquire with Blowfish CBC decryption (FLAC/320/128) | Implemented |
+| Qobuz | 10 | MD5-signed session, search + acquire (lossless) | Implemented |
+| slskd/Soulseek | 10 | P2P search with queue recovery, transfer polling + filesystem fallback | Implemented |
+| Usenet | 30 | NZBgeek search + SABnzbd execution, filesystem polling | Implemented |
+| yt-dlp | 50 | Subprocess fallback, ytsearch1 + scsearch1 | Proven Working |
+| Real-Debrid | 80 | TPB search + torrent resolution + 7z extraction | Implemented |
 
-## Known Code Issues (tracked in TODO.md)
+### Metadata Services
 
-Issues confirmed and fixed in this session (2026-03-25):
+| Service | Usage | Auth |
+|---------|-------|------|
+| MusicBrainz | Release search, parent album lookup, track listing, tag fixes | None (User-Agent) |
+| Last.fm | Artist/album context for now-playing | Public API key |
+| LRCLIB | Synced/plain lyrics lookup | None |
+| Spotify | History import, search, discography seeds | Optional OAuth |
 
-- `replace_spotify_album_history` was not wrapped in a transaction — fixed.
-- `prune_missing_tracks` issued individual deletes without a transaction — fixed.
-- `Player::send()` silently dropped commands when the channel was full — now logs a warning.
-- `decode_loop` and `decode_loop_seek` were ~200 lines of duplicated code — merged into one
-  function with an `Option<f64>` seek parameter.
-- `load_streamrip_config` used a hand-rolled line scanner instead of real TOML parsing — replaced
-  with the `toml` crate. Added `toml = "0.8"` to `src-tauri/Cargo.toml`.
-- Library page artist rows used `<a href="/artists">` — converted to proper navigation buttons.
+### Data Pipeline
+- Spotify play history import from external SQLite DB
+- Missing album detection (Spotify albums not in local library)
+- Album-level batch download submission
+- Director task result persistence to `director_task_history` table
 
-## Documentation Status
+## Database Schema (9 tables)
 
-- This file is canonical runtime truth for this repo.
-- `RECOVERY_STATUS.md` records the history of the March 2026 reconstruction event.
-  It is historical record, not current operating state.
-- All doc internal links use relative paths from `docs/`.
+| Table | Purpose |
+|-------|---------|
+| `library_roots` | Configured scan directories |
+| `tracks` | Library track metadata + play stats |
+| `queue_items` | Current playback queue |
+| `settings` | Key-value app settings |
+| `playlists` | Playlist definitions |
+| `playlist_items` | Playlist track membership |
+| `spotify_album_history` | Imported Spotify listening data |
+| `director_task_history` | Completed acquisition results with provenance |
+
+## Concurrency Model
+
+- Global worker semaphore: configurable (default 12 concurrent tasks)
+- Per-provider semaphores: configurable via `ProviderPolicy` (default 1 per provider)
+- slskd global search semaphore: OnceLock<Semaphore(1)> — one search at a time
+- Two-pass provider acquisition: Pass 1 non-blocking try_acquire, Pass 2 blocking on deferred
+- Download concurrency: configurable (default 16 parallel downloads)
+
+## Configuration
+
+Settings resolved in priority order (highest wins):
+1. SQLite database (user-saved via settings UI)
+2. Environment variables (`.env` file)
+3. Streamrip config (`%APPDATA%/streamrip/config.toml`) — auto-imports Qobuz/Deezer credentials
+4. slskd config (`%LOCALAPPDATA%/slskd/slskd.yml`)
+5. Hardcoded defaults
+
+## Known Limitations
+
+- No cancellation support for in-flight tasks (must wait for timeouts)
+- Frontend polls for download status instead of receiving push events
+- Hand-rolled rate limiting (fixed sleep) instead of proper token bucket
+- No search result caching across provider fallthrough
+- No provider health monitoring (discovers dead providers only on timeout)
+- No crash recovery for in-flight tasks (only completed results persisted)
+- Dual schema: richer librarian/library model exists but isn't wired to active runtime
+- `MetadataRepairOnly` strategy is stubbed
+- Discogs/Last.fm enrichers are no-op stubs
+- Bandcamp source is placeholder-only
+- `cargo test` has failures; `cargo check` has warnings
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| `docs/PROJECT_STATE.md` | This file — current truthful state |
+| `docs/WORKLIST.md` | Prioritized architecture convergence tasks |
+| `docs/CAPABILITY_AUDIT.md` | Gap analysis from initial audit |
+| `docs/TOOL_AND_SERVICE_REGISTRY.md` | Tool/service usage vs potential |
+| `docs/reference/` | 19 code-traced per-component reference docs |
+| `docs/ARCHITECTURAL_RECOMMENDATIONS.md` | Architecture convergence recommendations |
+| `docs/INTEGRATION_GAPS_AND_OPPORTUNITIES.md` | Integration gap analysis |
+| `docs/REQUEST_CAPABILITY_MATRIX.md` | What the system can/cannot do today |
+| `docs/CACHE_PROVENANCE_STRATEGY.md` | Cache and provenance persistence strategy |

@@ -78,6 +78,64 @@ impl MetadataService {
         Ok(releases)
     }
 
+    /// Search MusicBrainz recordings by artist + track title and return their primary releases.
+    /// Used to find the parent album for single tracks (e.g. "Closer" → "Collage EP").
+    /// Prefers Album/EP primary types over Single or Compilation.
+    pub async fn find_parent_album(&self, artist: &str, track_title: &str) -> Result<Option<MbRelease>> {
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        let query = format!("recording:\"{}\" AND artist:\"{}\"", track_title, artist);
+        let resp = self.client
+            .get(format!("{MB_BASE}/recording"))
+            .query(&[
+                ("query", query.as_str()),
+                ("fmt", "json"),
+                ("limit", "5"),
+                ("inc", "releases+release-groups"),
+            ])
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!("MusicBrainz returned HTTP {}", resp.status()));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let recordings = body.get("recordings")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        // Walk recordings → releases, prefer Album/EP over Single/Compilation
+        let mut best: Option<MbRelease> = None;
+        for rec in &recordings {
+            let releases = rec.get("releases")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for rel in &releases {
+                let rtype = rel.pointer("/release-group/primary-type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown");
+                let candidate = mb_release_from_value(rel);
+                if best.is_none() {
+                    best = Some(candidate.clone());
+                }
+                if matches!(rtype, "Album" | "EP") {
+                    best = Some(candidate);
+                    break;
+                }
+            }
+            if best.as_ref().map_or(false, |r| {
+                matches!(r.release_group_type.as_deref(), Some("Album") | Some("EP"))
+            }) {
+                break;
+            }
+        }
+
+        Ok(best)
+    }
+
     /// Fetch full release details including track listing
     pub async fn get_release_tracks(&self, release_id: &str) -> Result<MbReleaseWithTracks> {
         // Rate limit: MusicBrainz requires 1 req/sec

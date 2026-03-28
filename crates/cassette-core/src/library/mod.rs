@@ -36,11 +36,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use walkdir::WalkDir;
 
-const DB_BATCH_SIZE: usize = 128;
+use crate::sources::AUDIO_EXTENSIONS;
 
-const AUDIO_EXTENSIONS: &[&str] = &[
-    "flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "aiff", "wv", "ape",
-];
+const DB_BATCH_SIZE: usize = 128;
 
 const COVER_NAMES: &[&str] = &[
     "cover.jpg", "cover.png", "folder.jpg", "folder.png",

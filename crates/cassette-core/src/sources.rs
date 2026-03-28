@@ -5,8 +5,29 @@ use crate::models::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
+
+/// Canonical list of audio file extensions recognized across the entire codebase.
+/// All modules should use `is_audio_extension()` or `is_audio_path()` instead of
+/// maintaining their own lists.
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "flac", "wav", "alac", "dsf", "dff", "aiff", "ape", "wv", "m4a", "mp3", "aac", "ogg", "opus",
+];
+
+/// Check whether a file extension (without the dot) is a recognized audio format.
+pub fn is_audio_extension(ext: &str) -> bool {
+    AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+}
+
+/// Check whether a path points to a recognized audio file.
+pub fn is_audio_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(is_audio_extension)
+        .unwrap_or(false)
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RemoteProviderConfig {

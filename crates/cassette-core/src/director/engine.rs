@@ -206,7 +206,21 @@ async fn process_task(
     }
 
     let temp_manager = TempManager::new(config.temp_root.clone(), config.temp_recovery.clone());
-    let temp_context = temp_manager.prepare_task(&task.task_id).await?;
+    let temp_context = match temp_manager.prepare_task(&task.task_id).await {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            let msg = format!("failed to create temp dir: {error}");
+            warn!(task_id = task.task_id, error = %error, "director task failed to create temp dir");
+            let _ = results.send(DirectorTaskResult {
+                task_id: task.task_id.clone(),
+                disposition: FinalizedTrackDisposition::Failed,
+                finalized: None,
+                attempts: Vec::new(),
+                error: Some(msg.clone()),
+            });
+            return Err(DirectorError::Queue(msg));
+        }
+    };
     let result = execute_waterfall(
         &config,
         &providers,
@@ -268,6 +282,188 @@ async fn process_task(
     }
 }
 
+/// Outcome of attempting a single provider in the waterfall.
+enum ProviderAttemptOutcome {
+    /// Provider was busy (semaphore full) — should be deferred for second pass.
+    Busy,
+    /// Provider was tried but produced no usable result (error, validation fail, etc.).
+    Tried,
+    /// Provider produced a valid candidate that was immediately finalized (FirstValidWins).
+    Finalized(FinalizedTrack, Vec<ProviderAttemptRecord>),
+}
+
+/// Try a single provider: search → acquire → validate → score.
+/// If `blocking` is false, uses try_acquire (non-blocking) on the provider semaphore.
+/// Returns `Busy` if the semaphore is full and `blocking` is false.
+#[allow(clippy::too_many_arguments)]
+async fn try_provider(
+    provider: &dyn Provider,
+    provider_id: &str,
+    limit: &Arc<Semaphore>,
+    blocking: bool,
+    config: &DirectorConfig,
+    events: &broadcast::Sender<DirectorEvent>,
+    task: &TrackTask,
+    plan: &StrategyPlan,
+    temp_manager: &TempManager,
+    temp_context: &TaskTempContext,
+    valid_candidates: &mut Vec<(CandidateDisposition, ProviderDescriptor)>,
+    attempts: &mut Vec<ProviderAttemptRecord>,
+) -> Result<ProviderAttemptOutcome, DirectorError> {
+    let descriptor = provider.descriptor();
+    if !descriptor.capabilities.supports_download {
+        attempts.push(ProviderAttemptRecord {
+            provider_id: provider_id.to_string(),
+            attempt: 0,
+            outcome: "skipped: provider is metadata-only".to_string(),
+        });
+        return Ok(ProviderAttemptOutcome::Tried);
+    }
+
+    send_event(
+        events,
+        &task.task_id,
+        DirectorProgress::ProviderAttempt,
+        Some(provider_id.to_string()),
+        "searching provider",
+    );
+
+    let search_candidates = match execute_provider_search(
+        provider,
+        task,
+        plan,
+        config,
+        Arc::clone(limit),
+        blocking,
+    )
+    .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) if error.is_busy() => return Ok(ProviderAttemptOutcome::Busy),
+        Err(error) => {
+            attempts.push(ProviderAttemptRecord {
+                provider_id: provider_id.to_string(),
+                attempt: 1,
+                outcome: error.to_string(),
+            });
+            return Ok(ProviderAttemptOutcome::Tried);
+        }
+    };
+
+    for candidate in search_candidates {
+        match execute_provider_acquire(
+            provider,
+            task,
+            &candidate,
+            temp_context,
+            plan,
+            config,
+            Arc::clone(limit),
+            blocking,
+        )
+        .await
+        {
+            Ok(acquisition) => {
+                send_event(
+                    events,
+                    &task.task_id,
+                    DirectorProgress::Validating,
+                    Some(provider_id.to_string()),
+                    "validating candidate",
+                );
+
+                match validate_candidate(
+                    acquisition.temp_path.clone(),
+                    task.target.clone(),
+                    config.quality_policy.clone(),
+                )
+                .await
+                {
+                    Ok(validation) => {
+                        if plan.require_lossless
+                            && !matches!(
+                                validation.quality,
+                                crate::director::models::CandidateQuality::Lossless
+                            )
+                        {
+                            let _ = temp_manager
+                                .quarantine_file(temp_context, &acquisition.temp_path)
+                                .await;
+                            attempts.push(ProviderAttemptRecord {
+                                provider_id: provider_id.to_string(),
+                                attempt: 1,
+                                outcome: "rejected non-lossless candidate".to_string(),
+                            });
+                            continue;
+                        }
+
+                        let (score, _) = score_candidate(
+                            &task.target,
+                            &descriptor,
+                            &candidate,
+                            &validation,
+                            &config.quality_policy,
+                        );
+                        let disposition = CandidateDisposition {
+                            candidate,
+                            acquisition,
+                            validation,
+                            score,
+                        };
+                        attempts.push(ProviderAttemptRecord {
+                            provider_id: provider_id.to_string(),
+                            attempt: 1,
+                            outcome: format!("valid candidate score {}", disposition.score.total),
+                        });
+
+                        if !plan.collect_multiple_candidates {
+                            let result = finalize_candidate(
+                                config,
+                                events,
+                                task,
+                                descriptor,
+                                disposition,
+                                std::mem::take(attempts),
+                            )
+                            .await?;
+                            return Ok(ProviderAttemptOutcome::Finalized(result.0, result.1));
+                        }
+                        valid_candidates.push((disposition, descriptor.clone()));
+                    }
+                    Err(error) => {
+                        if config.temp_recovery.quarantine_failures {
+                            let _ = temp_manager
+                                .quarantine_file(temp_context, &acquisition.temp_path)
+                                .await;
+                        } else {
+                            let _ = tokio::fs::remove_file(&acquisition.temp_path).await;
+                        }
+                        attempts.push(ProviderAttemptRecord {
+                            provider_id: provider_id.to_string(),
+                            attempt: 1,
+                            outcome: format!("validation failed: {error}"),
+                        });
+                    }
+                }
+            }
+            Err(error) if error.is_busy() => return Ok(ProviderAttemptOutcome::Busy),
+            Err(error) => {
+                attempts.push(ProviderAttemptRecord {
+                    provider_id: provider_id.to_string(),
+                    attempt: 1,
+                    outcome: error.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(ProviderAttemptOutcome::Tried)
+}
+
+/// Two-pass waterfall: first pass tries providers non-blocking (skips busy ones),
+/// second pass blocks on deferred providers in priority order. This ensures all
+/// provider semaphores are utilized in parallel across concurrent tasks rather than
+/// all tasks queuing behind the first provider.
 #[allow(clippy::too_many_arguments)]
 async fn execute_waterfall(
     config: &DirectorConfig,
@@ -279,164 +475,90 @@ async fn execute_waterfall(
     temp_manager: &TempManager,
     temp_context: &TaskTempContext,
 ) -> Result<(FinalizedTrack, Vec<ProviderAttemptRecord>), DirectorError> {
-    let provider_map = providers
+    let provider_map: HashMap<String, Arc<dyn Provider>> = providers
         .iter()
         .map(|provider| (provider.descriptor().id.clone(), Arc::clone(provider)))
-        .collect::<HashMap<String, Arc<dyn Provider>>>();
+        .collect();
     let mut valid_candidates = Vec::<(CandidateDisposition, ProviderDescriptor)>::new();
     let mut attempts = Vec::<ProviderAttemptRecord>::new();
+    let mut deferred_providers = Vec::<String>::new();
 
+    // Pass 1: Non-blocking — try each provider, skip if semaphore is full
     for provider_id in &plan.provider_order {
         let Some(provider) = provider_map.get(provider_id) else {
             continue;
         };
-        let descriptor = provider.descriptor();
-        if !descriptor.capabilities.supports_download {
-            attempts.push(ProviderAttemptRecord {
-                provider_id: provider_id.clone(),
-                attempt: 0,
-                outcome: "skipped: provider is metadata-only".to_string(),
-            });
-            continue;
-        }
         let Some(limit) = provider_limits.get(provider_id) else {
             continue;
         };
 
-        send_event(
-            events,
-            &task.task_id,
-            DirectorProgress::ProviderAttempt,
-            Some(provider_id.clone()),
-            "searching provider",
-        );
-
-        let search_candidates = match execute_provider_search(
+        match try_provider(
             provider.as_ref(),
+            provider_id,
+            limit,
+            false, // non-blocking
+            config,
+            events,
             task,
             plan,
-            config,
-            Arc::clone(limit),
+            temp_manager,
+            temp_context,
+            &mut valid_candidates,
+            &mut attempts,
         )
-        .await
+        .await?
         {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                attempts.push(ProviderAttemptRecord {
-                    provider_id: provider_id.clone(),
-                    attempt: 1,
-                    outcome: error.to_string(),
-                });
-                continue;
+            ProviderAttemptOutcome::Finalized(track, final_attempts) => {
+                return Ok((track, final_attempts));
             }
-        };
-
-        for candidate in search_candidates {
-            match execute_provider_acquire(
-                provider.as_ref(),
-                task,
-                &candidate,
-                temp_context,
-                plan,
-                config,
-                Arc::clone(limit),
-            )
-            .await
-            {
-                Ok(acquisition) => {
-                    send_event(
-                        events,
-                        &task.task_id,
-                        DirectorProgress::Validating,
-                        Some(provider_id.clone()),
-                        "validating candidate",
-                    );
-
-                    match validate_candidate(
-                        acquisition.temp_path.clone(),
-                        task.target.clone(),
-                        config.quality_policy.clone(),
-                    )
-                    .await
-                    {
-                        Ok(validation) => {
-                            if plan.require_lossless
-                                && !matches!(
-                                    validation.quality,
-                                    crate::director::models::CandidateQuality::Lossless
-                                )
-                            {
-                                let _ = temp_manager
-                                    .quarantine_file(temp_context, &acquisition.temp_path)
-                                    .await;
-                                attempts.push(ProviderAttemptRecord {
-                                    provider_id: provider_id.clone(),
-                                    attempt: 1,
-                                    outcome: "rejected non-lossless candidate".to_string(),
-                                });
-                                continue;
-                            }
-
-                            let (score, _) = score_candidate(
-                                &task.target,
-                                &descriptor,
-                                &candidate,
-                                &validation,
-                                &config.quality_policy,
-                            );
-                            let disposition = CandidateDisposition {
-                                candidate,
-                                acquisition,
-                                validation,
-                                score,
-                            };
-                            attempts.push(ProviderAttemptRecord {
-                                provider_id: provider_id.clone(),
-                                attempt: 1,
-                                outcome: format!("valid candidate score {}", disposition.score.total),
-                            });
-
-                            if !plan.collect_multiple_candidates {
-                                return finalize_candidate(
-                                    config,
-                                    events,
-                                    task,
-                                    descriptor,
-                                    disposition,
-                                    attempts,
-                                )
-                                .await;
-                            }
-                            valid_candidates.push((disposition, descriptor.clone()));
-                        }
-                        Err(error) => {
-                            if config.temp_recovery.quarantine_failures {
-                                let _ = temp_manager
-                                    .quarantine_file(temp_context, &acquisition.temp_path)
-                                    .await;
-                            } else {
-                                let _ = tokio::fs::remove_file(&acquisition.temp_path).await;
-                            }
-                            attempts.push(ProviderAttemptRecord {
-                                provider_id: provider_id.clone(),
-                                attempt: 1,
-                                outcome: format!("validation failed: {error}"),
-                            });
-                        }
-                    }
-                }
-                Err(error) => {
-                    attempts.push(ProviderAttemptRecord {
-                        provider_id: provider_id.clone(),
-                        attempt: 1,
-                        outcome: error.to_string(),
-                    });
-                }
+            ProviderAttemptOutcome::Busy => {
+                deferred_providers.push(provider_id.clone());
             }
+            ProviderAttemptOutcome::Tried => {}
         }
     }
 
-    if let Some((best, descriptor)) = valid_candidates
+    // Pass 2: Blocking — try deferred providers (ones that were busy in pass 1)
+    for provider_id in &deferred_providers {
+        let Some(provider) = provider_map.get(provider_id) else {
+            continue;
+        };
+        let Some(limit) = provider_limits.get(provider_id) else {
+            continue;
+        };
+
+        match try_provider(
+            provider.as_ref(),
+            provider_id,
+            limit,
+            true, // blocking
+            config,
+            events,
+            task,
+            plan,
+            temp_manager,
+            temp_context,
+            &mut valid_candidates,
+            &mut attempts,
+        )
+        .await?
+        {
+            ProviderAttemptOutcome::Finalized(track, final_attempts) => {
+                return Ok((track, final_attempts));
+            }
+            ProviderAttemptOutcome::Busy | ProviderAttemptOutcome::Tried => {}
+        }
+    }
+
+    // Filter out candidates whose temp file no longer exists (can happen when multiple
+    // candidates from the same provider share a filename — a later failure quarantines
+    // the shared path, invalidating an earlier valid candidate's temp_path).
+    let available_candidates: Vec<_> = valid_candidates
+        .into_iter()
+        .filter(|(candidate, _)| candidate.acquisition.temp_path.exists())
+        .collect();
+
+    if let Some((best, descriptor)) = available_candidates
         .into_iter()
         .max_by_key(|(candidate, _)| candidate.score.total)
     {
@@ -486,7 +608,9 @@ async fn finalize_candidate(
         Some(selection.provider_id.clone()),
         "applying metadata",
     );
-    apply_metadata(task.clone(), selection.clone()).await?;
+    if let Err(error) = apply_metadata(task.clone(), selection.clone()).await {
+        warn!(task_id = %task.task_id, error = %error, "metadata tagging failed — continuing to finalization without tags");
+    }
 
     send_event(
         events,
@@ -539,20 +663,43 @@ async fn finalize_candidate(
     }
 }
 
+/// Acquire a provider semaphore permit. If `blocking` is false, returns
+/// `ProviderError::ProviderBusy` immediately when the semaphore is full
+/// instead of waiting. This enables the two-pass waterfall to skip busy
+/// providers and try the next one.
+async fn acquire_provider_permit(
+    provider_limit: &Arc<Semaphore>,
+    provider_id: &str,
+    blocking: bool,
+) -> Result<tokio::sync::OwnedSemaphorePermit, ProviderError> {
+    if blocking {
+        provider_limit
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|error| ProviderError::Other {
+                provider_id: provider_id.to_string(),
+                message: error.to_string(),
+            })
+    } else {
+        provider_limit
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ProviderError::ProviderBusy {
+                provider_id: provider_id.to_string(),
+            })
+    }
+}
+
 async fn execute_provider_search(
     provider: &dyn Provider,
     task: &TrackTask,
     plan: &StrategyPlan,
     config: &DirectorConfig,
     provider_limit: Arc<Semaphore>,
+    blocking: bool,
 ) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
-    let _permit = provider_limit
-        .acquire_owned()
-        .await
-        .map_err(|error| ProviderError::Other {
-            provider_id: provider.descriptor().id,
-            message: error.to_string(),
-        })?;
+    let _permit = acquire_provider_permit(&provider_limit, &provider.descriptor().id, blocking).await?;
     execute_with_retry(config, provider.descriptor().id.clone(), || provider.search(task, plan)).await
 }
 
@@ -564,14 +711,9 @@ async fn execute_provider_acquire(
     plan: &StrategyPlan,
     config: &DirectorConfig,
     provider_limit: Arc<Semaphore>,
+    blocking: bool,
 ) -> Result<crate::director::models::CandidateAcquisition, ProviderError> {
-    let _permit = provider_limit
-        .acquire_owned()
-        .await
-        .map_err(|error| ProviderError::Other {
-            provider_id: provider.descriptor().id,
-            message: error.to_string(),
-        })?;
+    let _permit = acquire_provider_permit(&provider_limit, &provider.descriptor().id, blocking).await?;
     execute_with_retry(config, provider.descriptor().id.clone(), || {
         provider.acquire(task, candidate, temp_context, plan)
     })

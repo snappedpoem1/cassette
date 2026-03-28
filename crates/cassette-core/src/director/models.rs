@@ -29,6 +29,7 @@ pub struct TrackTask {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TrackTaskSource {
     SpotifyLibrary,
+    SpotifyHistory,
     SpotifyPlaylist { playlist_id: String },
     Manual,
 }

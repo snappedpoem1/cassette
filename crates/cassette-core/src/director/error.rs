@@ -67,6 +67,8 @@ pub enum ProviderError {
     TemporaryOutage { provider_id: String, message: String },
     #[error("provider {provider_id} other failure: {message}")]
     Other { provider_id: String, message: String },
+    #[error("provider {provider_id} busy (semaphore full)")]
+    ProviderBusy { provider_id: String },
 }
 
 impl ProviderError {
@@ -78,6 +80,10 @@ impl ProviderError {
                 | Self::Network { .. }
                 | Self::TemporaryOutage { .. }
         )
+    }
+
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::ProviderBusy { .. })
     }
 }
 

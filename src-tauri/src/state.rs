@@ -3,8 +3,8 @@ use cassette_core::{
     db::Db,
     director::{
         providers::{
-            DeezerProvider, LocalArchiveProvider, QobuzProvider, SlskdProvider, UsenetProvider,
-            YtDlpProvider,
+            DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
+            UsenetProvider, YtDlpProvider,
         },
         Director, DirectorConfig, DirectorProgress, DirectorSubmission, DuplicatePolicy,
         ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
@@ -14,24 +14,20 @@ use cassette_core::{
     player::Player,
     sources::{RemoteProviderConfig, SlskdConnectionConfig},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Table as TomlTable;
 use std::sync::{Arc, Mutex};
-use tokio::sync::Semaphore;
 
 pub struct AppState {
     pub db: Arc<Mutex<Db>>,
     pub player: Arc<Player>,
     pub playback_state: Arc<Mutex<PlaybackState>>,
     pub download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
-    #[allow(dead_code)]
-    pub active_download_keys: Arc<Mutex<HashSet<String>>>,
-    #[allow(dead_code)]
-    pub download_semaphore: Arc<Semaphore>,
     pub director_submitter: DirectorSubmission,
     pub download_config: DownloadConfig,
+    pub http_client: reqwest::Client,
 }
 
 impl AppState {
@@ -44,15 +40,19 @@ impl AppState {
         let event_rx = director_handle.subscribe();
         let result_rx = director_handle.subscribe_results();
 
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("failed to build HTTP client");
+
         let state = Self {
             db: Arc::new(Mutex::new(db)),
             player: Arc::new(Player::new()),
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
             download_jobs: Arc::new(Mutex::new(HashMap::new())),
-            active_download_keys: Arc::new(Mutex::new(HashSet::new())),
-            download_semaphore: Arc::new(Semaphore::new(3)),
             director_submitter: director_handle.submitter.clone(),
             download_config,
+            http_client,
         };
 
         spawn_director_event_listener(Arc::clone(&state.download_jobs), event_rx);
@@ -86,8 +86,8 @@ fn build_director(db: &Db, download_config: &DownloadConfig) -> cassette_core::d
         library_root: PathBuf::from(&library_root),
         temp_root: PathBuf::from(&staging_root).join(".director-temp"),
         local_search_roots: vec![PathBuf::from(&staging_root)],
-        worker_concurrency: 3,
-        provider_timeout_secs: 120,
+        worker_concurrency: 8,
+        provider_timeout_secs: 300,
         retry_policy: RetryPolicy {
             max_attempts_per_provider: 2,
             base_backoff_millis: 750,
@@ -104,35 +104,39 @@ fn build_director(db: &Db, download_config: &DownloadConfig) -> cassette_core::d
         },
         provider_policies: vec![
             ProviderPolicy {
-                provider_id: "slskd".to_string(),
-                max_concurrency: 1,
-            },
-            ProviderPolicy {
                 provider_id: "qobuz".to_string(),
-                max_concurrency: 1,
+                max_concurrency: 2, // 24-bit FLAC; drops connections above 3 concurrent albums
             },
             ProviderPolicy {
                 provider_id: "deezer".to_string(),
-                max_concurrency: 1,
+                max_concurrency: 4, // 16-bit FLAC; smaller files, more robust
+            },
+            ProviderPolicy {
+                provider_id: "slskd".to_string(),
+                max_concurrency: 2, // P2P; internal global search semaphore limits further
             },
             ProviderPolicy {
                 provider_id: "usenet".to_string(),
-                max_concurrency: 1,
+                max_concurrency: 1, // SABnzbd manages its own download queue
             },
             ProviderPolicy {
                 provider_id: "local_archive".to_string(),
-                max_concurrency: 1,
+                max_concurrency: 2, // filesystem I/O, trivially parallel
             },
             ProviderPolicy {
                 provider_id: "yt_dlp".to_string(),
-                max_concurrency: 1,
+                max_concurrency: 2, // YouTube/SoundCloud rate limits
+            },
+            ProviderPolicy {
+                provider_id: "real_debrid".to_string(),
+                max_concurrency: 3, // API ~250 req/min; bottleneck is torrent resolve time
             },
         ],
         staging_root: PathBuf::from(&staging_root),
         ..DirectorConfig::default()
     };
 
-    let providers: Vec<Arc<dyn cassette_core::director::Provider>> = vec![
+    let mut providers: Vec<Arc<dyn cassette_core::director::Provider>> = vec![
         Arc::new(SlskdProvider::new(
             slskd_connection,
             vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
@@ -148,6 +152,14 @@ fn build_director(db: &Db, download_config: &DownloadConfig) -> cassette_core::d
         Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
         Arc::new(YtDlpProvider::new("yt-dlp")),
     ];
+
+    // Real-Debrid: only add if API key is configured
+    let rd_key = read_setting(db, "real_debrid_key")
+        .or_else(|| download_config.real_debrid_key.clone())
+        .filter(|k| !k.trim().is_empty());
+    if let Some(key) = rd_key {
+        providers.push(Arc::new(RealDebridProvider::new(key)));
+    }
 
     Director::new(config, providers).start()
 }
