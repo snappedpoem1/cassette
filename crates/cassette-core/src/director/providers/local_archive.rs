@@ -9,6 +9,9 @@ use crate::director::temp::TaskTempContext;
 use crate::sources::is_audio_path;
 use async_trait::async_trait;
 use std::path::PathBuf;
+use tokio::time::{sleep, Duration};
+
+const LOCAL_ARCHIVE_COPY_RETRY_DELAYS_MS: &[u64] = &[150, 350, 750];
 
 #[derive(Debug, Clone)]
 pub struct LocalArchiveProvider {
@@ -136,12 +139,12 @@ impl Provider for LocalArchiveProvider {
             .unwrap_or("candidate.bin");
         let destination = temp_context.active_dir.join(filename);
 
-        tokio::fs::copy(&source, &destination)
-            .await
-            .map_err(|error| ProviderError::Network {
+        copy_with_lock_retry(&source, &destination).await.map_err(|error| {
+            ProviderError::Network {
                 provider_id: "local_archive".to_string(),
                 message: error.to_string(),
-            })?;
+            }
+        })?;
 
         let file_size = tokio::fs::metadata(&destination)
             .await
@@ -155,6 +158,40 @@ impl Provider for LocalArchiveProvider {
             file_size,
             extension_hint: candidate.extension_hint.clone(),
         })
+    }
+}
+
+async fn copy_with_lock_retry(source: &PathBuf, destination: &PathBuf) -> Result<u64, std::io::Error> {
+    let mut last_error = None;
+    for delay_ms in std::iter::once(0_u64).chain(LOCAL_ARCHIVE_COPY_RETRY_DELAYS_MS.iter().copied()) {
+        if delay_ms > 0 {
+            sleep(Duration::from_millis(delay_ms)).await;
+        }
+        match tokio::fs::copy(source, destination).await {
+            Ok(copied) => return Ok(copied),
+            Err(error) if error.raw_os_error() == Some(32) => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("local archive copy failed")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn copy_with_lock_retry_returns_error_for_missing_source() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("missing.flac");
+        let destination = temp.path().join("out.flac");
+        let error = copy_with_lock_retry(&source, &destination)
+            .await
+            .expect_err("missing source should fail");
+        assert_ne!(error.raw_os_error(), Some(32));
     }
 }
 

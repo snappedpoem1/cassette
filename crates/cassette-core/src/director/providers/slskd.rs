@@ -232,10 +232,10 @@ async fn slskd_best_candidates(
         let _permit = match sem.try_acquire() {
             Ok(permit) => permit,
             Err(_) => {
-                // Another search is in flight — skip slskd for this track.
-                return Err(ProviderError::TemporaryOutage {
+                // Another search is in flight — let the director defer us to its
+                // blocking second pass instead of classifying this as provider down.
+                return Err(ProviderError::ProviderBusy {
                     provider_id: "slskd".to_string(),
-                    message: "slskd search busy — skipping to next source".to_string(),
                 });
             }
         };

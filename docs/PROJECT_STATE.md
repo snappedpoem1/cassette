@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
 
 ## Architecture
 
@@ -20,6 +20,7 @@ Last updated: 2026-03-28
 - Search across tracks by title/artist/album
 - Play count and skip count tracking
 - Library organization (move files to Artist/Album/NN-Title structure)
+- Organizer canonical path generation now stabilizes punctuation-only titles instead of recursively reusing the current basename
 
 ### Playback
 - Audio playback via Symphonia decode + cpal output
@@ -40,6 +41,7 @@ Last updated: 2026-03-28
 - Retry with linear backoff (configurable max attempts and base delay)
 - Search-result caching in the director waterfall
 - Provider health monitoring with skip-on-down behavior
+- Runtime provider stabilization now cools down rate-limited/temporary-outage providers, disables auth-failed providers for the rest of the run, and treats provider-busy as capacity pressure instead of provider-down
 - Broadcast event channels for progress, results, and provider health
 - Deezer full-track acquisition is live-proven on this machine as of 2026-03-27 via `provider_acquire_probe_cli`
 
@@ -126,7 +128,8 @@ Settings resolved in priority order (highest wins):
 - Pending-task startup recovery is now proven with a deterministic probe, but a full UI-driven kill/relaunch capture is still worth recording
 - Download supervision is proven by automated tests and local probes; a full UI-driven proof pass is still worth capturing
 - Candidate persistence now exists in the active runtime path, but the app still does not reuse that memory for pre-acquisition review, query-cache TTLs, or user override/exclusion decisions
-- Usenet remains partially configured on this machine: `provider_probe_cli` reports `SKIP` because `nzbgeek_api_key` and/or `usenet_host` are missing
+- Usenet is configured on this machine with NZBgeek + EasyUsenet + SABnzbd, and batch/provider probes now report it as ready
+- `batch_download_cli` now preflights provider readiness and skips obviously unusable providers, but rare/bonus-track misses still surface as genuine `provider exhausted` results when no source can satisfy validation
 
 ## Verification Snapshot
 
@@ -145,6 +148,7 @@ Verified on 2026-03-28:
   - a resumed task finalizes successfully after startup recovery
 - `cargo run --bin provider_probe_cli` shows `OK` for `slskd`, `qobuz`, `deezer`, `spotify`, and `yt-dlp` on this machine
 - `cargo run --bin provider_acquire_probe_cli -- --provider deezer` acquired a full-length FLAC for `Brand New - Sic Transit Gloria... Glory Fades` (`24,324,054` bytes, `186.49s`)
+- `target\debug\batch_download_cli.exe --limit 1` now prints a provider readiness summary, marks Usenet unavailable when config is incomplete, and emits end-of-run failure/provider summaries. A proof run on 2026-03-28 finalized/failed live tasks against the app DB on the patched runtime.
 
 ## Documentation
 

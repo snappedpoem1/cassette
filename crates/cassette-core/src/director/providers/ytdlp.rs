@@ -176,7 +176,7 @@ impl Provider for YtDlpProvider {
         if !output.status.success() {
             return Err(ProviderError::Other {
                 provider_id: "yt_dlp".to_string(),
-                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                message: normalize_command_failure(&output.stdout, &output.stderr, output.status),
             });
         }
 
@@ -233,6 +233,18 @@ impl Provider for YtDlpProvider {
     }
 }
 
+fn normalize_command_failure(stdout: &[u8], stderr: &[u8], status: std::process::ExitStatus) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(stdout).trim().to_string();
+    if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        format!("yt-dlp failed without stderr; stdout: {stdout}")
+    } else {
+        format!("yt-dlp exited with status {status} without diagnostic output")
+    }
+}
+
 fn sanitize_component(value: &str) -> String {
     value
         .trim()
@@ -245,4 +257,19 @@ fn sanitize_component(value: &str) -> String {
         .trim()
         .trim_end_matches('.')
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+
+    #[test]
+    fn normalize_command_failure_never_returns_empty_message() {
+        let message = normalize_command_failure(&[], &[], std::process::ExitStatus::from_raw(1));
+        assert!(!message.trim().is_empty());
+    }
 }

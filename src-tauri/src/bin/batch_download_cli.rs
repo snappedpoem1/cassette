@@ -4,14 +4,95 @@ use cassette_core::director::providers::{
     UsenetProvider, YtDlpProvider,
 };
 use cassette_core::director::{
-    AcquisitionStrategy, Director, DirectorConfig, DuplicatePolicy, NormalizedTrack, ProviderPolicy,
-    QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask, TrackTaskSource,
+    AcquisitionStrategy, Director, DirectorConfig, DirectorTaskResult, DuplicatePolicy,
+    NormalizedTrack, Provider, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
+    TrackTask, TrackTaskSource,
 };
+use cassette_core::director::ProviderError;
+use cassette_core::director::models::{ProviderHealthStatus, ProviderSearchRecord};
 use cassette_core::metadata::MetadataService;
 use cassette_core::sources::{RemoteProviderConfig, SlskdConnectionConfig};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+struct ProviderReadiness {
+    provider_id: String,
+    display_name: String,
+    status: String,
+    detail: String,
+}
+
+fn print_provider_readiness(readiness: &[ProviderReadiness]) {
+    println!("\n=== Provider Readiness ===");
+    for item in readiness {
+        println!(
+            "  {:<14} {:<12} {} ({})",
+            item.provider_id, item.status, item.detail, item.display_name
+        );
+    }
+}
+
+fn classify_failure(result: &DirectorTaskResult) -> String {
+    if result
+        .attempts
+        .iter()
+        .any(|attempt| attempt.outcome.contains("auth failed"))
+    {
+        return "auth_failed".to_string();
+    }
+    if result
+        .attempts
+        .iter()
+        .any(|attempt| {
+            let outcome = attempt.outcome.to_ascii_lowercase();
+            outcome.contains("too_many_requests")
+                || outcome.contains("rate limited")
+                || outcome.contains("429")
+        })
+    {
+        return "rate_limited".to_string();
+    }
+    if result
+        .attempts
+        .iter()
+        .any(|attempt| attempt.outcome.contains("os error 32"))
+    {
+        return "file_locked".to_string();
+    }
+    if result
+        .provider_searches
+        .iter()
+        .any(|record| record.outcome.contains("cooldown") || record.outcome == "busy")
+    {
+        return "provider_busy".to_string();
+    }
+    if result
+        .candidate_records
+        .iter()
+        .any(|record| record.outcome == "validation_failed")
+    {
+        return "validation_failed".to_string();
+    }
+    "provider_exhausted".to_string()
+}
+
+fn latest_failure_provider(searches: &[ProviderSearchRecord]) -> Option<String> {
+    searches
+        .iter()
+        .rev()
+        .find(|record| record.error.is_some() || record.outcome != "candidates_found")
+        .map(|record| record.provider_id.clone())
+}
+
+fn usenet_is_configured(
+    api_key: Option<&str>,
+    sabnzbd_url: Option<&str>,
+    sabnzbd_api_key: Option<&str>,
+) -> bool {
+    api_key.is_some() && sabnzbd_url.is_some() && sabnzbd_api_key.is_some()
+}
 
 fn print_progress(
     done: usize,
@@ -96,15 +177,12 @@ async fn resolve_album_track_tasks(
     artist: &str,
     album: &str,
 ) -> Result<Vec<TrackTask>, Box<dyn std::error::Error>> {
-    let releases = metadata.search_release(artist, album).await?;
-    let release = releases
-        .into_iter()
-        .find(|release| release.track_count.unwrap_or(0) > 0)
-        .ok_or_else(|| format!("MusicBrainz could not resolve album: {artist} - {album}"))?;
-    let release_with_tracks = metadata.get_release_tracks(&release.id).await?;
+    let release_with_tracks = metadata.resolve_release_with_tracks(artist, album).await?;
     if release_with_tracks.tracks.is_empty() {
-        return Err(format!("MusicBrainz returned no tracks for {artist} - {album}").into());
+        return Err(format!("No tracks found for {artist} - {album}").into());
     }
+    let release_title = release_with_tracks.release.title.clone();
+    let release_year = release_with_tracks.release.year;
 
     let mut tasks = release_with_tracks
         .tracks
@@ -128,10 +206,10 @@ async fn resolve_album_track_tasks(
                 },
                 album_artist: Some(artist.to_string()),
                 title: track.title,
-                album: Some(release.title.clone()),
+                album: Some(release_title.clone()),
                 track_number: Some(track.track_number),
                 disc_number: Some(track.disc_number),
-                year: release.year,
+                year: release_year,
                 duration_secs: if track.duration_ms > 0 {
                     Some(track.duration_ms as f64 / 1000.0)
                 } else {
@@ -244,8 +322,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resolve album tracklists with a shared MetadataService (single rate limiter).
     // MB allows 1 req/sec — the governor in MetadataService enforces this globally.
+    // Spotify credentials are passed in so the fallback chain can use them if MB/iTunes fail.
     let mut tasks = Vec::<TrackTask>::new();
-    let metadata = Arc::new(MetadataService::new().map_err(|e| e.to_string())?);
+    let spotify_id = read_setting(&db, "spotify_client_id");
+    let spotify_secret = read_setting(&db, "spotify_client_secret");
+    let metadata = Arc::new(
+        MetadataService::with_spotify(spotify_id, spotify_secret).map_err(|e| e.to_string())?,
+    );
 
     let albums_to_resolve: Vec<_> = missing_albums
         .iter()
@@ -253,7 +336,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|a| (a.artist.trim().to_string(), a.album.trim().to_string()))
         .collect();
 
-    println!("Resolving {} album tracklists via MusicBrainz...", albums_to_resolve.len());
+    println!("Resolving {} album tracklists (MB → iTunes → Spotify)...", albums_to_resolve.len());
 
     let mut skipped_albums = 0usize;
     for (artist, title) in &albums_to_resolve {
@@ -293,7 +376,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Results already collected above in the sequential loop.
     if skipped_albums > 0 {
-        println!("  ({skipped_albums} albums skipped due to MusicBrainz errors)");
+        println!("  ({skipped_albums} albums skipped — all metadata sources exhausted)");
     }
 
     println!("Will submit {} tasks (limit: {limit})", tasks.len());
@@ -342,8 +425,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         library_root: PathBuf::from(&library_base),
         temp_root: PathBuf::from(&staging_folder).join(".director-temp"),
         local_search_roots: vec![PathBuf::from(&staging_folder)],
-        worker_concurrency: 8,
-        provider_timeout_secs: 300,
+        worker_concurrency: 24,
+        provider_timeout_secs: 120,
         retry_policy: RetryPolicy {
             max_attempts_per_provider: 2,
             base_backoff_millis: 750,
@@ -361,31 +444,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         provider_policies: vec![
             ProviderPolicy {
                 provider_id: "qobuz".to_string(),
-                max_concurrency: 2,
+                max_concurrency: 8,
             },
             ProviderPolicy {
                 provider_id: "deezer".to_string(),
-                max_concurrency: 4,
+                max_concurrency: 8,
             },
             ProviderPolicy {
                 provider_id: "slskd".to_string(),
-                max_concurrency: 2,
+                max_concurrency: 4,
             },
             ProviderPolicy {
                 provider_id: "usenet".to_string(),
-                max_concurrency: 1,
+                max_concurrency: 2,
             },
             ProviderPolicy {
                 provider_id: "local_archive".to_string(),
-                max_concurrency: 2,
+                max_concurrency: 4,
             },
             ProviderPolicy {
                 provider_id: "yt_dlp".to_string(),
-                max_concurrency: 2,
+                max_concurrency: 4,
             },
             ProviderPolicy {
                 provider_id: "real_debrid".to_string(),
-                max_concurrency: 3,
+                max_concurrency: 6,
             },
         ],
         staging_root: PathBuf::from(&staging_folder),
@@ -396,30 +479,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|| std::env::var("REAL_DEBRID_KEY").ok())
         .filter(|k| !k.trim().is_empty());
 
-    let mut providers: Vec<Arc<dyn cassette_core::director::Provider>> = vec![
+    let mut providers: Vec<Arc<dyn Provider>> = vec![
         Arc::new(SlskdProvider::new(
             slskd_connection,
             vec![PathBuf::from(&staging_folder), PathBuf::from(&library_base)],
         )),
         Arc::new(QobuzProvider::new(remote_config.clone())),
         Arc::new(DeezerProvider::new(remote_config.clone())),
-        Arc::new(UsenetProvider {
-            api_key: read_setting(&db, "nzbgeek_api_key"),
-            sabnzbd_url: read_setting(&db, "sabnzbd_url"),
-            sabnzbd_api_key: read_setting(&db, "sabnzbd_api_key"),
-            scan_roots: vec![PathBuf::from(&staging_folder), PathBuf::from(&library_base)],
-        }),
         Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
         Arc::new(YtDlpProvider::new("yt-dlp")),
     ];
+    let mut readiness = Vec::<ProviderReadiness>::new();
+    let usenet_api_key = read_setting(&db, "nzbgeek_api_key");
+    let usenet_sab_url = read_setting(&db, "sabnzbd_url");
+    let usenet_sab_key = read_setting(&db, "sabnzbd_api_key");
+    if usenet_is_configured(
+        usenet_api_key.as_deref(),
+        usenet_sab_url.as_deref(),
+        usenet_sab_key.as_deref(),
+    ) {
+        providers.push(Arc::new(UsenetProvider {
+            api_key: usenet_api_key,
+            sabnzbd_url: usenet_sab_url,
+            sabnzbd_api_key: usenet_sab_key,
+            scan_roots: vec![PathBuf::from(&staging_folder), PathBuf::from(&library_base)],
+        }));
+    } else {
+        readiness.push(ProviderReadiness {
+            provider_id: "usenet".to_string(),
+            display_name: "Usenet".to_string(),
+            status: "unavailable".to_string(),
+            detail: "missing nzbgeek and/or SABnzbd configuration".to_string(),
+        });
+    }
     if let Some(key) = rd_key {
-        println!("Real-Debrid: enabled");
         providers.push(Arc::new(RealDebridProvider::new(key)));
     } else {
-        println!("Real-Debrid: not configured (set REAL_DEBRID_KEY or real_debrid_key in DB)");
+        readiness.push(ProviderReadiness {
+            provider_id: "real_debrid".to_string(),
+            display_name: "Real-Debrid".to_string(),
+            status: "unavailable".to_string(),
+            detail: "missing REAL_DEBRID_KEY / real_debrid_key".to_string(),
+        });
     }
 
-    let handle = Director::new(config, providers).start();
+    let mut usable_providers = Vec::<Arc<dyn Provider>>::new();
+    for provider in providers {
+        let descriptor = provider.descriptor();
+        match provider.health_check().await {
+            Ok(state) => {
+                let status = match state.status {
+                    ProviderHealthStatus::Healthy => "healthy",
+                    ProviderHealthStatus::Unknown => "unknown",
+                    ProviderHealthStatus::Down => "down",
+                };
+                readiness.push(ProviderReadiness {
+                    provider_id: descriptor.id.clone(),
+                    display_name: descriptor.display_name.clone(),
+                    status: status.to_string(),
+                    detail: state.message.unwrap_or_else(|| "ready".to_string()),
+                });
+                usable_providers.push(provider);
+            }
+            Err(error @ ProviderError::AuthFailed { .. })
+            | Err(error @ ProviderError::NotFound { .. }) => {
+                readiness.push(ProviderReadiness {
+                    provider_id: descriptor.id.clone(),
+                    display_name: descriptor.display_name.clone(),
+                    status: "unavailable".to_string(),
+                    detail: error.to_string(),
+                });
+            }
+            Err(error) => {
+                readiness.push(ProviderReadiness {
+                    provider_id: descriptor.id.clone(),
+                    display_name: descriptor.display_name.clone(),
+                    status: "cooldown".to_string(),
+                    detail: error.to_string(),
+                });
+                usable_providers.push(provider);
+            }
+        }
+    }
+    readiness.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+    print_provider_readiness(&readiness);
+    if usable_providers.is_empty() {
+        return Err("no usable providers remain after preflight".into());
+    }
+
+    let handle = Director::new(config, usable_providers).start();
     let mut result_rx = handle.subscribe_results();
 
     let total = tasks.len();
@@ -443,6 +591,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut finalized = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
+    let mut finalized_by_provider = HashMap::<String, usize>::new();
+    let mut failed_by_class = HashMap::<String, usize>::new();
+    let mut failed_by_provider = HashMap::<String, usize>::new();
     let start = std::time::Instant::now();
 
     print_progress(0, total, 0, 0, 0, 0, 0.0);
@@ -476,6 +627,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .as_ref()
                             .map(|f| f.provenance.selected_provider.as_str())
                             .unwrap_or("?");
+                        *finalized_by_provider.entry(provider.to_string()).or_default() += 1;
                         print!("\r\x1b[K");
                         println!("  +  {} ({})", result.task_id, provider);
                     }
@@ -486,10 +638,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     cassette_core::director::FinalizedTrackDisposition::Failed => {
                         failed += 1;
+                        let failure_class = classify_failure(&result);
+                        *failed_by_class.entry(failure_class.clone()).or_default() += 1;
+                        if let Some(provider) = latest_failure_provider(&result.provider_searches) {
+                            *failed_by_provider.entry(provider).or_default() += 1;
+                        }
                         let err = result.error.as_deref().unwrap_or("unknown");
                         let short_err = if err.len() > 60 { &err[..60] } else { err };
                         print!("\r\x1b[K");
-                        println!("  -  {} - {}", result.task_id, short_err);
+                        println!("  -  {} - {} [{}]", result.task_id, short_err, failure_class);
                     }
                     _ => {
                         skipped += 1;
@@ -511,8 +668,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== COMPLETE ===");
     println!("Finalized: {finalized} | Failed: {failed} | Skipped: {skipped}");
     println!("Total time: {elapsed}s");
+    if !finalized_by_provider.is_empty() {
+        println!("\nFinalized by provider:");
+        let mut rows = finalized_by_provider.into_iter().collect::<Vec<_>>();
+        rows.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (provider, count) in rows {
+            println!("  {provider:<14} {count}");
+        }
+    }
+    if !failed_by_class.is_empty() {
+        println!("\nFailed by class:");
+        let mut rows = failed_by_class.into_iter().collect::<Vec<_>>();
+        rows.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (class, count) in rows {
+            println!("  {class:<18} {count}");
+        }
+    }
+    if !failed_by_provider.is_empty() {
+        println!("\nFailed by provider:");
+        let mut rows = failed_by_provider.into_iter().collect::<Vec<_>>();
+        rows.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (provider, count) in rows {
+            println!("  {provider:<14} {count}");
+        }
+    }
 
     drop(handle);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usenet_preflight_requires_full_config() {
+        assert!(!usenet_is_configured(None, Some("http://sab"), Some("key")));
+        assert!(!usenet_is_configured(Some("api"), None, Some("key")));
+        assert!(!usenet_is_configured(Some("api"), Some("http://sab"), None));
+        assert!(usenet_is_configured(
+            Some("api"),
+            Some("http://sab"),
+            Some("key")
+        ));
+    }
 }

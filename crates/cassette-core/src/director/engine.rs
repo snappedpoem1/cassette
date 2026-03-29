@@ -26,6 +26,63 @@ use tracing::{info, warn};
 
 const PROVIDER_HEALTH_INTERVAL_SECS: u64 = 20;
 const PROVIDER_HEALTH_STALE_SECS: i64 = 60;
+const PROVIDER_BUSY_COOLDOWN_SECS: i64 = 20;
+const PROVIDER_TEMP_OUTAGE_COOLDOWN_SECS: i64 = 120;
+const PROVIDER_RATE_LIMIT_COOLDOWN_SECS: i64 = 300;
+const VALIDATION_FAILURE_BAIL_THRESHOLD: usize = 3;
+
+#[derive(Debug, Clone, Default)]
+struct ProviderRuntimeState {
+    unavailable_until: Option<chrono::DateTime<Utc>>,
+    unavailable_reason: Option<String>,
+    disabled_reason: Option<String>,
+    busy_streak: u32,
+}
+
+#[derive(Debug, Clone)]
+enum ProviderSkipReason {
+    HealthDown(ProviderHealthState),
+    Disabled { reason: String },
+    CoolingDown { until: chrono::DateTime<Utc>, reason: String },
+}
+
+impl ProviderSkipReason {
+    fn attempt_outcome(&self) -> String {
+        match self {
+            Self::HealthDown(state) => format!(
+                "skipped: provider health down{}",
+                state.message
+                    .as_deref()
+                    .map(|message| format!(" - {message}"))
+                    .unwrap_or_default()
+            ),
+            Self::Disabled { reason } => format!("skipped: provider unavailable - {reason}"),
+            Self::CoolingDown { until, reason } => {
+                format!("skipped: provider cooling down until {} - {reason}", until.to_rfc3339())
+            }
+        }
+    }
+
+    fn search_outcome(&self) -> &'static str {
+        match self {
+            Self::HealthDown(_) => "skipped_health_down",
+            Self::Disabled { .. } => "skipped_runtime_unavailable",
+            Self::CoolingDown { .. } => "skipped_runtime_cooldown",
+        }
+    }
+
+    fn error_message(&self) -> Option<String> {
+        match self {
+            Self::HealthDown(state) => state.message.clone(),
+            Self::Disabled { reason } => Some(reason.clone()),
+            Self::CoolingDown { reason, .. } => Some(reason.clone()),
+        }
+    }
+
+    fn retryable(&self) -> bool {
+        !matches!(self, Self::Disabled { .. })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DirectorSubmission {
@@ -127,9 +184,9 @@ impl Director {
     }
 
     pub fn start(self) -> DirectorHandle {
-        let (tx, rx) = mpsc::channel::<TrackTask>(128);
-        let (events, _) = broadcast::channel::<DirectorEvent>(256);
-        let (results, _) = broadcast::channel::<DirectorTaskResult>(256);
+        let (tx, rx) = mpsc::channel::<TrackTask>(512);
+        let (events, _) = broadcast::channel::<DirectorEvent>(1024);
+        let (results, _) = broadcast::channel::<DirectorTaskResult>(4096);
         let (provider_health, _) = broadcast::channel::<ProviderHealthState>(64);
         let cancel_token = CancellationToken::new();
         let tracker = Arc::new(TaskTracker::new());
@@ -170,6 +227,7 @@ impl Director {
         let semaphore = Arc::new(Semaphore::new(self.config.worker_concurrency.max(1)));
         let provider_limits = self.build_provider_limits();
         let provider_health_state = Arc::new(RwLock::new(HashMap::<String, ProviderHealthState>::new()));
+        let provider_runtime_state = Arc::new(RwLock::new(HashMap::<String, ProviderRuntimeState>::new()));
         let search_cache = Arc::new(
             Cache::builder()
                 .max_capacity(5_000)
@@ -237,6 +295,7 @@ impl Director {
                     let planner = self.planner.clone();
                     let search_cache_clone = Arc::clone(&search_cache);
                     let provider_health_state_clone = Arc::clone(&provider_health_state);
+                    let provider_runtime_state_clone = Arc::clone(&provider_runtime_state);
                     let events_clone = events.clone();
                     let results_clone = results.clone();
                     let provider_limits_clone = provider_limits.clone();
@@ -250,6 +309,7 @@ impl Director {
                             planner,
                             search_cache_clone,
                             provider_health_state_clone,
+                            provider_runtime_state_clone,
                             provider_limits_clone,
                             events_clone,
                             results_clone,
@@ -302,6 +362,7 @@ async fn process_task(
     planner: StrategyPlanner,
     search_cache: Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
     provider_health_state: Arc<RwLock<HashMap<String, ProviderHealthState>>>,
+    provider_runtime_state: Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     provider_limits: HashMap<String, Arc<Semaphore>>,
     events: broadcast::Sender<DirectorEvent>,
     results: broadcast::Sender<DirectorTaskResult>,
@@ -415,6 +476,7 @@ async fn process_task(
         &provider_limits,
         &search_cache,
         &provider_health_state,
+        &provider_runtime_state,
         &events,
         &task,
         &plan,
@@ -525,6 +587,7 @@ async fn try_provider(
     blocking: bool,
     config: &DirectorConfig,
     search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     events: &broadcast::Sender<DirectorEvent>,
     task: &TrackTask,
     plan: &StrategyPlan,
@@ -578,6 +641,7 @@ async fn try_provider(
     {
         Ok(candidates) => candidates,
         Err(DirectorError::Provider(error)) if error.is_busy() => {
+            apply_provider_runtime_error(provider_runtime_state, provider_id, &error).await;
             provider_searches.push(ProviderSearchRecord {
                 provider_id: provider_id.to_string(),
                 provider_display_name: descriptor.display_name.clone(),
@@ -592,6 +656,9 @@ async fn try_provider(
         }
         Err(DirectorError::TaskCancelled) => return Err(DirectorError::TaskCancelled),
         Err(error) => {
+            if let DirectorError::Provider(provider_error) = &error {
+                apply_provider_runtime_error(provider_runtime_state, provider_id, provider_error).await;
+            }
             let retryable = matches!(&error, DirectorError::Provider(provider_error) if provider_error.retryable());
             attempts.push(ProviderAttemptRecord {
                 provider_id: provider_id.to_string(),
@@ -626,7 +693,9 @@ async fn try_provider(
         error: None,
         retryable: false,
     });
+    clear_provider_runtime_cooldown(provider_runtime_state, provider_id).await;
 
+    let mut validation_failures = 0usize;
     for (search_rank, candidate) in search_candidates.into_iter().enumerate() {
         match execute_provider_acquire(
             provider,
@@ -739,11 +808,14 @@ async fn try_provider(
                                 attempts.len(),
                             )
                             .await?;
+                            clear_provider_runtime_cooldown(provider_runtime_state, provider_id).await;
                             return Ok(ProviderAttemptOutcome::Finalized(result));
                         }
                         valid_candidates.push((disposition, descriptor.clone()));
+                        clear_provider_runtime_cooldown(provider_runtime_state, provider_id).await;
                     }
                     Err(error) => {
+                        validation_failures += 1;
                         if config.temp_recovery.quarantine_failures {
                             let _ = temp_manager
                                 .quarantine_file(temp_context, &acquisition.temp_path)
@@ -770,10 +842,21 @@ async fn try_provider(
                             outcome: "validation_failed".to_string(),
                             rejection_reason: Some(error.to_string()),
                         });
+                        if validation_failures >= VALIDATION_FAILURE_BAIL_THRESHOLD {
+                            attempts.push(ProviderAttemptRecord {
+                                provider_id: provider_id.to_string(),
+                                attempt: 1,
+                                outcome: format!(
+                                    "stopping after {VALIDATION_FAILURE_BAIL_THRESHOLD} validation failures"
+                                ),
+                            });
+                            break;
+                        }
                     }
                 }
             }
             Err(DirectorError::Provider(error)) if error.is_busy() => {
+                apply_provider_runtime_error(provider_runtime_state, provider_id, &error).await;
                 provider_searches.push(ProviderSearchRecord {
                     provider_id: provider_id.to_string(),
                     provider_display_name: descriptor.display_name.clone(),
@@ -787,6 +870,9 @@ async fn try_provider(
                 return Ok(ProviderAttemptOutcome::Busy)
             }
             Err(error) => {
+                if let DirectorError::Provider(provider_error) = &error {
+                    apply_provider_runtime_error(provider_runtime_state, provider_id, provider_error).await;
+                }
                 attempts.push(ProviderAttemptRecord {
                     provider_id: provider_id.to_string(),
                     attempt: 1,
@@ -837,6 +923,7 @@ async fn execute_waterfall(
     provider_limits: &HashMap<String, Arc<Semaphore>>,
     search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
     provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
+    provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     events: &broadcast::Sender<DirectorEvent>,
     task: &TrackTask,
     plan: &StrategyPlan,
@@ -862,8 +949,14 @@ async fn execute_waterfall(
         let mut prefetch_set = tokio::task::JoinSet::new();
 
         for provider_id in plan.provider_order.iter().take(prefetch_count) {
-            // Skip unhealthy providers
-            if should_skip_provider(provider_health_state, provider_id).await.is_some() {
+            if should_skip_provider(
+                provider_health_state,
+                provider_runtime_state,
+                provider_id,
+            )
+            .await
+            .is_some()
+            {
                 continue;
             }
             let Some(provider) = provider_map.get(provider_id).cloned() else { continue };
@@ -918,28 +1011,20 @@ async fn execute_waterfall(
 
     // Pass 1: Non-blocking — try each provider, skip if semaphore is full
     for (provider_order_index, provider_id) in plan.provider_order.iter().enumerate() {
-        if let Some(state) = should_skip_provider(provider_health_state, provider_id).await {
-            attempts.push(ProviderAttemptRecord {
-                provider_id: provider_id.clone(),
-                attempt: 0,
-                outcome: format!(
-                    "skipped: provider health down{}",
-                    state.message
-                        .as_deref()
-                        .map(|message| format!(" - {message}"))
-                        .unwrap_or_default()
-                ),
-            });
-            provider_searches.push(ProviderSearchRecord {
-                provider_id: provider_id.clone(),
-                provider_display_name: provider_id.clone(),
-                provider_trust_rank: i32::MAX,
+        if let Some(reason) = should_skip_provider(
+            provider_health_state,
+            provider_runtime_state,
+            provider_id,
+        )
+        .await
+        {
+            record_provider_skip(
+                attempts,
+                provider_searches,
+                provider_id,
                 provider_order_index,
-                outcome: "skipped_health_down".to_string(),
-                candidate_count: 0,
-                error: state.message.clone(),
-                retryable: true,
-            });
+                &reason,
+            );
             continue;
         }
         let Some(provider) = provider_map.get(provider_id) else {
@@ -957,6 +1042,7 @@ async fn execute_waterfall(
             false, // non-blocking
             config,
             search_cache,
+            provider_runtime_state,
             events,
             task,
             plan,
@@ -1004,28 +1090,20 @@ async fn execute_waterfall(
         let Some(provider_order_index) = plan.provider_order.iter().position(|id| id == provider_id) else {
             continue;
         };
-        if let Some(state) = should_skip_provider(provider_health_state, provider_id).await {
-            attempts.push(ProviderAttemptRecord {
-                provider_id: provider_id.clone(),
-                attempt: 0,
-                outcome: format!(
-                    "skipped: provider health down{}",
-                    state.message
-                        .as_deref()
-                        .map(|message| format!(" - {message}"))
-                        .unwrap_or_default()
-                ),
-            });
-            provider_searches.push(ProviderSearchRecord {
-                provider_id: provider_id.clone(),
-                provider_display_name: provider_id.clone(),
-                provider_trust_rank: i32::MAX,
+        if let Some(reason) = should_skip_provider(
+            provider_health_state,
+            provider_runtime_state,
+            provider_id,
+        )
+        .await
+        {
+            record_provider_skip(
+                attempts,
+                provider_searches,
+                provider_id,
                 provider_order_index,
-                outcome: "skipped_health_down".to_string(),
-                candidate_count: 0,
-                error: state.message.clone(),
-                retryable: true,
-            });
+                &reason,
+            );
             continue;
         }
         let Some(provider) = provider_map.get(provider_id) else {
@@ -1043,6 +1121,7 @@ async fn execute_waterfall(
             true, // blocking
             config,
             search_cache,
+            provider_runtime_state,
             events,
             task,
             plan,
@@ -1310,10 +1389,106 @@ fn unregister_task_token(
     }
 }
 
+fn record_provider_skip(
+    attempts: &mut Vec<ProviderAttemptRecord>,
+    provider_searches: &mut Vec<ProviderSearchRecord>,
+    provider_id: &str,
+    provider_order_index: usize,
+    reason: &ProviderSkipReason,
+) {
+    attempts.push(ProviderAttemptRecord {
+        provider_id: provider_id.to_string(),
+        attempt: 0,
+        outcome: reason.attempt_outcome(),
+    });
+    provider_searches.push(ProviderSearchRecord {
+        provider_id: provider_id.to_string(),
+        provider_display_name: provider_id.to_string(),
+        provider_trust_rank: i32::MAX,
+        provider_order_index,
+        outcome: reason.search_outcome().to_string(),
+        candidate_count: 0,
+        error: reason.error_message(),
+        retryable: reason.retryable(),
+    });
+}
+
+async fn apply_provider_runtime_error(
+    provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
+    provider_id: &str,
+    error: &ProviderError,
+) {
+    let mut state_map = provider_runtime_state.write().await;
+    let state = state_map
+        .entry(provider_id.to_string())
+        .or_insert_with(ProviderRuntimeState::default);
+    let now = Utc::now();
+    match error {
+        ProviderError::AuthFailed { .. } => {
+            state.disabled_reason = Some(error.to_string());
+            state.unavailable_until = None;
+            state.unavailable_reason = Some(error.to_string());
+            state.busy_streak = 0;
+        }
+        ProviderError::RateLimited { .. } => {
+            state.unavailable_until =
+                Some(now + chrono::Duration::seconds(PROVIDER_RATE_LIMIT_COOLDOWN_SECS));
+            state.unavailable_reason = Some(error.to_string());
+            state.busy_streak = 0;
+        }
+        ProviderError::TemporaryOutage { .. } => {
+            state.unavailable_until =
+                Some(now + chrono::Duration::seconds(PROVIDER_TEMP_OUTAGE_COOLDOWN_SECS));
+            state.unavailable_reason = Some(error.to_string());
+            state.busy_streak = 0;
+        }
+        ProviderError::ProviderBusy { .. } => {
+            state.busy_streak = state.busy_streak.saturating_add(1);
+            if state.busy_streak >= 2 {
+                state.unavailable_until =
+                    Some(now + chrono::Duration::seconds(PROVIDER_BUSY_COOLDOWN_SECS));
+                state.unavailable_reason = Some(error.to_string());
+            }
+        }
+        _ => {
+            state.busy_streak = 0;
+        }
+    }
+}
+
+async fn clear_provider_runtime_cooldown(
+    provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
+    provider_id: &str,
+) {
+    let mut state_map = provider_runtime_state.write().await;
+    if let Some(state) = state_map.get_mut(provider_id) {
+        state.unavailable_until = None;
+        state.unavailable_reason = None;
+        state.busy_streak = 0;
+    }
+}
+
 async fn should_skip_provider(
     provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
+    provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     provider_id: &str,
-) -> Option<ProviderHealthState> {
+) -> Option<ProviderSkipReason> {
+    let runtime_state = provider_runtime_state.read().await.get(provider_id).cloned();
+    if let Some(runtime_state) = runtime_state {
+        if let Some(reason) = runtime_state.disabled_reason {
+            return Some(ProviderSkipReason::Disabled { reason });
+        }
+        if let Some(until) = runtime_state.unavailable_until {
+            if until > Utc::now() {
+                return Some(ProviderSkipReason::CoolingDown {
+                    until,
+                    reason: runtime_state
+                        .unavailable_reason
+                        .unwrap_or_else(|| "provider cooling down".to_string()),
+                });
+            }
+        }
+    }
     let state = provider_health_state.read().await.get(provider_id).cloned()?;
     let age_secs = chrono::Utc::now()
         .signed_duration_since(state.checked_at)
@@ -1321,7 +1496,8 @@ async fn should_skip_provider(
     if age_secs > PROVIDER_HEALTH_STALE_SECS {
         return None;
     }
-    matches!(state.status, ProviderHealthStatus::Down).then_some(state)
+    matches!(state.status, ProviderHealthStatus::Down)
+        .then_some(ProviderSkipReason::HealthDown(state))
 }
 
 async fn run_provider_health_loop(
@@ -1426,6 +1602,8 @@ mod tests {
         payload: Vec<u8>,
         acquire_gate: Option<Arc<Notify>>,
         health_status: Option<ProviderHealthStatus>,
+        search_error: Option<ProviderError>,
+        acquire_error: Option<ProviderError>,
     }
 
     #[async_trait]
@@ -1454,6 +1632,9 @@ mod tests {
             _task: &TrackTask,
             _strategy: &StrategyPlan,
         ) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
+            if let Some(error) = &self.search_error {
+                return Err(error.clone());
+            }
             Ok(self.search_candidates.clone())
         }
 
@@ -1466,6 +1647,9 @@ mod tests {
         ) -> Result<crate::director::models::CandidateAcquisition, ProviderError> {
             if let Some(gate) = &self.acquire_gate {
                 gate.notified().await;
+            }
+            if let Some(error) = &self.acquire_error {
+                return Err(error.clone());
             }
             let extension = candidate
                 .extension_hint
@@ -1544,6 +1728,8 @@ mod tests {
             payload,
             acquire_gate: None,
             health_status: None,
+            search_error: None,
+            acquire_error: None,
         })
     }
 
@@ -1581,6 +1767,8 @@ mod tests {
             payload,
             acquire_gate: Some(acquire_gate),
             health_status: None,
+            search_error: None,
+            acquire_error: None,
         })
     }
 
@@ -1612,6 +1800,8 @@ mod tests {
             payload: build_wav_bytes(),
             acquire_gate: None,
             health_status: Some(ProviderHealthStatus::Down),
+            search_error: None,
+            acquire_error: None,
         })
     }
 
@@ -1643,6 +1833,30 @@ mod tests {
             payload: build_wav_bytes(),
             acquire_gate: None,
             health_status: None,
+            search_error: None,
+            acquire_error: None,
+        })
+    }
+
+    fn search_error_provider(id: &str, trust_rank: i32, error: ProviderError) -> Arc<dyn Provider> {
+        Arc::new(MockProvider {
+            descriptor: ProviderDescriptor {
+                id: id.to_string(),
+                display_name: id.to_string(),
+                trust_rank,
+                capabilities: ProviderCapabilities {
+                    supports_search: true,
+                    supports_download: true,
+                    supports_lossless: true,
+                    supports_batch: false,
+                },
+            },
+            search_candidates: Vec::new(),
+            payload: build_wav_bytes(),
+            acquire_gate: None,
+            health_status: None,
+            search_error: Some(error),
+            acquire_error: None,
         })
     }
 
@@ -1967,5 +2181,199 @@ mod tests {
             .iter()
             .any(|attempt| attempt.provider_id == "down"
                 && attempt.outcome.contains("skipped: provider health down")));
+    }
+
+    #[tokio::test]
+    async fn director_auth_failure_disables_provider_for_following_tasks() {
+        let root = tempdir().expect("temp dir");
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            provider_policies: vec![
+                ProviderPolicy {
+                    provider_id: "auth".to_string(),
+                    max_concurrency: 1,
+                },
+                ProviderPolicy {
+                    provider_id: "fallback".to_string(),
+                    max_concurrency: 1,
+                },
+            ],
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(
+            config,
+            vec![
+                search_error_provider(
+                    "auth",
+                    1,
+                    ProviderError::AuthFailed {
+                        provider_id: "auth".to_string(),
+                    },
+                ),
+                provider("fallback", 5, build_wav_bytes(), "wav"),
+            ],
+        );
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+
+        handle
+            .submitter
+            .submit(task(AcquisitionStrategy::Standard))
+            .await
+            .expect("submit task one");
+        let task_two = TrackTask {
+            task_id: "task-2".to_string(),
+            ..task(AcquisitionStrategy::Standard)
+        };
+        handle
+            .submitter
+            .submit(task_two)
+            .await
+            .expect("submit task two");
+
+        let mut seen = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while seen.len() < 2 {
+                let result = results.recv().await.expect("receive result");
+                if matches!(
+                    result.disposition,
+                    FinalizedTrackDisposition::Finalized
+                        | FinalizedTrackDisposition::AlreadyPresent
+                ) {
+                    seen.push(result);
+                }
+            }
+        })
+        .await
+        .expect("results received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        let second = seen.iter().find(|result| result.task_id == "task-2").expect("second result");
+        assert!(second
+            .attempts
+            .iter()
+            .any(|attempt| attempt.provider_id == "auth"
+                && attempt.outcome.contains("skipped: provider unavailable")));
+    }
+
+    #[tokio::test]
+    async fn director_busy_provider_cools_down_for_following_tasks() {
+        let root = tempdir().expect("temp dir");
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            provider_policies: vec![
+                ProviderPolicy {
+                    provider_id: "busy".to_string(),
+                    max_concurrency: 1,
+                },
+                ProviderPolicy {
+                    provider_id: "fallback".to_string(),
+                    max_concurrency: 1,
+                },
+            ],
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(
+            config,
+            vec![
+                search_error_provider(
+                    "busy",
+                    1,
+                    ProviderError::ProviderBusy {
+                        provider_id: "busy".to_string(),
+                    },
+                ),
+                provider("fallback", 5, build_wav_bytes(), "wav"),
+            ],
+        );
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+
+        handle
+            .submitter
+            .submit(task(AcquisitionStrategy::Standard))
+            .await
+            .expect("submit task one");
+        let task_two = TrackTask {
+            task_id: "task-2".to_string(),
+            ..task(AcquisitionStrategy::Standard)
+        };
+        handle
+            .submitter
+            .submit(task_two)
+            .await
+            .expect("submit task two");
+
+        let mut seen = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while seen.len() < 2 {
+                let result = results.recv().await.expect("receive result");
+                if matches!(
+                    result.disposition,
+                    FinalizedTrackDisposition::Finalized
+                        | FinalizedTrackDisposition::AlreadyPresent
+                ) {
+                    seen.push(result);
+                }
+            }
+        })
+        .await
+        .expect("results received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        let second = seen.iter().find(|result| result.task_id == "task-2").expect("second result");
+        assert!(
+            second
+                .attempts
+                .iter()
+                .any(|attempt| attempt.provider_id == "busy"
+                    && (attempt.outcome.contains("cooling down")
+                        || attempt.outcome.contains("provider busy")
+                        || attempt.outcome.contains("provider unavailable")))
+                || second.provider_searches.iter().any(|record| {
+                    record.provider_id == "busy"
+                        && matches!(
+                            record.outcome.as_str(),
+                            "busy" | "skipped_runtime_cooldown" | "skipped_runtime_unavailable"
+                        )
+                }),
+            "attempts={:?} provider_searches={:?}",
+            second.attempts,
+            second.provider_searches
+        );
     }
 }

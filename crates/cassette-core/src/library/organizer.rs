@@ -311,7 +311,7 @@ pub fn ingest_staging(staging: &str, library_base: &str) -> Result<Vec<String>> 
 
 fn sanitize_filename(name: &str) -> String {
     let trimmed = name.trim();
-    trimmed.chars().map(|c| match c {
+    let sanitized = trimmed.chars().map(|c| match c {
         '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
         '\0' => '_',
         c => c,
@@ -319,7 +319,16 @@ fn sanitize_filename(name: &str) -> String {
     .collect::<String>()
     .trim_end_matches('.')
     .trim()
-    .to_string()
+    .to_string();
+
+    if sanitized.is_empty() && !trimmed.is_empty() {
+        if trimmed.chars().all(|c| c == '.') {
+            return "dot".to_string();
+        }
+        return "Unknown".to_string();
+    }
+
+    sanitized
 }
 
 fn normalize(s: &str) -> String {
@@ -346,5 +355,50 @@ fn cleanup_empty_dir(dir: &Path) {
             Some(p) => current = p.to_path_buf(),
             None => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_path, sanitize_filename};
+    use crate::models::Track;
+
+    fn sample_track() -> Track {
+        Track {
+            id: 1,
+            path: r"A:\music\girl in red\if i could make it go quiet (2021)\09 - 09 - Unknown.flac"
+                .to_string(),
+            title: ".".to_string(),
+            artist: "girl in red".to_string(),
+            album: "if i could make it go quiet".to_string(),
+            album_artist: "girl in red".to_string(),
+            track_number: Some(9),
+            disc_number: Some(1),
+            year: Some(2021),
+            duration_secs: 0.0,
+            sample_rate: None,
+            bit_depth: None,
+            bitrate_kbps: None,
+            format: "flac".to_string(),
+            file_size: 0,
+            cover_art_path: None,
+            added_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn sanitize_filename_handles_punctuation_only_titles_stably() {
+        assert_eq!(sanitize_filename("."), "dot");
+        assert_eq!(sanitize_filename("..."), "dot");
+        assert_eq!(sanitize_filename("///"), "___");
+    }
+
+    #[test]
+    fn canonical_path_does_not_reuse_existing_garbage_basename() {
+        let path = canonical_path(r"A:\music", &sample_track());
+        assert_eq!(
+            path.to_string_lossy(),
+            r"A:\music\girl in red\if i could make it go quiet (2021)\09 - dot.flac"
+        );
     }
 }

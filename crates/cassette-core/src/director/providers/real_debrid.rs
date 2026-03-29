@@ -272,9 +272,26 @@ impl RealDebridProvider {
         let torrent_id = add_response
             .get("id")
             .and_then(Value::as_str)
-            .ok_or_else(|| ProviderError::Other {
-                provider_id: PROVIDER_ID.to_string(),
-                message: format!("No torrent ID in addMagnet response: {add_response}"),
+            .ok_or_else(|| {
+                let rate_limited = add_response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(|value| value.eq_ignore_ascii_case("too_many_requests"))
+                    .unwrap_or(false)
+                    || add_response
+                        .get("error_code")
+                        .and_then(Value::as_i64)
+                        == Some(34);
+                if rate_limited {
+                    ProviderError::RateLimited {
+                        provider_id: PROVIDER_ID.to_string(),
+                    }
+                } else {
+                    ProviderError::Other {
+                        provider_id: PROVIDER_ID.to_string(),
+                        message: format!("No torrent ID in addMagnet response: {add_response}"),
+                    }
+                }
             })?
             .to_string();
 
