@@ -31,6 +31,8 @@ pub enum DirectorError {
     NetworkError(String),
     #[error("http error: {0}")]
     HttpError(u16),
+    #[error("http error {status} with retry-after {retry_after_secs}s")]
+    HttpRetryAfter { status: u16, retry_after_secs: u64 },
     #[error("download timeout")]
     Timeout,
     #[error("file too large: {size} bytes (max: {max})")]
@@ -99,6 +101,8 @@ pub enum ValidationError {
     ImplausibleDuration { message: String },
     #[error("extension mismatch: expected {expected}, actual {actual}")]
     ExtensionMismatch { expected: String, actual: String },
+    #[error("codec mismatch: expected {expected}, actual {actual}")]
+    CodecMismatch { expected: String, actual: String },
     #[error("candidate rejected: {message}")]
     Rejected { message: String },
 }

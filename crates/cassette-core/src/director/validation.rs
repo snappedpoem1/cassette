@@ -81,6 +81,8 @@ fn validate_candidate_blocking(
         .ok_or_else(|| ValidationError::UnreadableContainer {
             message: "no default audio track".to_string(),
         })?;
+    let audio_readable = track.codec_params.sample_rate.is_some() || track.codec_params.n_frames.is_some();
+    let header_readable = true;
 
     let n_frames = track.codec_params.n_frames.unwrap_or_default();
     let sample_rate = track.codec_params.sample_rate.unwrap_or_default() as f64;
@@ -100,6 +102,15 @@ fn validate_candidate_blocking(
             expected: ext.clone(),
             actual: signature_format.unwrap_or_else(|| "unknown".to_string()),
         });
+    }
+
+    if let Some(actual_codec) = detect_codec_name(track.codec_params.codec) {
+        if !codec_matches_extension(&ext, &actual_codec) {
+            return Err(ValidationError::CodecMismatch {
+                expected: ext.clone(),
+                actual: actual_codec,
+            });
+        }
     }
 
     let format_name = if ext.is_empty() { signature_format } else { Some(ext.clone()) };
@@ -140,8 +151,8 @@ fn validate_candidate_blocking(
         is_valid: issues.is_empty(),
         format_name,
         duration_secs,
-        audio_readable: true,
-        header_readable: true,
+        audio_readable,
+        header_readable,
         extension_ok,
         file_size,
         quality,
@@ -160,6 +171,41 @@ fn validate_candidate_blocking(
                 .join("; "),
         })
     }
+}
+
+fn detect_codec_name(codec: symphonia::core::codecs::CodecType) -> Option<String> {
+    let debug = format!("{codec:?}").to_ascii_lowercase();
+    if debug.contains("flac") {
+        Some("flac".to_string())
+    } else if debug.contains("mp3") {
+        Some("mp3".to_string())
+    } else if debug.contains("aac") {
+        Some("aac".to_string())
+    } else if debug.contains("opus") {
+        Some("opus".to_string())
+    } else if debug.contains("vorbis") {
+        Some("ogg".to_string())
+    } else if debug.contains("pcm") || debug.contains("wav") {
+        Some("wav".to_string())
+    } else if debug.contains("alac") || debug.contains("mp4") {
+        Some("m4a".to_string())
+    } else {
+        None
+    }
+}
+
+fn codec_matches_extension(ext: &str, actual_codec: &str) -> bool {
+    matches!(
+        (ext, actual_codec),
+        ("flac", "flac")
+            | ("mp3", "mp3")
+            | ("aac", "aac")
+            | ("m4a", "m4a")
+            | ("m4a", "aac")
+            | ("opus", "opus")
+            | ("ogg", "ogg")
+            | ("wav", "wav")
+    )
 }
 
 fn detect_signature_format(bytes: &[u8]) -> Option<String> {

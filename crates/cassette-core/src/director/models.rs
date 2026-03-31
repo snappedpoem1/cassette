@@ -22,6 +22,10 @@ pub struct NormalizedTrack {
 pub struct TrackTask {
     pub task_id: String,
     pub source: TrackTaskSource,
+    #[serde(default)]
+    pub desired_track_id: Option<i64>,
+    #[serde(default)]
+    pub source_operation_id: Option<String>,
     pub target: NormalizedTrack,
     pub strategy: AcquisitionStrategy,
 }

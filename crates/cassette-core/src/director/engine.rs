@@ -19,17 +19,11 @@ use moka::sync::Cache;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
+use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
-
-const PROVIDER_HEALTH_INTERVAL_SECS: u64 = 20;
-const PROVIDER_HEALTH_STALE_SECS: i64 = 60;
-const PROVIDER_BUSY_COOLDOWN_SECS: i64 = 20;
-const PROVIDER_TEMP_OUTAGE_COOLDOWN_SECS: i64 = 120;
-const PROVIDER_RATE_LIMIT_COOLDOWN_SECS: i64 = 300;
-const VALIDATION_FAILURE_BAIL_THRESHOLD: usize = 3;
 
 #[derive(Debug, Clone, Default)]
 struct ProviderRuntimeState {
@@ -228,18 +222,31 @@ impl Director {
         let provider_limits = self.build_provider_limits();
         let provider_health_state = Arc::new(RwLock::new(HashMap::<String, ProviderHealthState>::new()));
         let provider_runtime_state = Arc::new(RwLock::new(HashMap::<String, ProviderRuntimeState>::new()));
+        let provider_cache_epochs = Arc::new(RwLock::new(HashMap::<String, u64>::new()));
         let search_cache = Arc::new(
             Cache::builder()
-                .max_capacity(5_000)
-                .time_to_live(std::time::Duration::from_secs(30 * 60))
+                .max_capacity(self.config.search_cache_capacity.max(1))
+                .time_to_live(std::time::Duration::from_secs(
+                    self.config.search_cache_ttl_secs.max(1),
+                ))
                 .build(),
         );
         let health_token = cancel_token.child_token();
         let health_providers = self.providers.clone();
+        let health_config = self.config.clone();
         let health_state = Arc::clone(&provider_health_state);
+        let health_cache_epochs = Arc::clone(&provider_cache_epochs);
         let health_events = provider_health.clone();
         task_tracker.spawn(async move {
-            run_provider_health_loop(health_providers, health_state, health_events, health_token).await;
+            run_provider_health_loop(
+                health_providers,
+                health_config,
+                health_state,
+                health_cache_epochs,
+                health_events,
+                health_token,
+            )
+            .await;
         });
         loop {
             tokio::select! {
@@ -294,6 +301,7 @@ impl Director {
                     let providers = self.providers.clone();
                     let planner = self.planner.clone();
                     let search_cache_clone = Arc::clone(&search_cache);
+                    let provider_cache_epochs_clone = Arc::clone(&provider_cache_epochs);
                     let provider_health_state_clone = Arc::clone(&provider_health_state);
                     let provider_runtime_state_clone = Arc::clone(&provider_runtime_state);
                     let events_clone = events.clone();
@@ -308,6 +316,7 @@ impl Director {
                             providers,
                             planner,
                             search_cache_clone,
+                            provider_cache_epochs_clone,
                             provider_health_state_clone,
                             provider_runtime_state_clone,
                             provider_limits_clone,
@@ -361,6 +370,7 @@ async fn process_task(
     providers: Vec<Arc<dyn Provider>>,
     planner: StrategyPlanner,
     search_cache: Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_cache_epochs: Arc<RwLock<HashMap<String, u64>>>,
     provider_health_state: Arc<RwLock<HashMap<String, ProviderHealthState>>>,
     provider_runtime_state: Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     provider_limits: HashMap<String, Arc<Semaphore>>,
@@ -475,6 +485,7 @@ async fn process_task(
         &providers,
         &provider_limits,
         &search_cache,
+        &provider_cache_epochs,
         &provider_health_state,
         &provider_runtime_state,
         &events,
@@ -587,6 +598,7 @@ async fn try_provider(
     blocking: bool,
     config: &DirectorConfig,
     search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_cache_epochs: &Arc<RwLock<HashMap<String, u64>>>,
     provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     events: &broadcast::Sender<DirectorEvent>,
     task: &TrackTask,
@@ -633,6 +645,7 @@ async fn try_provider(
         plan,
         config,
         search_cache,
+        provider_cache_epochs,
         Arc::clone(limit),
         blocking,
         cancel_token,
@@ -641,7 +654,7 @@ async fn try_provider(
     {
         Ok(candidates) => candidates,
         Err(DirectorError::Provider(error)) if error.is_busy() => {
-            apply_provider_runtime_error(provider_runtime_state, provider_id, &error).await;
+            apply_provider_runtime_error(config, provider_runtime_state, provider_id, &error).await;
             provider_searches.push(ProviderSearchRecord {
                 provider_id: provider_id.to_string(),
                 provider_display_name: descriptor.display_name.clone(),
@@ -657,7 +670,7 @@ async fn try_provider(
         Err(DirectorError::TaskCancelled) => return Err(DirectorError::TaskCancelled),
         Err(error) => {
             if let DirectorError::Provider(provider_error) = &error {
-                apply_provider_runtime_error(provider_runtime_state, provider_id, provider_error).await;
+                apply_provider_runtime_error(config, provider_runtime_state, provider_id, provider_error).await;
             }
             let retryable = matches!(&error, DirectorError::Provider(provider_error) if provider_error.retryable());
             attempts.push(ProviderAttemptRecord {
@@ -842,12 +855,13 @@ async fn try_provider(
                             outcome: "validation_failed".to_string(),
                             rejection_reason: Some(error.to_string()),
                         });
-                        if validation_failures >= VALIDATION_FAILURE_BAIL_THRESHOLD {
+                        if validation_failures >= config.validation_failure_bail_threshold {
                             attempts.push(ProviderAttemptRecord {
                                 provider_id: provider_id.to_string(),
                                 attempt: 1,
                                 outcome: format!(
-                                    "stopping after {VALIDATION_FAILURE_BAIL_THRESHOLD} validation failures"
+                                    "stopping after {} validation failures",
+                                    config.validation_failure_bail_threshold
                                 ),
                             });
                             break;
@@ -856,7 +870,7 @@ async fn try_provider(
                 }
             }
             Err(DirectorError::Provider(error)) if error.is_busy() => {
-                apply_provider_runtime_error(provider_runtime_state, provider_id, &error).await;
+                apply_provider_runtime_error(config, provider_runtime_state, provider_id, &error).await;
                 provider_searches.push(ProviderSearchRecord {
                     provider_id: provider_id.to_string(),
                     provider_display_name: descriptor.display_name.clone(),
@@ -871,7 +885,7 @@ async fn try_provider(
             }
             Err(error) => {
                 if let DirectorError::Provider(provider_error) = &error {
-                    apply_provider_runtime_error(provider_runtime_state, provider_id, provider_error).await;
+                    apply_provider_runtime_error(config, provider_runtime_state, provider_id, provider_error).await;
                 }
                 attempts.push(ProviderAttemptRecord {
                     provider_id: provider_id.to_string(),
@@ -922,6 +936,7 @@ async fn execute_waterfall(
     providers: &[Arc<dyn Provider>],
     provider_limits: &HashMap<String, Arc<Semaphore>>,
     search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_cache_epochs: &Arc<RwLock<HashMap<String, u64>>>,
     provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
     provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     events: &broadcast::Sender<DirectorEvent>,
@@ -950,6 +965,7 @@ async fn execute_waterfall(
 
         for provider_id in plan.provider_order.iter().take(prefetch_count) {
             if should_skip_provider(
+                config,
                 provider_health_state,
                 provider_runtime_state,
                 provider_id,
@@ -962,7 +978,7 @@ async fn execute_waterfall(
             let Some(provider) = provider_map.get(provider_id).cloned() else { continue };
             let Some(limit) = provider_limits.get(provider_id).cloned() else { continue };
 
-            let cache_key = provider_search_cache_key(&provider_id, task);
+            let cache_key = provider_search_cache_key(provider_cache_epochs, &provider_id, task).await;
             if search_cache.get(&cache_key).is_some() {
                 continue; // already cached
             }
@@ -972,6 +988,7 @@ async fn execute_waterfall(
             let plan_clone = plan.clone();
             let cancel_clone = cancel_token.clone();
             let cache_clone = Arc::clone(search_cache);
+            let provider_cache_epochs_clone = Arc::clone(provider_cache_epochs);
             let provider_id_clone = provider_id.clone();
 
             prefetch_set.spawn(async move {
@@ -992,7 +1009,12 @@ async fn execute_waterfall(
                 ).await;
                 drop(permit);
                 if let Ok(results) = result {
-                    let key = provider_search_cache_key(&provider_id_clone, &task_clone);
+                    let key = provider_search_cache_key(
+                        &provider_cache_epochs_clone,
+                        &provider_id_clone,
+                        &task_clone,
+                    )
+                    .await;
                     cache_clone.insert(key, Arc::new(results));
                 }
             });
@@ -1012,6 +1034,7 @@ async fn execute_waterfall(
     // Pass 1: Non-blocking — try each provider, skip if semaphore is full
     for (provider_order_index, provider_id) in plan.provider_order.iter().enumerate() {
         if let Some(reason) = should_skip_provider(
+            config,
             provider_health_state,
             provider_runtime_state,
             provider_id,
@@ -1042,6 +1065,7 @@ async fn execute_waterfall(
             false, // non-blocking
             config,
             search_cache,
+            provider_cache_epochs,
             provider_runtime_state,
             events,
             task,
@@ -1091,6 +1115,7 @@ async fn execute_waterfall(
             continue;
         };
         if let Some(reason) = should_skip_provider(
+            config,
             provider_health_state,
             provider_runtime_state,
             provider_id,
@@ -1121,6 +1146,7 @@ async fn execute_waterfall(
             true, // blocking
             config,
             search_cache,
+            provider_cache_epochs,
             provider_runtime_state,
             events,
             task,
@@ -1284,11 +1310,12 @@ async fn execute_provider_search(
     plan: &StrategyPlan,
     config: &DirectorConfig,
     search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_cache_epochs: &Arc<RwLock<HashMap<String, u64>>>,
     provider_limit: Arc<Semaphore>,
     blocking: bool,
     cancel_token: &CancellationToken,
 ) -> Result<Vec<ProviderSearchCandidate>, DirectorError> {
-    let cache_key = provider_search_cache_key(&provider.descriptor().id, task);
+    let cache_key = provider_search_cache_key(provider_cache_epochs, &provider.descriptor().id, task).await;
     if let Some(cached) = search_cache.get(&cache_key) {
         return Ok(cached.as_ref().clone());
     }
@@ -1414,6 +1441,7 @@ fn record_provider_skip(
 }
 
 async fn apply_provider_runtime_error(
+    config: &DirectorConfig,
     provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     provider_id: &str,
     error: &ProviderError,
@@ -1432,13 +1460,13 @@ async fn apply_provider_runtime_error(
         }
         ProviderError::RateLimited { .. } => {
             state.unavailable_until =
-                Some(now + chrono::Duration::seconds(PROVIDER_RATE_LIMIT_COOLDOWN_SECS));
+                Some(now + chrono::Duration::seconds(config.provider_rate_limit_cooldown_secs));
             state.unavailable_reason = Some(error.to_string());
             state.busy_streak = 0;
         }
         ProviderError::TemporaryOutage { .. } => {
             state.unavailable_until =
-                Some(now + chrono::Duration::seconds(PROVIDER_TEMP_OUTAGE_COOLDOWN_SECS));
+                Some(now + chrono::Duration::seconds(config.provider_temp_outage_cooldown_secs));
             state.unavailable_reason = Some(error.to_string());
             state.busy_streak = 0;
         }
@@ -1446,7 +1474,7 @@ async fn apply_provider_runtime_error(
             state.busy_streak = state.busy_streak.saturating_add(1);
             if state.busy_streak >= 2 {
                 state.unavailable_until =
-                    Some(now + chrono::Duration::seconds(PROVIDER_BUSY_COOLDOWN_SECS));
+                    Some(now + chrono::Duration::seconds(config.provider_busy_cooldown_secs));
                 state.unavailable_reason = Some(error.to_string());
             }
         }
@@ -1469,6 +1497,7 @@ async fn clear_provider_runtime_cooldown(
 }
 
 async fn should_skip_provider(
+    config: &DirectorConfig,
     provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
     provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
     provider_id: &str,
@@ -1493,7 +1522,7 @@ async fn should_skip_provider(
     let age_secs = chrono::Utc::now()
         .signed_duration_since(state.checked_at)
         .num_seconds();
-    if age_secs > PROVIDER_HEALTH_STALE_SECS {
+    if age_secs > config.provider_health_stale_secs {
         return None;
     }
     matches!(state.status, ProviderHealthStatus::Down)
@@ -1502,7 +1531,9 @@ async fn should_skip_provider(
 
 async fn run_provider_health_loop(
     providers: Vec<Arc<dyn Provider>>,
+    config: DirectorConfig,
     provider_health_state: Arc<RwLock<HashMap<String, ProviderHealthState>>>,
+    provider_cache_epochs: Arc<RwLock<HashMap<String, u64>>>,
     provider_health_events: broadcast::Sender<ProviderHealthState>,
     cancel_token: CancellationToken,
 ) {
@@ -1513,27 +1544,40 @@ async fn run_provider_health_loop(
     ordered.sort_by(|left, right| left.0.cmp(&right.0));
 
     loop {
+        let mut probes = JoinSet::new();
         for (provider_id, provider) in &ordered {
             if cancel_token.is_cancelled() {
                 return;
             }
-
-            let probe_result = provider.health_check().await;
-            let checked_at = Utc::now();
-            let next_state = match probe_result {
-                Ok(mut state) => {
-                    state.provider_id = provider_id.clone();
-                    state.checked_at = checked_at;
-                    state
+            let provider_id = provider_id.clone();
+            let provider = Arc::clone(provider);
+            probes.spawn(async move {
+                let probe_result = provider.health_check().await;
+                let checked_at = Utc::now();
+                match probe_result {
+                    Ok(mut state) => {
+                        state.provider_id = provider_id;
+                        state.checked_at = checked_at;
+                        state
+                    }
+                    Err(error) => ProviderHealthState {
+                        provider_id,
+                        status: ProviderHealthStatus::Down,
+                        checked_at,
+                        message: Some(error.to_string()),
+                    },
                 }
-                Err(error) => ProviderHealthState {
-                    provider_id: provider_id.clone(),
-                    status: ProviderHealthStatus::Down,
-                    checked_at,
-                    message: Some(error.to_string()),
-                },
-            };
+            });
+        }
 
+        while let Some(joined) = probes.join_next().await {
+            if cancel_token.is_cancelled() {
+                return;
+            }
+            let Ok(next_state) = joined else {
+                continue;
+            };
+            let provider_id = next_state.provider_id.clone();
             let changed = {
                 let mut states = provider_health_state.write().await;
                 let previous = states.insert(provider_id.clone(), next_state.clone());
@@ -1543,13 +1587,19 @@ async fn run_provider_health_loop(
             };
 
             if changed {
+                let should_bump_epoch = !matches!(next_state.status, ProviderHealthStatus::Healthy);
+                if should_bump_epoch {
+                    let mut epochs = provider_cache_epochs.write().await;
+                    let next_epoch = epochs.get(&provider_id).copied().unwrap_or(0).saturating_add(1);
+                    epochs.insert(provider_id.clone(), next_epoch);
+                }
                 let _ = provider_health_events.send(next_state);
             }
         }
 
         tokio::select! {
             _ = cancel_token.cancelled() => return,
-            _ = sleep(std::time::Duration::from_secs(PROVIDER_HEALTH_INTERVAL_SECS)) => {}
+            _ = sleep(std::time::Duration::from_secs(config.provider_health_interval_secs.max(1))) => {}
         }
     }
 }
@@ -1569,10 +1619,22 @@ fn send_event(
     });
 }
 
-fn provider_search_cache_key(provider_id: &str, task: &TrackTask) -> String {
+async fn provider_search_cache_key(
+    provider_cache_epochs: &Arc<RwLock<HashMap<String, u64>>>,
+    provider_id: &str,
+    task: &TrackTask,
+) -> String {
+    let epoch = provider_cache_epochs
+        .read()
+        .await
+        .get(provider_id)
+        .copied()
+        .unwrap_or(0);
     format!(
-        "{}::{}::{}::{}",
+        "{}::{}::{}::{}::{}::{}",
         provider_id,
+        epoch,
+        task.strategy as u8,
         normalize_cache_component(&task.target.artist),
         normalize_cache_component(task.target.album.as_deref().unwrap_or_default()),
         normalize_cache_component(&task.target.title),
@@ -1678,6 +1740,8 @@ mod tests {
         TrackTask {
             task_id: "task-1".to_string(),
             source: TrackTaskSource::Manual,
+            desired_track_id: None,
+            source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,

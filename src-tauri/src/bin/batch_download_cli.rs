@@ -196,6 +196,8 @@ async fn resolve_album_track_tasks(
                 &track.title,
             ),
             source: TrackTaskSource::SpotifyHistory,
+            desired_track_id: None,
+            source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,

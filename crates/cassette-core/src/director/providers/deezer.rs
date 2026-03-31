@@ -4,9 +4,10 @@ use crate::director::models::{
     TrackTask,
 };
 use crate::director::provider::Provider;
-use crate::director::providers::crypto::decrypt_deezer_stream;
+use crate::director::providers::crypto::stream_decrypt_deezer_to_file;
 use crate::director::strategy::StrategyPlan;
 use crate::director::temp::TaskTempContext;
+use crate::librarian::matchers::fuzzy::levenshtein;
 use crate::sources::{
     build_query, deezer_client, deezer_get_media_url, deezer_get_track_data, deezer_get_user_data,
     RemoteProviderConfig,
@@ -14,8 +15,9 @@ use crate::sources::{
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use tokio::sync::RwLock;
 
+#[derive(Clone)]
 /// Cached Deezer session so we authenticate once, not per-request.
 struct DeezerSessionCache {
     client: reqwest::Client,
@@ -26,7 +28,7 @@ struct DeezerSessionCache {
 #[derive(Clone)]
 pub struct DeezerProvider {
     config: RemoteProviderConfig,
-    session: Arc<OnceCell<Result<DeezerSessionCache, String>>>,
+    session: Arc<RwLock<Option<DeezerSessionCache>>>,
 }
 
 impl std::fmt::Debug for DeezerProvider {
@@ -39,30 +41,49 @@ impl DeezerProvider {
     pub fn new(config: RemoteProviderConfig) -> Self {
         Self {
             config,
-            session: Arc::new(OnceCell::new()),
+            session: Arc::new(RwLock::new(None)),
         }
     }
 
-    async fn session(&self) -> Result<&DeezerSessionCache, ProviderError> {
-        let result = self
-            .session
-            .get_or_init(|| async {
-                let client = deezer_client(&self.config).map_err(|e| e.to_string())?;
-                let session = deezer_get_user_data(&client).await?;
-                Ok(DeezerSessionCache {
-                    client,
-                    api_token: session.api_token,
-                    license_token: session.license_token,
-                })
-            })
-            .await;
-        match result {
-            Ok(cache) => Ok(cache),
-            Err(message) => Err(ProviderError::Other {
+    async fn ensure_session(&self) -> Result<(), ProviderError> {
+        if self.session.read().await.is_some() {
+            return Ok(());
+        }
+
+        let mut guard = self.session.write().await;
+        if guard.is_some() {
+            return Ok(());
+        }
+
+        let client = deezer_client(&self.config).map_err(|error| ProviderError::Other {
+            provider_id: "deezer".to_string(),
+            message: format!("auth failed: {error}"),
+        })?;
+        let session = deezer_get_user_data(&client)
+            .await
+            .map_err(|message| ProviderError::Other {
                 provider_id: "deezer".to_string(),
                 message: format!("auth failed: {message}"),
-            }),
-        }
+            })?;
+        *guard = Some(DeezerSessionCache {
+            client,
+            api_token: session.api_token,
+            license_token: session.license_token,
+        });
+        Ok(())
+    }
+
+    async fn invalidate_session(&self) {
+        let mut guard = self.session.write().await;
+        *guard = None;
+    }
+
+    async fn session_snapshot(&self) -> Result<DeezerSessionCache, ProviderError> {
+        self.ensure_session().await?;
+        let guard = self.session.read().await;
+        guard.clone().ok_or_else(|| ProviderError::AuthFailed {
+            provider_id: "deezer".to_string(),
+        })
     }
 }
 
@@ -87,7 +108,7 @@ impl Provider for DeezerProvider {
         task: &TrackTask,
         _strategy: &StrategyPlan,
     ) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
-        let session = self.session().await?;
+        let session = self.session_snapshot().await?;
 
         let query = build_query(&task.target.artist, &task.target.title, task.target.album.as_deref());
         let response = session
@@ -100,6 +121,12 @@ impl Provider for DeezerProvider {
                 provider_id: "deezer".to_string(),
                 message: error.to_string(),
             })?;
+        if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
+            self.invalidate_session().await;
+            return Err(ProviderError::AuthFailed {
+                provider_id: "deezer".to_string(),
+            });
+        }
         if !response.status().is_success() {
             return Err(ProviderError::Network {
                 provider_id: "deezer".to_string(),
@@ -159,19 +186,13 @@ impl Provider for DeezerProvider {
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
 
-                let mut confidence = 0.35_f32;
-                if normalize(&artist).contains(&normalize(&task.target.artist)) {
-                    confidence += 0.35;
-                }
-                if normalize(&title).contains(&normalize(&task.target.title)) {
-                    confidence += 0.25;
-                }
+                let mut confidence = 0.20_f32;
+                confidence += normalized_match_confidence(&artist, &task.target.artist) * 0.40;
+                confidence += normalized_match_confidence(&title, &task.target.title) * 0.30;
                 if let (Some(target_album), Some(candidate_album)) =
                     (task.target.album.as_deref(), album.as_deref())
                 {
-                    if normalize(candidate_album).contains(&normalize(target_album)) {
-                        confidence += 0.05;
-                    }
+                    confidence += normalized_match_confidence(candidate_album, target_album) * 0.10;
                 }
 
                 Some(ProviderSearchCandidate {
@@ -197,7 +218,7 @@ impl Provider for DeezerProvider {
         temp_context: &TaskTempContext,
         _strategy: &StrategyPlan,
     ) -> Result<CandidateAcquisition, ProviderError> {
-        let session = self.session().await?;
+        let session = self.session_snapshot().await?;
         let track_id = &candidate.provider_candidate_id;
 
         // 1. Get track token via private gateway API
@@ -227,31 +248,18 @@ impl Provider for DeezerProvider {
                 provider_id: "deezer".to_string(),
                 message: error.to_string(),
             })?;
+        if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
+            self.invalidate_session().await;
+            return Err(ProviderError::AuthFailed {
+                provider_id: "deezer".to_string(),
+            });
+        }
         if !response.status().is_success() {
             return Err(ProviderError::Network {
                 provider_id: "deezer".to_string(),
                 message: format!("CDN download HTTP {}", response.status()),
             });
         }
-
-        let mut data = response
-            .bytes()
-            .await
-            .map_err(|error| ProviderError::Network {
-                provider_id: "deezer".to_string(),
-                message: error.to_string(),
-            })?
-            .to_vec();
-
-        if data.is_empty() {
-            return Err(ProviderError::InvalidAudio {
-                provider_id: "deezer".to_string(),
-                message: "empty CDN payload".to_string(),
-            });
-        }
-
-        // 4. Decrypt the Blowfish-CBC stripe pattern in-place
-        decrypt_deezer_stream(&mut data, &track_data.track_id);
 
         // 5. Write decrypted file
         let filename = format!(
@@ -260,25 +268,31 @@ impl Provider for DeezerProvider {
             extension,
         );
         let destination = temp_context.active_dir.join(filename);
-        tokio::fs::write(&destination, &data)
+        let written = stream_decrypt_deezer_to_file(response, &destination, &track_data.track_id)
             .await
-            .map_err(|error| ProviderError::Other {
+            .map_err(|message| ProviderError::Other {
                 provider_id: "deezer".to_string(),
-                message: error.to_string(),
+                message,
             })?;
+        if written == 0 {
+            return Err(ProviderError::InvalidAudio {
+                provider_id: "deezer".to_string(),
+                message: "empty CDN payload".to_string(),
+            });
+        }
 
         Ok(CandidateAcquisition {
             provider_id: "deezer".to_string(),
             provider_candidate_id: candidate.provider_candidate_id.clone(),
             temp_path: destination,
-            file_size: data.len() as u64,
+            file_size: written,
             extension_hint: Some(extension),
         })
     }
 }
 
 fn normalize(value: &str) -> String {
-    value
+    normalize_match_noise(value)
         .to_ascii_lowercase()
         .chars()
         .map(|character| if character.is_alphanumeric() { character } else { ' ' })
@@ -286,6 +300,45 @@ fn normalize(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn normalize_match_noise(value: &str) -> String {
+    value
+        .replace("pt.", "part")
+        .replace("pt ", "part ")
+        .replace("feat.", "feat ")
+        .replace("featuring", "feat")
+        .replace("deluxe edition", "")
+        .replace("expanded edition", "")
+        .replace("remastered", "")
+        .replace("remaster", "")
+        .replace("edition", "")
+}
+
+fn normalized_match_confidence(candidate: &str, target: &str) -> f32 {
+    let candidate = normalize(candidate);
+    let target = normalize(target);
+    if candidate.is_empty() || target.is_empty() {
+        return 0.0;
+    }
+    if candidate == target {
+        return 1.0;
+    }
+    if candidate.contains(&target) || target.contains(&candidate) {
+        return 0.94;
+    }
+
+    let distance = levenshtein(&candidate, &target);
+    let max_len = candidate.chars().count().max(target.chars().count());
+    if max_len == 0 {
+        return 0.0;
+    }
+    let similarity = 1.0 - (distance as f32 / max_len as f32);
+    if similarity >= 0.90 {
+        similarity
+    } else {
+        0.0
+    }
 }
 
 fn sanitize(value: &str) -> String {

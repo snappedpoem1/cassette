@@ -2,7 +2,7 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-03-28
+**Last Updated**: 2026-03-30
 
 ---
 
@@ -219,7 +219,87 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 **Revisit Condition**:
 
-- Only if the audit model is intentionally redesigned
+- If lifecycle semantics change enough that start-event emission is no longer the right audit boundary
+
+---
+
+## Decision 12: `delta_queue` Is The Durable Acquisition Control Plane
+
+**Status**: approved (applied 2026-03-30)  
+**Rationale**:
+
+- Librarian reconciliation already produces actionable queue rows with deterministic priority.
+- SQLite-backed queue state survives crashes and supports idempotent retries without needing an in-memory bus.
+- The new coordinator path (`engine_pipeline_cli`) can claim, process, release, and close work entirely against durable queue state.
+
+**Tradeoffs**:
+
+- More queue-state columns (`processed_at`, `claimed_at`, `claim_run_id`, `source_operation_id`)
+- Slightly more coordination logic in the CLI/runtime layer
+
+**Revisit Condition**:
+
+- Only if the system moves away from single-machine SQLite control-plane assumptions
+
+---
+
+## Decision 13: Organizer Safety Is Enforced Before Live Mutation
+
+**Status**: approved (applied 2026-03-30)  
+**Rationale**:
+
+- The runtime DB contained zeroed `track_number` values for files that were already named correctly on disk.
+- Allowing `organize_cli --live` to blindly trust that state would mass-rename valid files to `00 - Title`.
+- `tag_rescue_cli` now uses a staged recovery ladder (`embedded_tag`, `filename_prefix`, `album_pattern`) and, together with the live zero-track rename guard, preserves reversibility and prevents avoidable damage.
+
+**Tradeoffs**:
+
+- One more preflight/repair step before broad organize passes
+- Live organize can now hard-fail instead of proceeding with suspect moves
+
+**Revisit Condition**:
+
+- Only after DB truth is proven stable enough that the guard becomes noise instead of safety
+
+---
+
+## Decision 14: `director/providers/` Is The Canonical Runtime Downloader Path
+
+**Status**: approved (applied 2026-03-30)  
+**Rationale**:
+
+- The active runtime acquisition flow lives in Director, not the older `downloader/` path.
+- Keeping that ambiguous makes hardening work land in the wrong place and confuses future agents.
+- `downloader/` now exists only as a compatibility re-export for provider-settings types, not as a second runtime acquisition lane.
+
+**Tradeoffs**:
+
+- Some legacy modules remain in-tree until cleanup lands
+- Requires docs and future deletion/marking work
+
+**Revisit Condition**:
+
+- If legacy downloader code is revived intentionally as part of a new runtime design
+
+---
+
+## Decision 15: Sidecar Scan Progress Must Be Durable And Cheap To Resume
+
+**Status**: approved (applied 2026-03-30)
+**Rationale**:
+
+- A live first-pass scan against the real library is too expensive to restart from zero after interruption.
+- The sidecar DB now persists per-root `scan_checkpoints` plus `local_files.file_mtime_ms` so resume and delta-only scans can skip unchanged files deterministically.
+- `engine_pipeline_cli` now treats `--resume` as a precise scan-mode shorthand instead of bypassing the librarian blindly.
+
+**Tradeoffs**:
+
+- More sidecar schema (`scan_checkpoints`, `file_mtime_ms`)
+- Resume correctness depends on deterministic root/file ordering and checkpoint writes
+
+**Revisit Condition**:
+
+- Only if the control plane stops using a sidecar SQLite scan index
 
 ---
 

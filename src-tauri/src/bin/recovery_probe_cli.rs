@@ -4,7 +4,7 @@ use cassette_core::director::{
     DirectorTaskResult, DuplicatePolicy, FinalizedTrackDisposition, NormalizedTrack,
     ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask, TrackTaskSource,
 };
-use cassette_core::downloader::DownloadConfig;
+use cassette_core::provider_settings::DownloadConfig;
 use cassette_lib::state::AppState;
 use std::path::Path;
 use std::sync::Arc;
@@ -43,6 +43,8 @@ fn make_task(task_id: &str, artist: &str, title: &str, album: &str) -> TrackTask
     TrackTask {
         task_id: task_id.to_string(),
         source: TrackTaskSource::Manual,
+        desired_track_id: None,
+        source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: None,
             source_playlist: None,

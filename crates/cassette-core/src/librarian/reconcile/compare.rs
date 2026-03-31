@@ -73,6 +73,7 @@ mod tests {
             channels: Some(2),
             duration_ms: Some(200000),
             file_size: 100,
+            file_mtime_ms: None,
             content_hash: None,
             integrity_status: "readable".to_string(),
             quality_tier: Some("upgrade_candidate".to_string()),

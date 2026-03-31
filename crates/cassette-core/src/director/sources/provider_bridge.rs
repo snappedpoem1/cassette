@@ -142,6 +142,8 @@ fn desired_track_to_task(track: &DesiredTrack) -> TrackTask {
             .filter(|id| id.starts_with("spotify:"))
             .map(|_| TrackTaskSource::SpotifyLibrary)
             .unwrap_or(TrackTaskSource::Manual),
+        desired_track_id: Some(track.id),
+        source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: track.source_track_id.clone(),
             source_playlist: None,

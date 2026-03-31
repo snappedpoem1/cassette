@@ -458,6 +458,8 @@ fn build_track_task(
     TrackTask {
         task_id: id.to_string(),
         source: TrackTaskSource::Manual,
+        desired_track_id: None,
+        source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: None,
             source_playlist: None,
@@ -702,6 +704,8 @@ pub(crate) async fn resolve_album_track_tasks(
         .map(|track| TrackTask {
             task_id: album_track_task_key(artist, album, track.disc_number, track.track_number, &track.title),
             source: source.clone(),
+            desired_track_id: None,
+            source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,

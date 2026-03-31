@@ -99,6 +99,7 @@ pub struct LocalFile {
     pub channels: Option<i64>,
     pub duration_ms: Option<i64>,
     pub file_size: i64,
+    pub file_mtime_ms: Option<i64>,
     pub content_hash: Option<String>,
     pub integrity_status: String,
     pub quality_tier: Option<String>,
@@ -120,6 +121,7 @@ pub struct NewLocalFile {
     pub channels: Option<i64>,
     pub duration_ms: Option<i64>,
     pub file_size: i64,
+    pub file_mtime_ms: Option<i64>,
     pub content_hash: Option<String>,
     pub integrity_status: IntegrityStatus,
     pub quality_tier: Option<QualityTier>,
@@ -214,8 +216,29 @@ pub struct NewDeltaQueueItem {
 pub struct ScanStats {
     pub discovered_files: u64,
     pub scanned_files: u64,
+    pub skipped_files: u64,
     pub unreadable_files: u64,
     pub suspicious_files: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ScanCheckpoint {
+    pub id: i64,
+    pub root_path: String,
+    pub last_run_id: Option<String>,
+    pub last_scanned_path: Option<String>,
+    pub status: String,
+    pub files_seen: i64,
+    pub files_indexed: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LocalFileScanState {
+    pub file_path: String,
+    pub file_size: i64,
+    pub file_mtime_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -44,7 +44,10 @@ pub fn run() {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir)?;
             let db_path = data_dir.join("cassette.db");
-            let app_state = AppState::new(&db_path, Some(app.handle().clone())).map_err(|e| e.to_string())?;
+            let app_handle = app.handle().clone();
+            let app_state = tauri::async_runtime::block_on(async move {
+                AppState::new(&db_path, Some(app_handle))
+            }).map_err(|e| e.to_string())?;
             app.manage(app_state);
             #[cfg(desktop)]
             register_media_shortcuts(app).map_err(|e| e.to_string())?;

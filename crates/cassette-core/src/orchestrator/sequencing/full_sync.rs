@@ -146,7 +146,10 @@ async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
                     priority INTEGER DEFAULT 0,
                     reason TEXT NOT NULL,
                     target_quality TEXT,
+                    source_operation_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    claimed_at TIMESTAMP,
+                    claim_run_id TEXT,
                     processed_at TIMESTAMP
                 )
                 "#,
@@ -159,16 +162,22 @@ async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
         .fetch_all(pool)
         .await
         .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
-    let has_source_operation_id = columns.iter().any(|c| {
-        c.try_get::<String, _>("name")
-            .map(|name| name == "source_operation_id")
-            .unwrap_or(false)
-    });
-    if !has_source_operation_id {
-        sqlx::query("ALTER TABLE delta_queue ADD COLUMN source_operation_id TEXT")
-            .execute(pool)
-            .await
-            .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
+    for (column_name, column_type) in [
+        ("source_operation_id", "TEXT"),
+        ("claimed_at", "TIMESTAMP"),
+        ("claim_run_id", "TEXT"),
+    ] {
+        let has_column = columns.iter().any(|c| {
+            c.try_get::<String, _>("name")
+                .map(|name| name == column_name)
+                .unwrap_or(false)
+        });
+        if !has_column {
+            sqlx::query(&format!("ALTER TABLE delta_queue ADD COLUMN {column_name} {column_type}"))
+                .execute(pool)
+                .await
+                .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
+        }
     }
 
     Ok(())

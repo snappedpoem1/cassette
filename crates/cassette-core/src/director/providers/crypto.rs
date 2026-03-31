@@ -1,6 +1,9 @@
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{BlockDecryptMut, KeyIvInit};
 use blowfish::Blowfish;
+use futures_util::StreamExt;
+use std::path::Path;
+use tokio::io::AsyncWriteExt;
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 type BfCbcDec = cbc::Decryptor<Blowfish>;
@@ -78,6 +81,51 @@ pub fn decrypt_deezer_stream(data: &mut Vec<u8>, track_id: &str) {
         }
     }
     // Trailing partial chunk (< 2048 bytes) is always plaintext — no action needed.
+}
+
+pub async fn stream_decrypt_deezer_to_file(
+    response: reqwest::Response,
+    destination: &Path,
+    track_id: &str,
+) -> Result<u64, String> {
+    let key = deezer_track_key(track_id);
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(destination)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut pending = Vec::<u8>::new();
+    let mut chunk_index = 0usize;
+    let mut written = 0u64;
+
+    while let Some(next) = stream.next().await {
+        let bytes = next.map_err(|error| error.to_string())?;
+        pending.extend_from_slice(&bytes);
+
+        while pending.len() >= DEEZER_CHUNK_SIZE {
+            let mut chunk = pending.drain(..DEEZER_CHUNK_SIZE).collect::<Vec<_>>();
+            if chunk_index % 3 == 0 {
+                if let Ok(decryptor) = BfCbcDec::new_from_slices(&key, &DEEZER_BF_IV) {
+                    use aes::cipher::block_padding::NoPadding;
+                    let _ = decryptor.decrypt_padded_mut::<NoPadding>(&mut chunk);
+                }
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| error.to_string())?;
+            written += chunk.len() as u64;
+            chunk_index += 1;
+        }
+    }
+
+    if !pending.is_empty() {
+        file.write_all(&pending)
+            .await
+            .map_err(|error| error.to_string())?;
+        written += pending.len() as u64;
+    }
+
+    file.flush().await.map_err(|error| error.to_string())?;
+    Ok(written)
 }
 
 #[cfg(test)]

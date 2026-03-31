@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.
 **Rule**: If a task is not in this file, it is not committed project scope yet.
-**Last Updated**: 2026-03-28
+**Last Updated**: 2026-03-30
 
 ---
 
@@ -26,6 +26,71 @@ Status:
 ---
 
 ## P0
+
+### [P0] [review] Fix track_number=0 blocking organize_cli --live
+
+Why:
+
+- 1,967 tracks have `track_number=0` in the app DB despite having correct track numbers
+  embedded in their file tags. `organize_cli` reads `track_number` from the DB when
+  computing canonical paths, so it proposes renaming every affected file to `00 - Title.ext`.
+  Running `--live` would corrupt all existing library filenames.
+
+What good looks like:
+
+- A repair pass reads embedded tags directly from files (not DB cache) using Lofty.
+- If embedded tags are insufficient, stable filename prefixes and conservative album-pattern inference repair DB truth.
+- `organize_cli --dry-run` no longer proposes mass-zero renames for rows that are recoverable from existing filenames.
+- `organize_cli --live` is safe to run.
+
+Touchpoints:
+
+- `crates/cassette-core/src/library/mod.rs` (`read_track_metadata`, `Scanner`)
+- `src-tauri/src/bin/organize_cli.rs`
+- Active runtime DB `tracks` table
+
+Acceptance:
+
+- [x] Tag re-scan pass implemented (`tag_rescue_cli`)
+- [x] `organize_cli --live` now hard-blocks suspicious mass `00 - ...` renames
+- [x] Tag rescue run against the live DB captured (`updated=0`)
+- [x] Implement the next repair strategy: staged recovery via `embedded_tag`, `filename_prefix`, and `album_pattern`, with explicit unresolved reporting
+- [ ] Live organize proof on a safe subset
+
+### [P0] [review] Wire delta_queue → Director (close the pipeline loop)
+
+Why:
+
+- The librarian produces `delta_queue` entries after every sync (prioritized: `missing_download`=100,
+  `upgrade_quality`=80, `duplicate_review`=60). Nothing consumes this table.
+  `batch_download_cli` reads `spotify_album_history` directly instead — bypassing the entire
+  reconciliation output. This means the pipeline is not actually connected end-to-end.
+
+What good looks like:
+
+- `engine_pipeline_cli` reads from `delta_queue`
+  `WHERE action_type IN ('missing_download','upgrade_quality') AND processed_at IS NULL`
+  with deterministic ordering and queue claims.
+- On task finalization: `processed_at` is stamped and the claim is cleared.
+- A bookending `run_librarian_sync()` before (populate delta_queue) and after (re-scan acquired files) makes the loop idempotent.
+- Re-running the pipeline does not re-acquire already-finalized tracks.
+
+Touchpoints:
+
+- `src-tauri/src/bin/engine_pipeline_cli.rs`
+- `crates/cassette-core/src/librarian/orchestrator.rs` (`run_librarian_sync`)
+- `delta_queue` table (librarian subsystem DB)
+- `desired_tracks` table (join for metadata resolution)
+
+Acceptance:
+
+- [x] Queue claim fields (`claimed_at`, `claim_run_id`, `source_operation_id`) ensured in migrations
+- [x] `engine_pipeline_cli` claims actionable rows and releases stale claims
+- [x] `processed_at` is marked on successful terminal outcomes
+- [x] Librarian sync bookends the coordinator run
+- [x] Sidecar scan checkpoints and `full|resume|delta-only` scan modes exist, with unchanged files skipped on rerun
+- [ ] End-to-end proof: scan → delta_queue populated → acquisition → delta_queue processed → re-scan closes
+  Current blocker: the live coordinator now has resumable sidecar scan state, but the bounded live acquisition/reconciliation proof still has not been captured
 
 ### [P0] [done] Prove Deezer full-track acquisition end-to-end
 
@@ -108,7 +173,7 @@ Acceptance:
 
 ## P1
 
-### [P1] [todo] Harden async and recovery behavior in acquisition flows
+### [P1] [review] Harden async and recovery behavior in acquisition flows
 
 Why:
 
@@ -124,9 +189,10 @@ Focus:
 
 Acceptance:
 
-- [ ] Tests cover at least one interruption or retry path
-- [ ] Retry thresholds are named constants with documented rationale
-- [ ] Recovery behavior is explicit, not implied
+- [x] Tests cover interruption/retry behavior already present in the director suite
+- [x] Retry/cooldown thresholds are now config fields instead of only engine constants
+- [x] Recovery behavior is explicit in queue claims, staged-download resume checks, and startup recovery filtering
+- [ ] Capture one fresh live recovery/resume proof with the coordinator path
 
 ### [P1] [done] Clean the remaining warning budget
 
@@ -167,7 +233,7 @@ Acceptance:
 - [ ] Gaps and assumptions recorded
 - [ ] Release checklist updated
 
-### [P1] [todo] Resolve `downloader/` vs `director/providers/` overlap
+### [P1] [done] Resolve `downloader/` vs `director/providers/` overlap
 
 Why:
 
@@ -177,9 +243,9 @@ Why:
 
 Acceptance:
 
-- [ ] Decision recorded: keep or remove `downloader/` module
-- [ ] Dead code removed or clearly marked as historical
-- [ ] Module status in PROJECT_INDEX.md updated
+- [x] Decision recorded: `director/providers/` is the active runtime acquisition path
+- [x] Dead code removed or clearly marked as historical
+- [x] Module status in PROJECT_INDEX.md updated
 
 ### [P1] [todo] Formalize performance baseline and regression budget
 

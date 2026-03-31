@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use cassette_core::db::Db;
-use cassette_core::downloader::{DownloadConfig, ProviderStatus};
+use cassette_core::provider_settings::{DownloadConfig, ProviderStatus};
 use tauri::State;
 
 const MASKED_SECRET: &str = "********";

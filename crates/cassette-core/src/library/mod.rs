@@ -1,4 +1,5 @@
 pub mod organizer;
+pub mod track_number_repair;
 pub mod config;
 pub mod error;
 pub mod integration;
@@ -69,7 +70,14 @@ impl Scanner {
         let mut paths: Vec<std::path::PathBuf> = Vec::new();
         let mut skipped_unchanged = 0u64;
         for root in &roots {
-            for entry in WalkDir::new(root).follow_links(true).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(root).follow_links(true).into_iter().filter_entry(|e| {
+                // Skip quarantine directories
+                if e.file_type().is_dir() {
+                    let name = e.file_name().to_string_lossy();
+                    return name != "_Cassette_Quarantine";
+                }
+                true
+            }).filter_map(|e| e.ok()) {
                 if entry.file_type().is_file() {
                     if let Some(ext) = entry.path().extension() {
                         let ext = ext.to_string_lossy().to_lowercase();

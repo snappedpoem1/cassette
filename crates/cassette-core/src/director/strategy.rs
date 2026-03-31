@@ -141,6 +141,8 @@ mod tests {
         TrackTask {
             task_id: "task-1".to_string(),
             source: TrackTaskSource::Manual,
+            desired_track_id: None,
+            source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,

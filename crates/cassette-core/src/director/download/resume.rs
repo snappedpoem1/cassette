@@ -4,6 +4,7 @@ use crate::director::resilience::backoff::director_backoff;
 use crate::director::resilience::range_request::with_optional_range;
 use backoff::backoff::Backoff;
 use futures_util::StreamExt;
+use reqwest::header::{ACCEPT_RANGES, CONTENT_LENGTH, RETRY_AFTER};
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -26,6 +27,17 @@ pub async fn download_with_resume(
         attempts += 1;
         match download_attempt(&client, url, dest_path, config).await {
             Ok(_) => return Ok(()),
+            Err(DirectorError::HttpRetryAfter {
+                retry_after_secs, ..
+            }) if attempts < config.retry_max_attempts => {
+                tracing::warn!(
+                    operation_id = operation_id,
+                    attempt = attempts,
+                    retry_after_secs = retry_after_secs,
+                    "Download rate limited; honoring Retry-After"
+                );
+                tokio::time::sleep(Duration::from_secs(retry_after_secs.max(1))).await;
+            }
             Err(error) if is_retryable(&error) && attempts < config.retry_max_attempts => {
                 let wait = backoff.next_backoff().ok_or(DirectorError::Timeout)?;
                 tracing::warn!(
@@ -92,8 +104,54 @@ pub async fn download_attempt(
         }
     })?;
 
+    if let Some(content_length) = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        let projected_size = if existing_size > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+            existing_size + content_length
+        } else {
+            content_length
+        };
+        if projected_size as usize > config.max_file_size_bytes {
+            return Err(DirectorError::FileTooLarge {
+                size: projected_size as usize,
+                max: config.max_file_size_bytes,
+            });
+        }
+    }
+
+    if response.status().as_u16() == 429 {
+        let retry_after_secs = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1);
+        return Err(DirectorError::HttpRetryAfter {
+            status: 429,
+            retry_after_secs,
+        });
+    }
+
     if !response.status().is_success() {
         return Err(DirectorError::HttpError(response.status().as_u16()));
+    }
+
+    if existing_size > 0 && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        let supports_ranges = response
+            .headers()
+            .get(ACCEPT_RANGES)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.eq_ignore_ascii_case("bytes"))
+            .unwrap_or(false);
+        if supports_ranges {
+            return Err(DirectorError::VerificationError(
+                "resume requested but server did not return partial content".to_string(),
+            ));
+        }
     }
 
     let append = existing_size > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
@@ -136,6 +194,7 @@ pub fn is_retryable(error: &DirectorError) -> bool {
         error,
         DirectorError::NetworkError(_)
             | DirectorError::Timeout
+            | DirectorError::HttpRetryAfter { .. }
             | DirectorError::HttpError(408 | 429 | 500 | 502 | 503 | 504)
     )
 }

@@ -82,6 +82,8 @@ async fn main() -> Result<(), String> {
         .submit(TrackTask {
             task_id: id.clone(),
             source: TrackTaskSource::Manual,
+            desired_track_id: None,
+            source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,

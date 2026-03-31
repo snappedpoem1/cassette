@@ -1,0 +1,20 @@
+directory: A:\music_beets_proof_1000
+library: C:\Cassette Music\tools\beets-proof\library_1000.db
+plugins: []
+import:
+  copy: yes
+  move: no
+  write: yes
+  incremental: no
+  resume: no
+  quiet_fallback: asis
+  log: C:\Cassette Music\tools\beets-proof\import_1000.log
+  group_albums: no
+paths:
+  default: $albumartist/$album%if{$year, ($year)}/$track - $title
+  singleton: $artist/$title
+  comp: Compilations/$album%if{$year, ($year)}/$track - $title
+asciify_paths: no
+replace:
+  '[\\/:*?"<>|]': _
+  '^\.+$': dot

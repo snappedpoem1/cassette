@@ -1,4 +1,4 @@
-use crate::librarian::config::LibrarianConfig;
+use crate::librarian::config::{LibrarianConfig, ScanMode};
 use crate::librarian::db::{migrations, LibrarianDb};
 use crate::librarian::error::{LibrarianError, Result};
 use crate::librarian::import::import_desired_spotify_json;
@@ -70,18 +70,15 @@ pub async fn run_librarian_sync(
     let run_id = Uuid::new_v4().to_string();
     tracing::Span::current().record("run_id", tracing::field::display(&run_id));
 
+    if let Err(error) = initialize_database(db_pool).await {
+        error!(run_id = %run_id, phase = "db_init", error = %error, "database initialization failed");
+        return Err(error);
+    }
     let sync_run_row_id = create_sync_run(db_pool, &run_id).await?;
     let mut counts = SyncCounts::default();
     let mut errors = Vec::<(String, String)>::new();
 
     info!(run_id = %run_id, "starting librarian sync");
-
-    if let Err(error) = initialize_database(db_pool).await {
-        let message = error.to_string();
-        let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::DbInit, &message).await;
-        error!(run_id = %run_id, phase = "db_init", error = %message, "database initialization failed");
-        return Err(error);
-    }
     let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::DbInit, &counts).await;
 
     if let Err(error) = validate_roots_accessible(&config.library_roots).await {
@@ -163,7 +160,8 @@ pub async fn run_librarian_sync(
         SyncStatus::PartialSuccess
     };
     let summary = format!(
-        "Librarian sync completed: {} scanned, {} upserted, {} imported, {} reconciled, {} deltas",
+        "Librarian sync completed [{}]: {} scanned, {} upserted, {} imported, {} reconciled, {} deltas",
+        config.scan_mode.as_str(),
         counts.files_scanned,
         counts.files_upserted,
         counts.desired_tracks_imported,
@@ -193,6 +191,7 @@ async fn initialize_database(db_pool: &SqlitePool) -> Result<()> {
         "albums",
         "tracks",
         "local_files",
+        "scan_checkpoints",
         "desired_tracks",
         "reconciliation_results",
         "delta_queue",
@@ -213,6 +212,63 @@ async fn initialize_database(db_pool: &SqlitePool) -> Result<()> {
         }
     }
 
+    ensure_delta_queue_columns(db_pool).await?;
+    ensure_local_file_columns(db_pool).await?;
+    ensure_artist_constraints(db_pool).await?;
+
+    Ok(())
+}
+
+async fn ensure_delta_queue_columns(db_pool: &SqlitePool) -> Result<()> {
+    let columns = sqlx::query("PRAGMA table_info(delta_queue)")
+        .fetch_all(db_pool)
+        .await?;
+    for (column_name, column_type) in [
+        ("source_operation_id", "TEXT"),
+        ("claimed_at", "TIMESTAMP"),
+        ("claim_run_id", "TEXT"),
+    ] {
+        let has_column = columns.iter().any(|c| {
+            c.try_get::<String, _>("name")
+                .map(|name| name == column_name)
+                .unwrap_or(false)
+        });
+        if !has_column {
+            sqlx::query(&format!("ALTER TABLE delta_queue ADD COLUMN {column_name} {column_type}"))
+                .execute(db_pool)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_artist_constraints(db_pool: &SqlitePool) -> Result<()> {
+    sqlx::query("DROP INDEX IF EXISTS idx_artists_normalized_name")
+        .execute(db_pool)
+        .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_artists_normalized_name ON artists(normalized_name)",
+    )
+    .execute(db_pool)
+    .await?;
+    Ok(())
+}
+
+async fn ensure_local_file_columns(db_pool: &SqlitePool) -> Result<()> {
+    let columns = sqlx::query("PRAGMA table_info(local_files)")
+        .fetch_all(db_pool)
+        .await?;
+    let has_file_mtime_ms = columns.iter().any(|column| {
+        column
+            .try_get::<String, _>("name")
+            .map(|name| name == "file_mtime_ms")
+            .unwrap_or(false)
+    });
+    if !has_file_mtime_ms {
+        sqlx::query("ALTER TABLE local_files ADD COLUMN file_mtime_ms INTEGER")
+            .execute(db_pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -245,19 +301,26 @@ async fn scan_local_library(
     run_id: &str,
 ) -> Result<(usize, usize)> {
     let db = LibrarianDb::from_pool(db_pool.clone());
+    if should_skip_scan_phase(db_pool, config).await? {
+        info!(run_id = %run_id, mode = "queue-only", "scan phase skipped because completed checkpoints already exist");
+        return Ok((0, 0));
+    }
+
     let before = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM local_files")
         .fetch_one(db_pool)
         .await?;
 
-    let stats = scan_library(&db, config).await?;
+    let stats = scan_library(&db, config, run_id).await?;
     let after = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM local_files")
         .fetch_one(db_pool)
         .await?;
 
     info!(
         run_id = %run_id,
+        mode = config.scan_mode.as_str(),
         discovered = stats.discovered_files,
         scanned = stats.scanned_files,
+        skipped = stats.skipped_files,
         unreadable = stats.unreadable_files,
         suspicious = stats.suspicious_files,
         "scan statistics"
@@ -266,6 +329,30 @@ async fn scan_local_library(
     let scanned = usize::try_from(stats.scanned_files).unwrap_or(usize::MAX);
     let upserted = usize::try_from((after - before).max(0)).unwrap_or(usize::MAX);
     Ok((scanned, upserted))
+}
+
+async fn should_skip_scan_phase(db_pool: &SqlitePool, config: &LibrarianConfig) -> Result<bool> {
+    if config.scan_mode != ScanMode::Resume {
+        return Ok(false);
+    }
+
+    let db = LibrarianDb::from_pool(db_pool.clone());
+    let roots = config
+        .library_roots
+        .iter()
+        .map(|root| root.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    if !db.has_completed_checkpoints(&roots).await? {
+        return Ok(false);
+    }
+
+    let local_files = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM local_files")
+        .fetch_one(db_pool)
+        .await?;
+    let tracks = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracks")
+        .fetch_one(db_pool)
+        .await?;
+    Ok(local_files > 0 && tracks > 0)
 }
 
 async fn import_desired_state(db_pool: &SqlitePool, source: &Path, run_id: &str) -> Result<usize> {
@@ -320,8 +407,8 @@ async fn generate_delta_queue(db_pool: &SqlitePool, run_id: &str) -> Result<usiz
         };
 
         sqlx::query(
-            "INSERT INTO delta_queue (desired_track_id, action_type, priority, reason, target_quality)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO delta_queue (desired_track_id, action_type, priority, reason, target_quality, source_operation_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(desired_track_id)
         .bind(action)
@@ -332,6 +419,7 @@ async fn generate_delta_queue(db_pool: &SqlitePool, run_id: &str) -> Result<usiz
         } else {
             None
         })
+        .bind(run_id)
         .execute(db_pool)
         .await?;
 

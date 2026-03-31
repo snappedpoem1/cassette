@@ -9,7 +9,7 @@ pub const MIGRATIONS: &[&str] = &[
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_artists_normalized_name ON artists(normalized_name);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_artists_normalized_name ON artists(normalized_name);
     "#,
     r#"
     CREATE TABLE IF NOT EXISTS albums (
@@ -64,7 +64,8 @@ pub const MIGRATIONS: &[&str] = &[
       channels INTEGER,
       duration_ms INTEGER,
       file_size INTEGER,
-      content_hash TEXT UNIQUE,
+      file_mtime_ms INTEGER,
+      content_hash TEXT,
       integrity_status TEXT NOT NULL,
       quality_tier TEXT,
       last_scanned_at TIMESTAMP,
@@ -74,6 +75,20 @@ pub const MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_local_files_track_id ON local_files(track_id);
     CREATE INDEX IF NOT EXISTS idx_local_files_content_hash ON local_files(content_hash);
     CREATE INDEX IF NOT EXISTS idx_local_files_integrity_status ON local_files(integrity_status);
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS scan_checkpoints (
+      id INTEGER PRIMARY KEY,
+      root_path TEXT NOT NULL UNIQUE,
+      last_run_id TEXT,
+      last_scanned_path TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      files_seen INTEGER DEFAULT 0,
+      files_indexed INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_scan_checkpoints_status ON scan_checkpoints(status);
     "#,
     r#"
     CREATE TABLE IF NOT EXISTS desired_tracks (
@@ -117,11 +132,15 @@ pub const MIGRATIONS: &[&str] = &[
       priority INTEGER DEFAULT 0,
       reason TEXT NOT NULL,
       target_quality TEXT,
+      source_operation_id TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      claimed_at TIMESTAMP,
+      claim_run_id TEXT,
       processed_at TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_delta_queue_action_type ON delta_queue(action_type);
     CREATE INDEX IF NOT EXISTS idx_delta_queue_priority ON delta_queue(priority DESC);
+    CREATE INDEX IF NOT EXISTS idx_delta_queue_claim_run_id ON delta_queue(claim_run_id);
     CREATE INDEX IF NOT EXISTS idx_delta_queue_processed_at ON delta_queue(processed_at);
     "#,
     r#"

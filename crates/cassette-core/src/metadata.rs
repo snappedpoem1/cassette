@@ -14,6 +14,9 @@ use std::time::Duration as StdDuration;
 
 const MB_BASE: &str = "https://musicbrainz.org/ws/2";
 const MB_USER_AGENT: &str = "CassettePlayer/0.1 (https://github.com/cassette-music)";
+const ITUNES_SEARCH_BASE: &str = "https://itunes.apple.com";
+const SPOTIFY_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
+const SPOTIFY_API_BASE: &str = "https://api.spotify.com/v1";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MbRelease {
@@ -58,13 +61,20 @@ pub struct MetadataService {
     release_search_cache: Cache<String, Vec<MbRelease>>,
     parent_album_cache: Cache<String, Option<MbRelease>>,
     release_tracks_cache: Cache<String, MbReleaseWithTracks>,
+    spotify_client_id: Option<String>,
+    spotify_client_secret: Option<String>,
+    spotify_token: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl MetadataService {
     pub fn new() -> Result<Self> {
+        Self::with_spotify(None, None)
+    }
+
+    pub fn with_spotify(client_id: Option<String>, client_secret: Option<String>) -> Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent(MB_USER_AGENT)
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(15))
             .build()?;
 
         let quota = Quota::per_second(NonZeroU32::new(1).expect("non-zero quota"));
@@ -84,6 +94,9 @@ impl MetadataService {
                 .max_capacity(1_000)
                 .time_to_live(StdDuration::from_secs(15 * 60))
                 .build(),
+            spotify_client_id: client_id,
+            spotify_client_secret: client_secret,
+            spotify_token: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -281,6 +294,390 @@ impl MetadataService {
         self.release_tracks_cache
             .insert(cache_key, result.clone());
         Ok(result)
+    }
+
+    /// Resolve a release with full tracklist, trying MusicBrainz → iTunes → Spotify in order.
+    pub async fn resolve_release_with_tracks(
+        &self,
+        artist: &str,
+        album: &str,
+    ) -> Result<MbReleaseWithTracks> {
+        // Try MusicBrainz first
+        match self.resolve_via_mb(artist, album).await {
+            Ok(result) => return Ok(result),
+            Err(e) => tracing::warn!("MusicBrainz failed for '{artist} - {album}': {e}; trying iTunes"),
+        }
+
+        // iTunes fallback
+        match self.resolve_via_itunes(artist, album).await {
+            Ok(result) => return Ok(result),
+            Err(e) => tracing::warn!("iTunes fallback failed for '{artist} - {album}': {e}; trying Spotify"),
+        }
+
+        // Spotify fallback (only if credentials are configured)
+        if self.spotify_client_id.is_some() && self.spotify_client_secret.is_some() {
+            match self.resolve_via_spotify(artist, album).await {
+                Ok(result) => return Ok(result),
+                Err(e) => tracing::warn!("Spotify fallback failed for '{artist} - {album}': {e}"),
+            }
+        }
+
+        Err(anyhow!("All metadata sources exhausted for '{artist} - {album}'"))
+    }
+
+    /// MusicBrainz: search for release then fetch tracklist.
+    async fn resolve_via_mb(&self, artist: &str, album: &str) -> Result<MbReleaseWithTracks> {
+        let releases = self.search_release(artist, album).await?;
+        let best = releases
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No MusicBrainz results for '{artist} - {album}'"))?;
+        self.get_release_tracks(&best.id).await
+    }
+
+    /// iTunes Search API: search for album, then fetch tracklist.
+    async fn resolve_via_itunes(&self, artist: &str, album: &str) -> Result<MbReleaseWithTracks> {
+        // Search for the album collection
+        let term = format!("{} {}", artist, album);
+        let search_url = format!("{ITUNES_SEARCH_BASE}/search");
+        let resp = self
+            .client
+            .get(&search_url)
+            .query(&[
+                ("term", term.as_str()),
+                ("entity", "album"),
+                ("limit", "5"),
+            ])
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!("iTunes search returned HTTP {}", resp.status()));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let results = body
+            .get("results")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        // Find the best matching collection
+        let album_lower = album.to_ascii_lowercase();
+        let artist_lower = artist.to_ascii_lowercase();
+        let collection = results
+            .iter()
+            .find(|r| {
+                let cname = r
+                    .get("collectionName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let aname = r
+                    .get("artistName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                cname.contains(&album_lower) && aname.contains(&artist_lower)
+            })
+            .or_else(|| results.first())
+            .ok_or_else(|| anyhow!("No iTunes results for '{artist} - {album}'"))?;
+
+        let collection_id = collection
+            .get("collectionId")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| anyhow!("iTunes result missing collectionId"))?;
+
+        let collection_name = collection
+            .get("collectionName")
+            .and_then(|v| v.as_str())
+            .unwrap_or(album)
+            .to_string();
+
+        let artist_name = collection
+            .get("artistName")
+            .and_then(|v| v.as_str())
+            .unwrap_or(artist)
+            .to_string();
+
+        let year = collection
+            .get("releaseDate")
+            .and_then(|v| v.as_str())
+            .and_then(|d| d.split('-').next())
+            .and_then(|y| y.parse().ok());
+
+        // Fetch track listing
+        let lookup_url = format!("{ITUNES_SEARCH_BASE}/lookup");
+        let resp = self
+            .client
+            .get(&lookup_url)
+            .query(&[
+                ("id", collection_id.to_string().as_str()),
+                ("entity", "song"),
+            ])
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!("iTunes lookup returned HTTP {}", resp.status()));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let items = body
+            .get("results")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut tracks: Vec<MbTrack> = items
+            .iter()
+            .filter(|r| {
+                r.get("wrapperType")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |t| t == "track")
+            })
+            .map(|r| {
+                let track_num = r
+                    .get("trackNumber")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let disc_num = r
+                    .get("discNumber")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as u32;
+                let title = r
+                    .get("trackName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let track_artist = r
+                    .get("artistName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&artist_name)
+                    .to_string();
+                let duration_ms = r
+                    .get("trackTimeMillis")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                MbTrack {
+                    title,
+                    artist: track_artist,
+                    track_number: track_num,
+                    disc_number: disc_num,
+                    duration_ms,
+                }
+            })
+            .collect();
+
+        tracks.sort_by_key(|t| (t.disc_number, t.track_number));
+
+        if tracks.is_empty() {
+            return Err(anyhow!("iTunes returned no tracks for '{artist} - {album}'"));
+        }
+
+        let release = MbRelease {
+            id: format!("itunes:{}", collection_id),
+            title: collection_name,
+            artist: artist_name,
+            year,
+            track_count: Some(tracks.len() as u32),
+            release_group_type: Some("Album".into()),
+            label: None,
+            country: None,
+            barcode: None,
+        };
+
+        Ok(MbReleaseWithTracks { release, tracks })
+    }
+
+    /// Fetch (or refresh) a Spotify client-credentials token.
+    async fn get_spotify_token(&self) -> Result<String> {
+        let mut guard = self.spotify_token.lock().await;
+        if let Some(token) = guard.as_deref() {
+            return Ok(token.to_string());
+        }
+
+        let client_id = self
+            .spotify_client_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("Spotify client_id not configured"))?;
+        let client_secret = self
+            .spotify_client_secret
+            .as_deref()
+            .ok_or_else(|| anyhow!("Spotify client_secret not configured"))?;
+
+        let resp = self
+            .client
+            .post(SPOTIFY_TOKEN_URL)
+            .basic_auth(client_id, Some(client_secret))
+            .form(&[("grant_type", "client_credentials")])
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!("Spotify token request returned HTTP {}", resp.status()));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let token = body
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Spotify token response missing access_token"))?
+            .to_string();
+
+        *guard = Some(token.clone());
+        Ok(token)
+    }
+
+    /// Spotify: search for album, then fetch tracklist.
+    async fn resolve_via_spotify(&self, artist: &str, album: &str) -> Result<MbReleaseWithTracks> {
+        let token = self.get_spotify_token().await?;
+
+        // Search for the album
+        let query = format!("album:{} artist:{}", album, artist);
+        let resp = self
+            .client
+            .get(format!("{SPOTIFY_API_BASE}/search"))
+            .bearer_auth(&token)
+            .query(&[("q", query.as_str()), ("type", "album"), ("limit", "5")])
+            .send()
+            .await?;
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // Token may have expired; clear it and retry once
+            *self.spotify_token.lock().await = None;
+            return Err(anyhow!("Spotify token expired"));
+        }
+
+        if !resp.status().is_success() {
+            return Err(anyhow!("Spotify search returned HTTP {}", resp.status()));
+        }
+
+        let body: serde_json::Value = resp.json().await?;
+        let items = body
+            .pointer("/albums/items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let album_lower = album.to_ascii_lowercase();
+        let artist_lower = artist.to_ascii_lowercase();
+        let sp_album = items
+            .iter()
+            .find(|a| {
+                let name = a
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let aname = a
+                    .pointer("/artists/0/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                name.contains(&album_lower) && aname.contains(&artist_lower)
+            })
+            .or_else(|| items.first())
+            .ok_or_else(|| anyhow!("No Spotify results for '{artist} - {album}'"))?;
+
+        let album_id = sp_album
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Spotify album missing id"))?;
+
+        let album_name = sp_album
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(album)
+            .to_string();
+
+        let artist_name = sp_album
+            .pointer("/artists/0/name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(artist)
+            .to_string();
+
+        let year = sp_album
+            .get("release_date")
+            .and_then(|v| v.as_str())
+            .and_then(|d| d.split('-').next())
+            .and_then(|y| y.parse().ok());
+
+        // Fetch tracks for this album
+        let tracks_resp = self
+            .client
+            .get(format!("{SPOTIFY_API_BASE}/albums/{album_id}/tracks"))
+            .bearer_auth(&token)
+            .query(&[("limit", "50")])
+            .send()
+            .await?;
+
+        if !tracks_resp.status().is_success() {
+            return Err(anyhow!("Spotify tracks returned HTTP {}", tracks_resp.status()));
+        }
+
+        let tracks_body: serde_json::Value = tracks_resp.json().await?;
+        let track_items = tracks_body
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut tracks: Vec<MbTrack> = track_items
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let track_num = t
+                    .get("track_number")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(i as u64 + 1) as u32;
+                let disc_num = t
+                    .get("disc_number")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as u32;
+                let title = t
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let track_artist = t
+                    .pointer("/artists/0/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&artist_name)
+                    .to_string();
+                let duration_ms = t
+                    .get("duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                MbTrack {
+                    title,
+                    artist: track_artist,
+                    track_number: track_num,
+                    disc_number: disc_num,
+                    duration_ms,
+                }
+            })
+            .collect();
+
+        tracks.sort_by_key(|t| (t.disc_number, t.track_number));
+
+        if tracks.is_empty() {
+            return Err(anyhow!("Spotify returned no tracks for '{artist} - {album}'"));
+        }
+
+        let release = MbRelease {
+            id: format!("spotify:{}", album_id),
+            title: album_name,
+            artist: artist_name,
+            year,
+            track_count: Some(tracks.len() as u32),
+            release_group_type: Some("Album".into()),
+            label: None,
+            country: None,
+            barcode: None,
+        };
+
+        Ok(MbReleaseWithTracks { release, tracks })
     }
 
     /// Match local album tracks against MusicBrainz and return proposed fixes.

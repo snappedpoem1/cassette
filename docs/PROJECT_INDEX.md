@@ -2,7 +2,7 @@
 
 **Status**: Active - hardening, audit proof, and packaging confidence
 **Next**: audit completeness proof, packaging confidence, provenance reuse and review
-**Last Updated**: 2026-03-28
+**Last Updated**: 2026-03-30
 **Owner**: Christian (Capn)
 
 ---
@@ -98,7 +98,7 @@ Spotify history/import helpers, settings, provider status, and library organizat
 | Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
-| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, and startup recovery exist | `MetadataRepairOnly` stubbed; `downloader/` overlap unresolved |
+| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, and startup recovery exist | `MetadataRepairOnly` stubbed; bounded coordinator live proof still pending |
 | Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
 | Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
 | Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
@@ -143,8 +143,8 @@ The Tauri command layer exposes commands across these areas:
 
 ### P2 - Improvement
 
-- [ ] `downloader/` and `director/providers/` have overlapping implementations.
-  The `director/providers` path is active; the older downloader path should be reconciled or removed.
+- [ ] `downloader/` remains in-tree as a legacy compatibility re-export for provider settings.
+  Runtime acquisition ownership is `director/providers/`; no new runtime behavior should land in `downloader/`.
 - [ ] `MetadataRepairOnly` in `director/engine.rs` is explicitly stubbed.
 - [ ] Long-session desktop reliability is not formally tested or documented.
 - [ ] `Album.id` is a computed `ROW_NUMBER()` from SQL, not a real primary key.

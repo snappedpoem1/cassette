@@ -128,6 +128,8 @@ fn parse_args() -> Result<(Vec<String>, TrackTask), String> {
     let task = TrackTask {
         task_id: format!("probe-{}", Uuid::new_v4()),
         source: TrackTaskSource::Manual,
+        desired_track_id: None,
+        source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: None,
             source_playlist: None,

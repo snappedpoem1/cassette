@@ -31,6 +31,14 @@ pub struct DirectorConfig {
     pub verify_hash_algorithm: HashAlgorithm,
     pub log_downloads: bool,
     pub tracing_level: String,
+    pub provider_health_interval_secs: u64,
+    pub provider_health_stale_secs: i64,
+    pub provider_busy_cooldown_secs: i64,
+    pub provider_temp_outage_cooldown_secs: i64,
+    pub provider_rate_limit_cooldown_secs: i64,
+    pub validation_failure_bail_threshold: usize,
+    pub search_cache_ttl_secs: u64,
+    pub search_cache_capacity: u64,
 }
 
 impl DirectorConfig {
@@ -77,6 +85,14 @@ impl Default for DirectorConfig {
             verify_hash_algorithm: HashAlgorithm::Blake3,
             log_downloads: true,
             tracing_level: "info".to_string(),
+            provider_health_interval_secs: 20,
+            provider_health_stale_secs: 60,
+            provider_busy_cooldown_secs: 20,
+            provider_temp_outage_cooldown_secs: 120,
+            provider_rate_limit_cooldown_secs: 300,
+            validation_failure_bail_threshold: 3,
+            search_cache_ttl_secs: 30 * 60,
+            search_cache_capacity: 5_000,
         }
     }
 }

@@ -545,6 +545,33 @@ impl Db {
         Ok(())
     }
 
+    pub fn update_track_embedded_metadata(
+        &self,
+        track_id: i64,
+        title: Option<&str>,
+        artist: Option<&str>,
+        album: Option<&str>,
+        track_number: Option<i32>,
+        disc_number: Option<i32>,
+        year: Option<i32>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "
+            UPDATE tracks
+            SET
+                title = COALESCE(?1, CASE WHEN TRIM(title) = '' THEN title ELSE title END),
+                artist = COALESCE(?2, CASE WHEN TRIM(artist) = '' THEN artist ELSE artist END),
+                album = COALESCE(?3, CASE WHEN TRIM(album) = '' THEN album ELSE album END),
+                track_number = COALESCE(?4, track_number),
+                disc_number = COALESCE(?5, disc_number),
+                year = COALESCE(?6, year)
+            WHERE id = ?7
+            ",
+            params![title, artist, album, track_number, disc_number, year, track_id],
+        )?;
+        Ok(())
+    }
+
     /// Get all tracks for a specific album (by album_artist + album name)
     pub fn get_all_tracks_unfiltered(&self) -> Result<Vec<Track>> {
         let mut stmt = self.conn.prepare("
@@ -2007,6 +2034,8 @@ mod tests {
         let task = TrackTask {
             task_id: "task-123".to_string(),
             source: TrackTaskSource::Manual,
+            desired_track_id: None,
+            source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,
@@ -2093,6 +2122,8 @@ mod tests {
         let task = TrackTask {
             task_id: "task-request".to_string(),
             source: TrackTaskSource::SpotifyHistory,
+            desired_track_id: Some(42),
+            source_operation_id: Some("op-request".to_string()),
             target: NormalizedTrack {
                 spotify_track_id: Some("spotify:track:123".to_string()),
                 source_playlist: Some("playlist-1".to_string()),
@@ -2155,6 +2186,8 @@ mod tests {
         let task = TrackTask {
             task_id: "task-candidates".to_string(),
             source: TrackTaskSource::Manual,
+            desired_track_id: Some(7),
+            source_operation_id: Some("op-candidates".to_string()),
             target: NormalizedTrack {
                 spotify_track_id: None,
                 source_playlist: None,

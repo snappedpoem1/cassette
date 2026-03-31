@@ -11,9 +11,9 @@ use cassette_core::{
         DirectorHandle, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy,
         TempRecoveryPolicy, TrackTask,
     },
-    downloader::DownloadConfig,
     models::{DownloadJob, DownloadStatus, PlaybackState},
     player::Player,
+    provider_settings::DownloadConfig,
     sources::{RemoteProviderConfig, SlskdConnectionConfig},
 };
 use std::collections::{HashMap, HashSet};
@@ -857,6 +857,8 @@ mod tests {
             task: TrackTask {
                 task_id: task_id.to_string(),
                 source: TrackTaskSource::Manual,
+                desired_track_id: None,
+                source_operation_id: None,
                 target: NormalizedTrack {
                     spotify_track_id: None,
                     source_playlist: None,

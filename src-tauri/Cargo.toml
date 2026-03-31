@@ -39,6 +39,7 @@ uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
 walkdir = "2"
 rayon = "1.10.0"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
 
 [[bin]]
 name = "organize_cli"
@@ -47,3 +48,11 @@ path = "src/bin/organize_cli.rs"
 [[bin]]
 name = "batch_download_cli"
 path = "src/bin/batch_download_cli.rs"
+
+[[bin]]
+name = "tag_rescue_cli"
+path = "src/bin/tag_rescue_cli.rs"
+
+[[bin]]
+name = "engine_pipeline_cli"
+path = "src/bin/engine_pipeline_cli.rs"

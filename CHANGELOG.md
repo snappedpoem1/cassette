@@ -2,6 +2,34 @@
 
 All notable changes to the Cassette project.
 
+## [Unreleased] - 2026-03-30
+
+### Integrated Acquisition Loop
+- Added `engine_pipeline_cli` as the canonical integrated coordinator path
+- Standardized `delta_queue` as the durable acquisition work bus for the integrated flow
+- Added queue claim/recovery fields and coordinator-side claim/release/processed lifecycle handling
+- Threaded `desired_track_id` and `source_operation_id` through `TrackTask` payloads for durable ticket closure
+- Bookended the integrated coordinator run with librarian syncs to close the loop against newly acquired files
+
+### Organizer Safety
+- Added `tag_rescue_cli` to repair DB truth from embedded tags without mutating media files
+- Hardened organizer canonical path generation to preserve an existing non-zero filename track prefix when DB state is zero/missing
+- Added a blocking zero-track rename guard to `organize_cli --live`
+
+### Director / Provider Hardening
+- Replaced Deezer's non-recoverable session cache with a recoverable `RwLock<Option<...>>` path
+- Switched Deezer acquisition to streaming Blowfish stripe decryption directly to disk
+- Made validation report truthful for readability fields and reject codec/container mismatches
+- Added `Retry-After`, `Content-Length`, and range-semantics handling to staged-download resume logic
+- Moved health/cache/validation-bail thresholds into `DirectorConfig`
+- Changed provider health polling to concurrent checks
+- Partitioned search cache entries by strategy and provider epoch to avoid stale cross-strategy/provider-state reuse
+- Added conservative normalized fuzzy matching to Deezer and Qobuz candidate confidence scoring
+
+### Documentation
+- Updated `docs/PROJECT_STATE.md`, `docs/TODO.md`, and `docs/DECISIONS.md` to reflect the integrated queue-first runtime shape
+- Recorded `director/providers/` as the canonical runtime acquisition path and `downloader/` as cleanup debt
+
 ## [0.1.0] - 2026-03-27
 
 ### Foundation
@@ -54,6 +82,7 @@ All notable changes to the Cassette project.
 - Real-Debrid provider implementation added
 - Batch download CLI tool
 - Library organize CLI tool
+- Grouped library cleanup manifest tooling plus safe-apply PowerShell wrapper
 
 ### Documentation
 - 19 code-traced per-component reference docs in `docs/reference/`

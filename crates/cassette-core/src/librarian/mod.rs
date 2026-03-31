@@ -11,7 +11,7 @@ pub mod orchestrator;
 pub mod reconcile;
 pub mod scanner;
 
-pub use config::{DuplicatePolicy, LibrarianConfig, QualityConfig, ScanBehavior};
+pub use config::{DuplicatePolicy, LibrarianConfig, QualityConfig, ScanBehavior, ScanMode};
 pub use db::LibrarianDb;
 pub use error::{LibrarianError, Result};
 pub use orchestrator::{

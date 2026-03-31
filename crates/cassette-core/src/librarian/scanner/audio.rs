@@ -129,7 +129,13 @@ pub fn quality_tier_for(extension: &str, bitrate: Option<i64>, quality: &Quality
     None
 }
 
-pub fn to_new_local_file(path: &Path, file_size: i64, facts: ParsedAudioFacts, hash: Option<String>) -> NewLocalFile {
+pub fn to_new_local_file(
+    path: &Path,
+    file_size: i64,
+    file_mtime_ms: Option<i64>,
+    facts: ParsedAudioFacts,
+    hash: Option<String>,
+) -> NewLocalFile {
     let file_name = path
         .file_name()
         .and_then(|v| v.to_str())
@@ -153,6 +159,7 @@ pub fn to_new_local_file(path: &Path, file_size: i64, facts: ParsedAudioFacts, h
         channels: facts.channels,
         duration_ms: facts.duration_ms,
         file_size,
+        file_mtime_ms,
         content_hash: hash,
         integrity_status: facts.integrity_status,
         quality_tier: facts.quality_tier,

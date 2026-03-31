@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ScanMode {
+    Full,
+    Resume,
+    DeltaOnly,
+}
+
+impl ScanMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Resume => "resume",
+            Self::DeltaOnly => "delta-only",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DuplicatePolicy {
     Ignore,
@@ -47,6 +64,7 @@ pub struct LibrarianConfig {
     pub duplicate_policy: DuplicatePolicy,
     pub quality: QualityConfig,
     pub scan_behavior: ScanBehavior,
+    pub scan_mode: ScanMode,
     pub tracing_filter: String,
 }
 
@@ -60,6 +78,7 @@ impl Default for LibrarianConfig {
             duplicate_policy: DuplicatePolicy::Flag,
             quality: QualityConfig::default(),
             scan_behavior: ScanBehavior::default(),
+            scan_mode: ScanMode::Full,
             tracing_filter: "info,cassette_core::librarian=debug".to_string(),
         }
     }

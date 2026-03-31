@@ -2,7 +2,8 @@ pub mod migrations;
 
 use crate::librarian::error::Result;
 use crate::librarian::models::{
-    DesiredTrack, LocalFile, NewDeltaQueueItem, NewLocalFile, NewReconciliationResult, Track,
+    DesiredTrack, LocalFile, LocalFileScanState, NewDeltaQueueItem, NewLocalFile,
+    NewReconciliationResult, ScanCheckpoint, Track,
 };
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
@@ -210,8 +211,8 @@ impl LibrarianDb {
         sqlx::query(
             "INSERT INTO local_files (
                 track_id, file_path, file_name, extension, codec, bitrate, sample_rate, bit_depth,
-                channels, duration_ms, file_size, content_hash, integrity_status, quality_tier, last_scanned_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP)
+                channels, duration_ms, file_size, file_mtime_ms, content_hash, integrity_status, quality_tier, last_scanned_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CURRENT_TIMESTAMP)
              ON CONFLICT(file_path) DO UPDATE SET
                 track_id = COALESCE(excluded.track_id, local_files.track_id),
                 file_name = excluded.file_name,
@@ -223,6 +224,7 @@ impl LibrarianDb {
                 channels = excluded.channels,
                 duration_ms = excluded.duration_ms,
                 file_size = excluded.file_size,
+                file_mtime_ms = excluded.file_mtime_ms,
                 content_hash = COALESCE(excluded.content_hash, local_files.content_hash),
                 integrity_status = excluded.integrity_status,
                 quality_tier = excluded.quality_tier,
@@ -240,6 +242,7 @@ impl LibrarianDb {
         .bind(file.channels)
         .bind(file.duration_ms)
         .bind(file.file_size)
+        .bind(file.file_mtime_ms)
         .bind(&file.content_hash)
         .bind(file.integrity_status.as_str())
         .bind(file.quality_tier.map(|q| q.as_str().to_string()))
@@ -251,6 +254,83 @@ impl LibrarianDb {
             .fetch_one(&self.pool)
             .await?;
         Ok(id)
+    }
+
+    pub async fn get_local_file_scan_state(&self, path: &str) -> Result<Option<LocalFileScanState>> {
+        let state = sqlx::query_as::<_, LocalFileScanState>(
+            "SELECT file_path, file_size, file_mtime_ms
+             FROM local_files
+             WHERE file_path = ?1
+             LIMIT 1",
+        )
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(state)
+    }
+
+    pub async fn upsert_scan_checkpoint(
+        &self,
+        root_path: &str,
+        run_id: &str,
+        last_scanned_path: Option<&str>,
+        status: &str,
+        files_seen: i64,
+        files_indexed: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO scan_checkpoints (
+                root_path, last_run_id, last_scanned_path, status, files_seen, files_indexed, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+             ON CONFLICT(root_path) DO UPDATE SET
+                last_run_id = excluded.last_run_id,
+                last_scanned_path = excluded.last_scanned_path,
+                status = excluded.status,
+                files_seen = excluded.files_seen,
+                files_indexed = excluded.files_indexed,
+                updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(root_path)
+        .bind(run_id)
+        .bind(last_scanned_path)
+        .bind(status)
+        .bind(files_seen)
+        .bind(files_indexed)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_scan_checkpoint(&self, root_path: &str) -> Result<Option<ScanCheckpoint>> {
+        let checkpoint = sqlx::query_as::<_, ScanCheckpoint>(
+            "SELECT id, root_path, last_run_id, last_scanned_path, status, files_seen, files_indexed, created_at, updated_at
+             FROM scan_checkpoints
+             WHERE root_path = ?1
+             LIMIT 1",
+        )
+        .bind(root_path)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(checkpoint)
+    }
+
+    pub async fn has_completed_checkpoints(&self, roots: &[String]) -> Result<bool> {
+        if roots.is_empty() {
+            return Ok(false);
+        }
+
+        for root in roots {
+            let status = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT status FROM scan_checkpoints WHERE root_path = ?1 LIMIT 1",
+            )
+            .bind(root)
+            .fetch_one(&self.pool)
+            .await?;
+            if status.as_deref() != Some("completed") {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     pub async fn insert_desired_track(
@@ -346,7 +426,7 @@ impl LibrarianDb {
     pub async fn list_local_files_for_track(&self, track_id: i64) -> Result<Vec<LocalFile>> {
         let rows = sqlx::query_as::<_, LocalFile>(
             "SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate,
-                    bit_depth, channels, duration_ms, file_size, content_hash,
+                    bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash,
                     integrity_status, quality_tier, last_scanned_at, created_at, updated_at
              FROM local_files WHERE track_id = ?1 ORDER BY id",
         )
@@ -401,6 +481,7 @@ impl LibrarianDb {
                 lf.channels as lf_channels,
                 lf.duration_ms as lf_duration_ms,
                 lf.file_size as lf_file_size,
+                lf.file_mtime_ms as lf_file_mtime_ms,
                 lf.content_hash as lf_content_hash,
                 lf.integrity_status as lf_integrity_status,
                 lf.quality_tier as lf_quality_tier,
@@ -451,6 +532,7 @@ impl LibrarianDb {
                 channels: row.try_get("lf_channels")?,
                 duration_ms: row.try_get("lf_duration_ms")?,
                 file_size: row.try_get("lf_file_size")?,
+                file_mtime_ms: row.try_get("lf_file_mtime_ms")?,
                 content_hash: row.try_get("lf_content_hash")?,
                 integrity_status: row.try_get("lf_integrity_status")?,
                 quality_tier: row.try_get("lf_quality_tier")?,
@@ -491,6 +573,7 @@ impl LibrarianDb {
                 lf.channels as lf_channels,
                 lf.duration_ms as lf_duration_ms,
                 lf.file_size as lf_file_size,
+                lf.file_mtime_ms as lf_file_mtime_ms,
                 lf.content_hash as lf_content_hash,
                 lf.integrity_status as lf_integrity_status,
                 lf.quality_tier as lf_quality_tier,
@@ -536,6 +619,7 @@ impl LibrarianDb {
                 channels: row.try_get("lf_channels")?,
                 duration_ms: row.try_get("lf_duration_ms")?,
                 file_size: row.try_get("lf_file_size")?,
+                file_mtime_ms: row.try_get("lf_file_mtime_ms")?,
                 content_hash: row.try_get("lf_content_hash")?,
                 integrity_status: row.try_get("lf_integrity_status")?,
                 quality_tier: row.try_get("lf_quality_tier")?,
@@ -551,7 +635,7 @@ impl LibrarianDb {
     pub async fn find_duplicate_hashes(&self, hash: &str) -> Result<Vec<LocalFile>> {
         let rows = sqlx::query_as::<_, LocalFile>(
             "SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate,
-                    bit_depth, channels, duration_ms, file_size, content_hash,
+                    bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash,
                     integrity_status, quality_tier, last_scanned_at, created_at, updated_at
              FROM local_files
              WHERE content_hash = ?1",

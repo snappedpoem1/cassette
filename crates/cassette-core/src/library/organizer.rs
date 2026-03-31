@@ -1,7 +1,10 @@
 use crate::models::Track;
+use crate::library::track_number_repair::parse_filename_numbers;
 use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+pub const ZERO_TRACK_PREFIX: &str = "00 - ";
 
 /// Target folder structure: `library_base/Artist/Album (Year)/disc_track - Title.ext`
 /// e.g. `A:\music\Coheed and Cambria\Good Apollo I'm Burning Star IV (2005)\01-01 - Keeping the Blade.flac`
@@ -57,6 +60,12 @@ pub fn canonical_path(library_base: &str, track: &Track) -> PathBuf {
 
     let disc = track.disc_number.unwrap_or(1).max(1);
     let num = track.track_number.unwrap_or(0).max(0);
+    let existing_number = existing_track_number_prefix(&track.path);
+    let effective_num = if num > 0 {
+        num
+    } else {
+        existing_number.unwrap_or(0)
+    };
     let title = sanitize_filename(&track.title);
     let title = if title.is_empty() {
         Path::new(&track.path)
@@ -75,9 +84,9 @@ pub fn canonical_path(library_base: &str, track: &Track) -> PathBuf {
         .to_lowercase();
 
     let filename = if disc > 1 {
-        format!("{:02}-{:02} - {}.{}", disc, num, title, ext)
+        format!("{:02}-{:02} - {}.{}", disc, effective_num, title, ext)
     } else {
-        format!("{:02} - {}.{}", num, title, ext)
+        format!("{:02} - {}.{}", effective_num, title, ext)
     };
 
     Path::new(library_base)
@@ -329,6 +338,19 @@ fn sanitize_filename(name: &str) -> String {
     }
 
     sanitized
+}
+
+pub fn existing_track_number_prefix(path: &str) -> Option<i32> {
+    parse_filename_numbers(path).map(|value| value.track_number)
+}
+
+pub fn is_zero_track_rename(old_path: &str, new_path: &str) -> bool {
+    let old_prefix = existing_track_number_prefix(old_path);
+    let new_filename = Path::new(new_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    old_prefix.is_some() && new_filename.starts_with(ZERO_TRACK_PREFIX)
 }
 
 fn normalize(s: &str) -> String {

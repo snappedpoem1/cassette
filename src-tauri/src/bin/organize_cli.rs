@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+const MAX_ZERO_TRACK_RENAMES_ABSOLUTE: usize = 25;
+const MAX_ZERO_TRACK_RENAMES_RATIO: f64 = 0.05;
+
 fn app_db_path() -> Result<PathBuf, String> {
     let app_data = std::env::var("APPDATA").map_err(|e| e.to_string())?;
     Ok(PathBuf::from(app_data)
@@ -175,11 +178,40 @@ fn main() -> Result<(), String> {
         result.errors.len()
     );
 
+    let zero_track_renames = result
+        .moved
+        .iter()
+        .filter(|mv| organizer::is_zero_track_rename(&mv.old_path, &mv.new_path))
+        .count();
+    let zero_track_ratio = if result.moved.is_empty() {
+        0.0
+    } else {
+        zero_track_renames as f64 / result.moved.len() as f64
+    };
+
+    if zero_track_renames > 0 {
+        println!(
+            "Zero-track renames detected: {} ({:.1}%)",
+            zero_track_renames,
+            zero_track_ratio * 100.0
+        );
+    }
+
     if !live && !result.moved.is_empty() {
         println!("\nThis was a DRY RUN. To actually move files, run with --live");
     }
 
     if live && !result.moved.is_empty() {
+        if zero_track_renames >= MAX_ZERO_TRACK_RENAMES_ABSOLUTE
+            || zero_track_ratio >= MAX_ZERO_TRACK_RENAMES_RATIO
+        {
+            return Err(format!(
+                "Refusing live organize: detected {} unsafe zero-track renames ({:.1}%). Run tag rescue first.",
+                zero_track_renames,
+                zero_track_ratio * 100.0
+            ));
+        }
+
         println!("\nMoving files and updating DB paths...");
         for mv in &result.moved {
             if let Err(e) = db.update_track_path(mv.track_id, &mv.new_path) {

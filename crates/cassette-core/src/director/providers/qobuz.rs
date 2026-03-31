@@ -6,6 +6,7 @@ use crate::director::models::{
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
 use crate::director::temp::TaskTempContext;
+use crate::librarian::matchers::fuzzy::levenshtein;
 use crate::sources::{build_query, qobuz_search, qobuz_user_auth_token, RemoteProviderConfig};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -123,14 +124,10 @@ impl Provider for QobuzProvider {
         Ok(albums
             .into_iter()
             .map(|album| {
-                let mut confidence = 0.65_f32;
-                if normalize(&album.artist).contains(&normalize(&task.target.artist)) {
-                    confidence += 0.20;
-                }
+                let mut confidence = 0.40_f32;
+                confidence += normalized_match_confidence(&album.artist, &task.target.artist) * 0.30;
                 if let Some(target_album) = task.target.album.as_deref() {
-                    if normalize(&album.title).contains(&normalize(target_album)) {
-                        confidence += 0.10;
-                    }
+                    confidence += normalized_match_confidence(&album.title, target_album) * 0.20;
                 }
 
                 ProviderSearchCandidate {
@@ -352,7 +349,7 @@ impl Provider for QobuzProvider {
 }
 
 fn normalize(value: &str) -> String {
-    value
+    normalize_match_noise(value)
         .to_ascii_lowercase()
         .chars()
         .map(|character| if character.is_alphanumeric() { character } else { ' ' })
@@ -360,6 +357,45 @@ fn normalize(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn normalize_match_noise(value: &str) -> String {
+    value
+        .replace("pt.", "part")
+        .replace("pt ", "part ")
+        .replace("feat.", "feat ")
+        .replace("featuring", "feat")
+        .replace("deluxe edition", "")
+        .replace("expanded edition", "")
+        .replace("remastered", "")
+        .replace("remaster", "")
+        .replace("edition", "")
+}
+
+fn normalized_match_confidence(candidate: &str, target: &str) -> f32 {
+    let candidate = normalize(candidate);
+    let target = normalize(target);
+    if candidate.is_empty() || target.is_empty() {
+        return 0.0;
+    }
+    if candidate == target {
+        return 1.0;
+    }
+    if candidate.contains(&target) || target.contains(&candidate) {
+        return 0.94;
+    }
+
+    let distance = levenshtein(&candidate, &target);
+    let max_len = candidate.chars().count().max(target.chars().count());
+    if max_len == 0 {
+        return 0.0;
+    }
+    let similarity = 1.0 - (distance as f32 / max_len as f32);
+    if similarity >= 0.90 {
+        similarity
+    } else {
+        0.0
+    }
 }
 
 fn sanitize(value: &str) -> String {
