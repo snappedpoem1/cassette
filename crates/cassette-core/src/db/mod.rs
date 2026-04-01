@@ -1308,14 +1308,18 @@ impl Db {
     /// Returns missing albums from Spotify history that have significant listening
     /// time (>30min) and play count (>10), ordered by play_count descending.
     pub fn get_missing_spotify_albums(&self, limit: usize) -> Result<Vec<SpotifyAlbumHistory>> {
+        self.get_missing_spotify_albums_with_min_plays(10)
+            .map(|mut v| { v.truncate(limit); v })
+    }
+
+    pub fn get_missing_spotify_albums_with_min_plays(&self, min_plays: i64) -> Result<Vec<SpotifyAlbumHistory>> {
         let mut stmt = self.conn.prepare("
             SELECT artist, album, total_ms, play_count, skip_count, in_library, imported_at
             FROM spotify_album_history
-            WHERE in_library = 0 AND total_ms > 1800000 AND play_count > 10
+            WHERE in_library = 0 AND total_ms > 1800000 AND play_count >= ?1
             ORDER BY play_count DESC
-            LIMIT ?1
         ")?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
+        let rows = stmt.query_map(params![min_plays], |row| {
             Ok(SpotifyAlbumHistory {
                 artist: row.get(0)?,
                 album: row.get(1)?,

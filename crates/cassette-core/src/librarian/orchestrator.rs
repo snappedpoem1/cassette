@@ -12,6 +12,8 @@ use tracing::{error, info, instrument, warn};
 use tracing_subscriber::filter::EnvFilter;
 use uuid::Uuid;
 
+const STALE_SYNC_RUN_MINUTES: i64 = 15;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncPhase {
     DbInit,
@@ -74,6 +76,10 @@ pub async fn run_librarian_sync(
         error!(run_id = %run_id, phase = "db_init", error = %error, "database initialization failed");
         return Err(error);
     }
+    let recovered = recover_stale_sync_runs(db_pool, STALE_SYNC_RUN_MINUTES).await?;
+    if recovered > 0 {
+        warn!(run_id = %run_id, recovered, "recovered stale in-progress sync runs");
+    }
     let sync_run_row_id = create_sync_run(db_pool, &run_id).await?;
     let mut counts = SyncCounts::default();
     let mut errors = Vec::<(String, String)>::new();
@@ -81,25 +87,29 @@ pub async fn run_librarian_sync(
     info!(run_id = %run_id, "starting librarian sync");
     let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::DbInit, &counts).await;
 
-    if let Err(error) = validate_roots_accessible(&config.library_roots).await {
-        let message = error.to_string();
-        let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message).await;
-        error!(run_id = %run_id, phase = "scan", error = %message, "library roots inaccessible");
-        return Err(error);
-    }
-
-    match scan_local_library(db_pool, config, &run_id).await {
-        Ok((scanned, upserted)) => {
-            counts.files_scanned = scanned;
-            counts.files_upserted = upserted;
-            let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Scan, &counts).await;
-            info!(run_id = %run_id, files_scanned = scanned, files_upserted = upserted, "scan phase completed");
-        }
-        Err(error) => {
+    if config.skip_scan {
+        info!(run_id = %run_id, phase = "scan", "scan phase skipped by request");
+    } else {
+        if let Err(error) = validate_roots_accessible(&config.library_roots).await {
             let message = error.to_string();
             let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message).await;
-            error!(run_id = %run_id, phase = "scan", error = %message, "scan phase failed");
+            error!(run_id = %run_id, phase = "scan", error = %message, "library roots inaccessible");
             return Err(error);
+        }
+
+        match scan_local_library(db_pool, config, &run_id).await {
+            Ok((scanned, upserted)) => {
+                counts.files_scanned = scanned;
+                counts.files_upserted = upserted;
+                let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Scan, &counts).await;
+                info!(run_id = %run_id, files_scanned = scanned, files_upserted = upserted, "scan phase completed");
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message).await;
+                error!(run_id = %run_id, phase = "scan", error = %message, "scan phase failed");
+                return Err(error);
+            }
         }
     }
 
@@ -161,7 +171,11 @@ pub async fn run_librarian_sync(
     };
     let summary = format!(
         "Librarian sync completed [{}]: {} scanned, {} upserted, {} imported, {} reconciled, {} deltas",
-        config.scan_mode.as_str(),
+        if config.skip_scan {
+            "skip-scan"
+        } else {
+            config.scan_mode.as_str()
+        },
         counts.files_scanned,
         counts.files_upserted,
         counts.desired_tracks_imported,
@@ -373,7 +387,9 @@ async fn run_reconciliation_phase(db_pool: &SqlitePool, run_id: &str) -> Result<
 }
 
 async fn generate_delta_queue(db_pool: &SqlitePool, run_id: &str) -> Result<usize> {
-    sqlx::query("DELETE FROM delta_queue WHERE processed_at IS NULL")
+    // Only remove unclaimed unprocessed rows. Rows with claimed_at IS NOT NULL
+    // are mid-flight in a coordinator run and must not be wiped.
+    sqlx::query("DELETE FROM delta_queue WHERE processed_at IS NULL AND claimed_at IS NULL")
         .execute(db_pool)
         .await?;
 
@@ -405,6 +421,10 @@ async fn generate_delta_queue(db_pool: &SqlitePool, run_id: &str) -> Result<usiz
             "upgrade_needed" => ("upgrade_quality", 80_i64),
             _ => ("manual_review", 40_i64),
         };
+
+        if action == "no_action" {
+            continue;
+        }
 
         sqlx::query(
             "INSERT INTO delta_queue (desired_track_id, action_type, priority, reason, target_quality, source_operation_id)
@@ -442,6 +462,24 @@ pub async fn create_sync_run(db_pool: &SqlitePool, run_id: &str) -> Result<i64> 
     .await?;
 
     Ok(result.last_insert_rowid())
+}
+
+pub async fn recover_stale_sync_runs(db_pool: &SqlitePool, stale_minutes: i64) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE sync_runs
+         SET ended_at = ?1,
+             status = 'interrupted',
+             error_message = COALESCE(error_message, 'startup recovery marked stale in-progress run as interrupted')
+         WHERE status = 'in_progress'
+           AND ended_at IS NULL
+           AND julianday(started_at) <= julianday('now') - (?2 / 1440.0)",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(stale_minutes as f64)
+    .execute(db_pool)
+    .await?;
+
+    Ok(result.rows_affected())
 }
 
 pub async fn update_sync_run_phase(
@@ -579,6 +617,41 @@ mod tests {
                 .await
                 .expect("failed status");
         assert_eq!(failed_status, "failed");
+    }
+
+    #[tokio::test]
+    async fn stale_in_progress_runs_are_marked_interrupted() {
+        let pool = test_pool().await;
+        initialize_database(&pool).await.expect("migrate");
+
+        let stale_row = create_sync_run(&pool, "stale-run").await.expect("create stale run");
+        sqlx::query("UPDATE sync_runs SET started_at = '2026-01-01T00:00:00+00:00' WHERE id = ?1")
+            .bind(stale_row)
+            .execute(&pool)
+            .await
+            .expect("age stale run");
+
+        let fresh_row = create_sync_run(&pool, "fresh-run").await.expect("create fresh run");
+        let recovered = recover_stale_sync_runs(&pool, 15)
+            .await
+            .expect("recover stale runs");
+        assert_eq!(recovered, 1);
+
+        let stale_status: String =
+            sqlx::query_scalar("SELECT status FROM sync_runs WHERE id = ?1")
+                .bind(stale_row)
+                .fetch_one(&pool)
+                .await
+                .expect("stale status");
+        assert_eq!(stale_status, "interrupted");
+
+        let fresh_status: String =
+            sqlx::query_scalar("SELECT status FROM sync_runs WHERE id = ?1")
+                .bind(fresh_row)
+                .fetch_one(&pool)
+                .await
+                .expect("fresh status");
+        assert_eq!(fresh_status, "in_progress");
     }
 
     #[tokio::test]

@@ -2,6 +2,8 @@
 
 Last audited: 2026-03-27
 
+Historical snapshot: parts of this audit were superseded by the 2026-03-30 documentation and runtime hardening pass. For current truth, prefer `PROJECT_STATE.md`, `TODO.md`, and `DECISIONS.md`.
+
 ## Audit Standard
 
 Every major claim below is labeled:
@@ -30,8 +32,8 @@ This document is intentionally not a feature wish list. It is a system truth map
 | Artifact | Finding | Status |
 | --- | --- | --- |
 | `AGENTS.md` / user instructions | Windows + PowerShell environment; no `os.path`; type hints/logging rules if Python is touched. | `Proven` |
-| `docs/PROJECT_STATE.md` | Out of date. It says `cargo check` is warning-free and `cargo test` passes; current local verification contradicts both claims. | `Proven` |
-| `docs/WORKLIST.md` | Out of date. It assumes Deezer full-track is not implemented and points to `download_runtime.rs`, which is not the active acquisition owner. | `Proven` |
+| `docs/PROJECT_STATE.md` | Current runtime-truth document as of 2026-03-30. | `Proven` |
+| `docs/WORKLIST.md` | Forward-looking planning document; must stay aligned with the deliberate sidecar control-plane architecture. | `Proven` |
 | `docs/ROADMAP_ENGINE_TO_ENTITY.md` | Missing. | `Proven` |
 | `docs/MISSING_FEATURES_REGISTRY.md` | Missing. | `Proven` |
 | `docs/SESSION_INDEX.md` | Missing. | `Proven` |
@@ -41,8 +43,8 @@ This document is intentionally not a feature wish list. It is a system truth map
 
 | Check | Result | Status |
 | --- | --- | --- |
-| `cargo check` | Succeeds, but emits warnings, including dead fields in `real_debrid.rs` and dead-code warnings around `src-tauri/src/bin`. | `Proven` |
-| `cargo test` | Fails. One failing test: `library::tests::operations_tests::logs_operation_event`. | `Proven` |
+| `cargo check` | Passes at the workspace root. | `Proven` |
+| `cargo test` | Passes at the workspace root. | `Proven` |
 | `npm run build` in `ui` | Succeeds. | `Proven` |
 | `scripts/smoke_desktop.ps1` | Exists, but it is an environment/readiness check rather than a behavioral desktop smoke suite. | `Proven` |
 
@@ -55,7 +57,7 @@ This document is intentionally not a feature wish list. It is a system truth map
 | `cassette-core::db` | Active app runtime DB | `Proven Working` | `crates/cassette-core/src/db/mod.rs:23-108` |
 | `cassette-core::director` | Current acquisition engine and provider waterfall | `Proven Working` | `crates/cassette-core/src/director/engine.rs` |
 | `director/providers/qobuz` | Search + direct file acquisition | `Implemented but Unverified` | `crates/cassette-core/src/director/providers/qobuz.rs` |
-| `director/providers/deezer` | Search + private media acquisition/decryption | `Implemented but Unverified` | `crates/cassette-core/src/director/providers/deezer.rs` |
+| `director/providers/deezer` | Search + private media acquisition/decryption | `Proven Working` on this machine | `crates/cassette-core/src/director/providers/deezer.rs` |
 | `director/providers/slskd` | Search + transfer handoff + local file discovery | `Implemented but Unverified` | `crates/cassette-core/src/director/providers/slskd.rs` |
 | `director/providers/usenet` | NZBGeek search + SABnzbd handoff + local file discovery | `Implemented but Unverified` | `crates/cassette-core/src/director/providers/usenet.rs` |
 | `director/providers/real_debrid` | Torrent resolver path via TPB search + RD torrent APIs | `Implemented but Unverified` | `crates/cassette-core/src/director/providers/real_debrid.rs` |
@@ -67,7 +69,7 @@ This document is intentionally not a feature wish list. It is a system truth map
 | `librarian/enrich/discogs.rs` | Discogs enricher | `Stub/Placeholder` | `crates/cassette-core/src/librarian/enrich/discogs.rs:15-19` |
 | `librarian/enrich/lastfm.rs` | Last.fm enricher | `Stub/Placeholder` | `crates/cassette-core/src/librarian/enrich/lastfm.rs:15-19` |
 | `director/sources/provider_bridge.rs` and `director/sources/*` | Compatibility bridge from older source-provider abstraction to current providers | `Legacy/Compatibility Only` | `crates/cassette-core/src/director/sources/*`, validation path references |
-| `downloader/mod.rs` | Older download config/provider registry surface | `Legacy/Conflicting` | overlaps with `director/providers` and settings surface |
+| `downloader/mod.rs` | Provider-settings compatibility surface | `Legacy/Compatibility Only` | no longer an active acquisition owner |
 | `BandcampSource` | Bandcamp resolver | `Stub/Placeholder` | explicit placeholder error in `crates/cassette-core/src/director/sources/bandcamp.rs` |
 | Tidal | Mentioned in docs only | `Doc-Only Idea` | `docs/PROJECT_STATE.md`, `docs/TELEMETRY.md`, no provider implementation |
 
@@ -145,9 +147,9 @@ See `REQUEST_CAPABILITY_MATRIX.md` for the full matrix. The short version:
 
 | Finding | Status | Evidence |
 | --- | --- | --- |
-| The active app DB does not persist normalized artist identities, release-group IDs, release IDs per source, track IDs, query signatures, candidate sets, or negative-result memory. | `Proven` | `crates/cassette-core/src/db/mod.rs:23-108` |
-| The richer repo DB schema already models several missing memory surfaces (`desired_tracks`, `reconciliation_results`, `delta_queue`, `operation_log`). | `Proven` | `crates/cassette-core/src/librarian/db/migrations.rs:79-145`, `crates/cassette-core/src/library/schema/migrations.rs:43-101` |
-| The architecture already has enough primitives to stop re-querying blindly, but the shipped runtime does not use them coherently. | `Strong Inference` | split between active app DB and richer library schema |
+| The active app runtime now persists request signatures, candidate sets, provider searches, provider attempts, and provider-negative memory, but it still lacks a canonical release-identity spine. | `Proven` | `docs/PROJECT_STATE.md`, `crates/cassette-core/src/db/mod.rs` |
+| The sidecar DB now models desired-track reconciliation, `delta_queue`, and scan checkpoints in a durable control-plane store. | `Proven` | `crates/cassette-core/src/librarian/db/migrations.rs`, `docs/PROJECT_STATE.md` |
+| The architecture now has enough durable primitives to support cache reuse and explainability, but the UI and planning layers do not yet use them coherently. | `Strong Inference` | split between active runtime persistence, sidecar control plane, and current UI surface |
 
 ## Phase 6: Best-Shape Inference
 
@@ -165,7 +167,7 @@ See `REQUEST_CAPABILITY_MATRIX.md` for the full matrix. The short version:
    - library import
    - provenance finalization
 4. Make `director` the orchestration owner, not `downloader/` and not ad hoc command logic.
-5. Reuse the richer reconciliation/provenance schema instead of keeping it as a sidecar experiment.
+5. Use the richer sidecar reconciliation/provenance schema coherently instead of leaving it half-integrated.
 
 ## Honest Bottom Line
 

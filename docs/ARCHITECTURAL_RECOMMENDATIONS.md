@@ -1,6 +1,6 @@
 # Architectural Recommendations
 
-Last audited: 2026-03-27
+Last audited: 2026-03-30
 
 ## Target Shape
 
@@ -32,14 +32,16 @@ Store and reuse:
 
 Then map every provider candidate back onto that spine where possible.
 
-### 3. Converge on one persistence model
+### 3. Keep the runtime DB and the sidecar control plane distinct until a deliberate migration exists
 
-Best path:
+Current best path:
 
-- migrate the active app to use the richer `librarian`/`library` schema surfaces
-- keep the small UI-oriented tables only as read models if needed
+- keep `cassette.db` as the active desktop runtime and playback database
+- keep `cassette_librarian.db` as the durable librarian/orchestrator sidecar for reconciliation,
+  scan checkpoints, and `delta_queue`
+- prove the bounded coordinator and recovery loops against that split architecture first
 
-Do not continue growing two parallel truths.
+Do not drift into accidental half-merges. Either keep the split explicit, or replace it deliberately later.
 
 ### 4. Split planning from execution
 
@@ -89,6 +91,6 @@ That means candidate persistence is not optional.
 Prioritize:
 
 - `director` as canonical orchestration layer
-- retire or absorb `downloader/`
+- keep `downloader/` compatibility-only until no settings callers remain, then remove it
 - remove `ProviderBridge` after migration
 - keep stubs clearly labeled until real integrations exist

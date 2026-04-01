@@ -1,6 +1,6 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
+    CandidateAcquisition, NormalizedTrack, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
     ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
@@ -338,12 +338,60 @@ impl Provider for QobuzProvider {
                 message: error.to_string(),
             })?;
 
+        let resolved_metadata = NormalizedTrack {
+            spotify_track_id: task.target.spotify_track_id.clone(),
+            source_playlist: task.target.source_playlist.clone(),
+            artist: track_item
+                .pointer("/performer/name")
+                .and_then(Value::as_str)
+                .or_else(|| album_body.pointer("/artist/name").and_then(Value::as_str))
+                .unwrap_or(&task.target.artist)
+                .to_string(),
+            album_artist: Some(
+                album_body
+                    .pointer("/artist/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&task.target.artist)
+                    .to_string(),
+            ),
+            title: track_item
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or(&task.target.title)
+                .to_string(),
+            album: Some(
+                album_body
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| candidate.album.as_deref().unwrap_or_default())
+                    .to_string(),
+            ),
+            track_number: track_item
+                .get("track_number")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok()),
+            disc_number: track_item
+                .get("media_number")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok()),
+            year: album_body
+                .get("release_year")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok()),
+            duration_secs: track_item.get("duration").and_then(Value::as_f64),
+            isrc: track_item
+                .get("isrc")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        };
+
         Ok(CandidateAcquisition {
             provider_id: "qobuz".to_string(),
             provider_candidate_id: track_id,
             temp_path: destination,
             file_size: bytes.len() as u64,
             extension_hint: Some(extension.to_string()),
+            resolved_metadata: Some(resolved_metadata),
         })
     }
 }

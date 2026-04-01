@@ -86,6 +86,8 @@ pub struct CandidateAcquisition {
     pub temp_path: PathBuf,
     pub file_size: u64,
     pub extension_hint: Option<String>,
+    #[serde(default)]
+    pub resolved_metadata: Option<NormalizedTrack>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

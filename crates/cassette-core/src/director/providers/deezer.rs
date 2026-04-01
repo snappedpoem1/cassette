@@ -287,6 +287,7 @@ impl Provider for DeezerProvider {
             temp_path: destination,
             file_size: written,
             extension_hint: Some(extension),
+            resolved_metadata: None,
         })
     }
 }

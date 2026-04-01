@@ -1,4 +1,4 @@
-use crate::state::AppState;
+use crate::state::{AppState, BacklogRunStatus};
 use cassette_core::director::{
     AcquisitionStrategy, DirectorProgress, NormalizedTrack, TrackTask,
     TrackTaskSource,
@@ -10,7 +10,7 @@ use cassette_core::models::{
 };
 use cassette_core::sources::{fetch_slskd_transfers, get_artist_discography as fetch_artist_discography, search_metadata as search_catalog_metadata, RemoteProviderConfig, SlskdConnectionConfig};
 use serde_json::Value;
-use tauri::State;
+use tauri::{Emitter, State};
 use uuid::Uuid;
 
 #[tauri::command]
@@ -859,3 +859,290 @@ impl PathTitle {
         Self { title }
     }
 }
+
+// ── Background album backlog downloader ──────────────────────────────────────
+
+fn now_iso() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Simple ISO-like UTC string without chrono dep in this crate
+    let s = secs;
+    let mins = s / 60 % 60;
+    let hours = s / 3600 % 24;
+    let days_since_epoch = s / 86400;
+    // Approximate — good enough for display; precise parsing not needed here
+    format!("epoch+{}d {:02}:{:02}", days_since_epoch, hours, mins)
+}
+
+/// Start a background run that processes the Spotify missing-album backlog.
+/// Emits `director-backlog-progress` events on the app handle as it runs.
+/// Only one backlog run can be active at a time; a second call is a no-op.
+#[tauri::command]
+pub async fn start_backlog_run(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    batch_size: Option<usize>,
+    limit: Option<usize>,
+) -> Result<BacklogRunStatus, String> {
+    {
+        let status = state.backlog_status.lock().map_err(|e| e.to_string())?;
+        if status.running {
+            return Ok(status.clone());
+        }
+    }
+
+    state.backlog_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    {
+        let mut status = state.backlog_status.lock().map_err(|e| e.to_string())?;
+        *status = BacklogRunStatus {
+            running: true,
+            started_at: Some(now_iso()),
+            ..BacklogRunStatus::default()
+        };
+    }
+
+    let db = Arc::clone(&state.db);
+    let download_jobs = Arc::clone(&state.download_jobs);
+    let submitter = state.director_submitter.clone();
+    let backlog_status = Arc::clone(&state.backlog_status);
+    let backlog_cancel = Arc::clone(&state.backlog_cancel);
+    let batch = batch_size.unwrap_or(10);
+    let hard_limit = limit.unwrap_or(500);
+
+    tokio::spawn(async move {
+        let mut total_tracks = 0usize;
+        let mut albums_queued = 0usize;
+        let mut albums_skipped = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+
+        'outer: loop {
+            if backlog_cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+
+            // Fetch next batch of missing albums from DB
+            let missing_albums = {
+                let Ok(db) = db.lock() else { break };
+                db.get_missing_spotify_albums(batch + 20).unwrap_or_default()
+            };
+            let completed_keys = {
+                let Ok(db) = db.lock() else { break };
+                db.get_completed_task_keys().unwrap_or_default()
+            };
+
+            if missing_albums.is_empty() {
+                break;
+            }
+
+            for album in &missing_albums {
+                if backlog_cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    break 'outer;
+                }
+                if total_tracks >= hard_limit {
+                    break 'outer;
+                }
+
+                let artist = album.artist.trim().to_string();
+                let title = album.album.trim().to_string();
+                if artist.is_empty() || title.is_empty() {
+                    albums_skipped += 1;
+                    continue;
+                }
+
+                // Update current album in status
+                {
+                    if let Ok(mut s) = backlog_status.lock() {
+                        s.current_album = Some(format!("{artist} — {title}"));
+                        s.albums_queued = albums_queued;
+                        s.albums_skipped = albums_skipped;
+                        s.tracks_submitted = total_tracks;
+                    }
+                }
+                let _ = app_handle.emit("director-backlog-progress", {
+                    serde_json::json!({
+                        "running": true,
+                        "current_album": format!("{artist} — {title}"),
+                        "albums_queued": albums_queued,
+                        "albums_skipped": albums_skipped,
+                        "tracks_submitted": total_tracks,
+                    })
+                });
+
+                // Resolve tracklist via MusicBrainz
+                let track_tasks = match resolve_album_track_tasks(
+                    &artist,
+                    &title,
+                    TrackTaskSource::SpotifyHistory,
+                    AcquisitionStrategy::DiscographyBatch,
+                )
+                .await
+                {
+                    Ok(tasks) => tasks,
+                    Err(e) => {
+                        errors.push(format!("{artist} - {title}: {e}"));
+                        albums_skipped += 1;
+                        // Brief pause so we don't hammer MusicBrainz on errors
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        continue;
+                    }
+                };
+
+                let mut submitted_any = false;
+                for task in &track_tasks {
+                    if completed_keys.contains(&task.task_id) {
+                        continue;
+                    }
+                    if total_tracks >= hard_limit {
+                        break;
+                    }
+
+                    let job = DownloadJob {
+                        id: task.task_id.clone(),
+                        query: format!(
+                            "{} - {} - {}",
+                            task.target.artist,
+                            task.target.album.clone().unwrap_or_default(),
+                            task.target.title
+                        ),
+                        artist: task.target.artist.clone(),
+                        title: task.target.title.clone(),
+                        album: task.target.album.clone(),
+                        status: DownloadStatus::Queued,
+                        provider: None,
+                        progress: 0.0,
+                        error: None,
+                    };
+                    if let Ok(mut jobs) = download_jobs.lock() {
+                        jobs.insert(task.task_id.clone(), job);
+                    }
+                    if submitter.submit(task.clone()).await.is_ok() {
+                        total_tracks += 1;
+                        submitted_any = true;
+                    }
+                }
+
+                if submitted_any {
+                    albums_queued += 1;
+                } else {
+                    albums_skipped += 1;
+                }
+
+                // Rate-limit MusicBrainz lookups
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            }
+
+            // If we got fewer results than the batch we asked for, the queue is exhausted
+            if missing_albums.len() < batch {
+                break;
+            }
+        }
+
+        let finished_at = now_iso();
+        if let Ok(mut s) = backlog_status.lock() {
+            s.running = false;
+            s.current_album = None;
+            s.albums_queued = albums_queued;
+            s.albums_skipped = albums_skipped;
+            s.tracks_submitted = total_tracks;
+            s.errors = errors.clone();
+            s.finished_at = Some(finished_at.clone());
+        }
+        let _ = app_handle.emit("director-backlog-progress", serde_json::json!({
+            "running": false,
+            "albums_queued": albums_queued,
+            "albums_skipped": albums_skipped,
+            "tracks_submitted": total_tracks,
+            "finished_at": finished_at,
+            "errors": errors,
+        }));
+    });
+
+    let status = state.backlog_status.lock().map_err(|e| e.to_string())?.clone();
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn stop_backlog_run(state: State<'_, AppState>) -> Result<(), String> {
+    state.backlog_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut s) = state.backlog_status.lock() {
+        if s.running {
+            s.running = false;
+            s.finished_at = Some(now_iso());
+            s.current_album = None;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_backlog_status(state: State<'_, AppState>) -> Result<BacklogRunStatus, String> {
+    let status = state.backlog_status.lock().map_err(|e| e.to_string())?.clone();
+    Ok(status)
+}
+
+/// Returns debug statistics: recent task results, provider attempt counts, pending queue size.
+#[tauri::command]
+pub async fn get_director_debug_stats(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+
+    let recent = db
+        .get_recent_task_results(limit.unwrap_or(100))
+        .map_err(|e| e.to_string())?;
+
+    let pending_count = db
+        .get_pending_director_tasks()
+        .map_err(|e| e.to_string())?
+        .len();
+
+    // Provider attempt breakdown from recent results
+    let mut provider_counts: std::collections::HashMap<String, (usize, usize)> =
+        std::collections::HashMap::new();
+    for (_, disposition, provider, _) in &recent {
+        if !provider.is_empty() {
+            let entry = provider_counts.entry(provider.clone()).or_insert((0, 0));
+            if disposition == "Finalized" || disposition == "AlreadyPresent" {
+                entry.0 += 1;
+            } else {
+                entry.1 += 1;
+            }
+        }
+    }
+
+    let provider_stats: Vec<serde_json::Value> = provider_counts
+        .into_iter()
+        .map(|(provider, (success, failed))| {
+            serde_json::json!({
+                "provider": provider,
+                "success": success,
+                "failed": failed,
+            })
+        })
+        .collect();
+
+    let recent_results: Vec<serde_json::Value> = recent
+        .into_iter()
+        .take(limit.unwrap_or(50))
+        .map(|(task_id, disposition, provider, error)| {
+            serde_json::json!({
+                "task_id": task_id,
+                "disposition": disposition,
+                "provider": provider,
+                "error": error,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "pending_count": pending_count,
+        "provider_stats": provider_stats,
+        "recent_results": recent_results,
+    }))
+}
+
+use std::sync::Arc;

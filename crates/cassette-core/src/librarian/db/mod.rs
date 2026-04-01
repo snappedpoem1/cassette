@@ -372,6 +372,36 @@ impl LibrarianDb {
         Ok(result.last_insert_rowid())
     }
 
+    pub async fn clear_desired_tracks_for_source(&self, source_name: &str) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM delta_queue
+             WHERE desired_track_id IN (
+                 SELECT id FROM desired_tracks WHERE source_name = ?1
+             )",
+        )
+        .bind(source_name)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM reconciliation_results
+             WHERE desired_track_id IN (
+                 SELECT id FROM desired_tracks WHERE source_name = ?1
+             )",
+        )
+        .bind(source_name)
+        .execute(&mut *tx)
+        .await?;
+
+        let result = sqlx::query("DELETE FROM desired_tracks WHERE source_name = ?1")
+            .bind(source_name)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn insert_reconciliation_result(&self, row: &NewReconciliationResult) -> Result<i64> {
         let result = sqlx::query(
             "INSERT INTO reconciliation_results (
@@ -407,7 +437,10 @@ impl LibrarianDb {
 
     pub async fn clear_reconciliation(&self) -> Result<()> {
         sqlx::query("DELETE FROM reconciliation_results").execute(&self.pool).await?;
-        sqlx::query("DELETE FROM delta_queue WHERE processed_at IS NULL").execute(&self.pool).await?;
+        // Preserve claimed rows so mid-flight coordinator work is not wiped.
+        sqlx::query("DELETE FROM delta_queue WHERE processed_at IS NULL AND claimed_at IS NULL")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

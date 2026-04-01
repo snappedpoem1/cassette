@@ -2,7 +2,10 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     downloadJobs, metadataSearchResults, artistDiscography, isSearchingMetadata, providerHealth,
-    loadDownloadJobs, searchMetadata, loadDiscography, startDownloadSupervision, stopDownloadSupervision,
+    backlogStatus, debugStats,
+    loadDownloadJobs, searchMetadata, loadDiscography,
+    startDownloadSupervision, stopDownloadSupervision,
+    startBacklogRun, stopBacklogRun, refreshBacklogStatus, refreshDebugStats,
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
   import { debounce } from '$lib/utils';
@@ -14,6 +17,8 @@
   let expandedJob: string | null = null;
   let candidateReview: CandidateReviewItem[] = [];
   let reviewLoading = false;
+  let showDebug = false;
+  let backlogLimit = 200;
 
   async function toggleReview(taskId: string) {
     if (expandedJob === taskId) {
@@ -37,9 +42,10 @@
 
   $: debouncedSearch(searchInput);
 
-  onMount(() => {
+  onMount(async () => {
     loadDownloadJobs();
     startDownloadSupervision();
+    refreshBacklogStatus();
   });
   onDestroy(stopDownloadSupervision);
 
@@ -58,10 +64,7 @@
     const report = await api.startDiscographyDownloads(
       $artistDiscography.artist.name,
       $artistDiscography.artist.mbid ?? undefined,
-      false,
-      false,
-      false,
-      50
+      false, false, false, 50
     );
     queueNotice = `${report.queued} queued, ${report.skipped} skipped (${report.scope}).`;
     await loadDownloadJobs();
@@ -69,6 +72,11 @@
 
   async function cancelJob(taskId: string) {
     await api.cancelDownload(taskId);
+  }
+
+  async function toggleDebug() {
+    showDebug = !showDebug;
+    if (showDebug) await refreshDebugStats();
   }
 
   const statusColors: Record<string, string> = {
@@ -80,6 +88,13 @@
     Cancelled: 'badge-muted',
     Failed: 'badge-error',
   };
+
+  const dispositionColor: Record<string, string> = {
+    Finalized: 'badge-success',
+    AlreadyPresent: 'badge-muted',
+    Failed: 'badge-error',
+    Cancelled: 'badge-muted',
+  };
 </script>
 
 <svelte:head><title>Downloads · Cassette</title></svelte:head>
@@ -87,6 +102,9 @@
 <div class="downloads-page">
   <div class="page-header">
     <h2 style="flex:1">Downloads</h2>
+    <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 12px;" on:click={toggleDebug}>
+      {showDebug ? 'Hide Debug' : 'Debug'}
+    </button>
   </div>
 
   {#if Object.keys($providerHealth).length > 0}
@@ -100,6 +118,67 @@
       {/each}
     </div>
   {/if}
+
+  <!-- Backlog runner -->
+  <div class="backlog-panel">
+    <div class="backlog-header">
+      <div class="dl-section-label" style="margin:0">Spotify Backlog</div>
+      <div class="backlog-controls">
+        <label class="backlog-limit-label">
+          Limit
+          <input class="input" type="number" min="10" max="2000" step="10" bind:value={backlogLimit}
+            style="width:72px;padding:4px 8px;font-size:0.8rem;" />
+        </label>
+        {#if $backlogStatus?.running}
+          <button class="btn btn-secondary" on:click={stopBacklogRun}>Stop</button>
+        {:else}
+          <button class="btn btn-primary" on:click={() => startBacklogRun(10, backlogLimit)}>
+            Run Backlog
+          </button>
+        {/if}
+      </div>
+    </div>
+    {#if $backlogStatus}
+      <div class="backlog-stats">
+        <span class="backlog-stat">
+          <span class="backlog-stat-label">queued</span>
+          <span class="backlog-stat-val">{$backlogStatus.albums_queued}</span>
+        </span>
+        <span class="backlog-stat">
+          <span class="backlog-stat-label">skipped</span>
+          <span class="backlog-stat-val">{$backlogStatus.albums_skipped}</span>
+        </span>
+        <span class="backlog-stat">
+          <span class="backlog-stat-label">tracks</span>
+          <span class="backlog-stat-val">{$backlogStatus.tracks_submitted}</span>
+        </span>
+        {#if $backlogStatus.running}
+          <span class="backlog-stat">
+            <span class="backlog-stat-label">status</span>
+            <span class="badge badge-accent" style="font-size:0.7rem;">running</span>
+          </span>
+        {:else if $backlogStatus.finished_at}
+          <span class="backlog-stat">
+            <span class="backlog-stat-label">done</span>
+            <span class="badge badge-muted" style="font-size:0.7rem;">idle</span>
+          </span>
+        {/if}
+      </div>
+      {#if $backlogStatus.current_album}
+        <div class="backlog-current">Processing: {$backlogStatus.current_album}</div>
+      {/if}
+      {#if $backlogStatus.errors.length > 0}
+        <div class="backlog-errors">
+          {#each $backlogStatus.errors.slice(-5) as err}
+            <div class="backlog-error-row">{err}</div>
+          {/each}
+          {#if $backlogStatus.errors.length > 5}
+            <div class="backlog-error-row muted">…and {$backlogStatus.errors.length - 5} more</div>
+          {/if}
+        </div>
+      {/if}
+    {/if}
+  </div>
 
   <!-- Search -->
   <div class="dl-search-section">
@@ -269,6 +348,59 @@
       </div>
     {/if}
   </div>
+
+  <!-- Debug panel -->
+  {#if showDebug}
+    <div class="debug-panel">
+      <div class="debug-header">
+        <div class="dl-section-label" style="margin:0">Director Debug</div>
+        <button class="btn btn-secondary" style="font-size:0.75rem;padding:4px 10px;"
+          on:click={refreshDebugStats}>Refresh</button>
+      </div>
+
+      {#if $debugStats}
+        <div class="debug-row">
+          <span class="debug-label">Pending tasks</span>
+          <span class="debug-val">{$debugStats.pending_count}</span>
+        </div>
+
+        {#if $debugStats.provider_stats.length > 0}
+          <div class="debug-section-title">Provider results (last 100)</div>
+          <div class="debug-provider-grid">
+            {#each $debugStats.provider_stats.sort((a, b) => (b.success + b.failed) - (a.success + a.failed)) as p}
+              <div class="debug-provider-row">
+                <span class="debug-provider-name">{p.provider}</span>
+                <span class="badge badge-success" style="font-size:0.68rem;">{p.success} ok</span>
+                {#if p.failed > 0}
+                  <span class="badge badge-error" style="font-size:0.68rem;">{p.failed} fail</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if $debugStats.recent_results.length > 0}
+          <div class="debug-section-title">Recent results</div>
+          <div class="debug-results-list">
+            {#each $debugStats.recent_results.slice(0, 50) as r}
+              <div class="debug-result-row">
+                <span class="badge {dispositionColor[r.disposition] ?? 'badge-muted'}" style="font-size:0.68rem;min-width:72px;text-align:center;">
+                  {r.disposition}
+                </span>
+                <span class="debug-result-provider">{r.provider || '—'}</span>
+                <span class="debug-result-task" title={r.task_id}>{r.task_id}</span>
+                {#if r.error}
+                  <span class="debug-result-error" title={r.error}>{r.error}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {:else}
+        <div class="debug-empty">Click Refresh to load stats.</div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -387,4 +519,47 @@
 .review-trust { font-size: 0.72rem; color: var(--text-muted); }
 .review-score { font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; }
 .review-rejection { font-size: 0.75rem; color: var(--error); margin-top: 4px; }
+
+/* Backlog panel */
+.backlog-panel {
+  margin: 0 1.5rem 1rem;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.backlog-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.backlog-controls { display: flex; align-items: center; gap: 10px; }
+.backlog-limit-label { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-secondary); }
+.backlog-stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+.backlog-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.backlog-stat-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.backlog-stat-val { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+.backlog-current { font-size: 0.78rem; color: var(--text-secondary); margin-top: 6px; font-style: italic; }
+.backlog-errors { margin-top: 8px; }
+.backlog-error-row { font-size: 0.74rem; color: var(--error); padding: 2px 0; }
+.backlog-error-row.muted { color: var(--text-muted); }
+
+/* Debug panel */
+.debug-panel {
+  margin: 0 1.5rem 1.5rem;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 70%, var(--bg-primary));
+}
+.debug-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.debug-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 0.8rem; }
+.debug-label { color: var(--text-muted); min-width: 100px; }
+.debug-val { font-weight: 600; }
+.debug-section-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); font-weight: 600; margin: 10px 0 6px; }
+.debug-provider-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.debug-provider-row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: var(--radius-sm); background: var(--bg-card); border: 1px solid var(--border); }
+.debug-provider-name { font-size: 0.78rem; font-weight: 600; min-width: 48px; }
+.debug-results-list { display: flex; flex-direction: column; gap: 3px; max-height: 320px; overflow-y: auto; }
+.debug-result-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; border-radius: var(--radius-sm); background: var(--bg-card); font-size: 0.75rem; border: 1px solid var(--border); }
+.debug-result-provider { color: var(--text-secondary); min-width: 56px; font-size: 0.72rem; }
+.debug-result-task { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 0.7rem; }
+.debug-result-error { color: var(--error); font-size: 0.7rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debug-empty { font-size: 0.8rem; color: var(--text-muted); padding: 8px 0; }
 </style>

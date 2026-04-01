@@ -195,11 +195,11 @@ Formal baselines live in [TELEMETRY.md](TELEMETRY.md) and should be updated when
 
 Primary verification commands:
 
-```bash
-cargo check
-cargo test
-cd ui && npm run build
-cd .. && ./scripts/smoke_desktop.ps1
+```powershell
+cargo check --workspace
+cargo test --workspace
+Set-Location ui; npm install; npm run build; Set-Location ..
+.\scripts\smoke_desktop.ps1
 ```
 
 Validation CLI surface:
@@ -230,6 +230,7 @@ Full rationale in [DECISIONS.md](DECISIONS.md).
 
 - [AGENT_CODEX.md](AGENT_CODEX.md)
 - [AGENT_BRIEFING.md](AGENT_BRIEFING.md)
+- [HIT_LIST.md](HIT_LIST.md)
 - [TODO.md](TODO.md)
 - [DECISIONS.md](DECISIONS.md)
 - [PATTERNS.md](PATTERNS.md)

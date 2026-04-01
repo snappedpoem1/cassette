@@ -874,6 +874,7 @@ async fn copy_to_temp(
         temp_path: destination,
         file_size,
         extension_hint: Some(extension),
+        resolved_metadata: None,
     })
 }
 

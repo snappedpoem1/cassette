@@ -69,14 +69,14 @@ Before substantial work:
 
 Baseline commands:
 
-```bash
-cargo check
-cargo test
-cd ui && npm run build
-# Windows: .\scripts\smoke_desktop.ps1
+```powershell
+cargo check --workspace
+cargo test --workspace
+Set-Location ui; npm install; npm run build; Set-Location ..
+.\scripts\smoke_desktop.ps1
 ```
 
-These commands are the baseline verification surface, not a promise that the workspace is currently green. Check `PROJECT_STATE.md` or re-run them when the task depends on current pass/fail status.
+These commands are the baseline verification surface. Re-run them when the task depends on current pass/fail status instead of inheriting stale claims.
 
 ---
 

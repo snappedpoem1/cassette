@@ -15,6 +15,8 @@ pub async fn import_desired_spotify_json(db: &LibrarianDb, json: &str) -> Result
         .filter(|v| !v.trim().is_empty())
         .unwrap_or("spotify");
 
+    db.clear_desired_tracks_for_source(source_name).await?;
+
     let mut imported = 0usize;
     for item in payload.tracks {
         let raw_payload = serde_json::to_string(&item).ok();
@@ -38,4 +40,65 @@ pub async fn import_desired_spotify_json(db: &LibrarianDb, json: &str) -> Result
 
     info!(imported, source = source_name, "imported desired-state tracks");
     Ok(imported)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::librarian::db::LibrarianDb;
+    use crate::librarian::models::{DeltaActionType, NewDeltaQueueItem, NewReconciliationResult, ReconciliationStatus};
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_db() -> LibrarianDb {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("memory db");
+        let db = LibrarianDb::from_pool(pool);
+        db.migrate().await.expect("migrate");
+        db
+    }
+
+    #[tokio::test]
+    async fn import_replaces_prior_rows_for_same_source() {
+        let db = test_db().await;
+        import_desired_spotify_json(
+            &db,
+            r#"{"source_name":"manual","tracks":[{"track_id":"1","artist_name":"A","track_title":"First"}]}"#,
+        )
+        .await
+        .expect("first import");
+        let existing = db.list_desired_tracks().await.expect("first desired rows");
+        db.insert_reconciliation_result(&NewReconciliationResult {
+            desired_track_id: existing[0].id,
+            matched_track_id: None,
+            matched_local_file_id: None,
+            reconciliation_status: ReconciliationStatus::Missing,
+            quality_assessment: None,
+            reason: "missing".to_string(),
+        })
+        .await
+        .expect("insert reconciliation");
+        db.enqueue_delta(&NewDeltaQueueItem {
+            desired_track_id: existing[0].id,
+            action_type: DeltaActionType::MissingDownload,
+            priority: 100,
+            reason: "missing".to_string(),
+            target_quality: None,
+        })
+        .await
+        .expect("insert delta");
+        import_desired_spotify_json(
+            &db,
+            r#"{"source_name":"manual","tracks":[{"track_id":"2","artist_name":"B","track_title":"Second"}]}"#,
+        )
+        .await
+        .expect("second import");
+
+        let rows = db.list_desired_tracks().await.expect("desired tracks");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_track_id.as_deref(), Some("2"));
+        assert_eq!(rows[0].track_title, "Second");
+    }
 }

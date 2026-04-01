@@ -2,8 +2,21 @@ pub mod album;
 pub mod artist;
 pub mod track;
 
+fn normalize_compatibility_punctuation(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            '’' | '‘' | '`' | '´' => '\'',
+            '“' | '”' => '"',
+            '–' | '—' | '‐' | '‑' => '-',
+            '…' => ' ',
+            _ => ch,
+        })
+        .collect()
+}
+
 pub fn normalize_text(input: &str) -> String {
-    let mut out = input.to_ascii_lowercase();
+    let mut out = normalize_compatibility_punctuation(input).to_lowercase();
     for ch in ['.', ',', '!', '?', '-', '_', ':', ';', '\'', '"', '(', ')', '[', ']', '{', '}', '/'] {
         out = out.replace(ch, " ");
     }
@@ -43,5 +56,11 @@ mod tests {
     fn strips_common_title_suffixes() {
         let actual = normalize_title_suffixes("My Song [Radio Edit]");
         assert_eq!(actual, "my song");
+    }
+
+    #[test]
+    fn normalizes_smart_punctuation_to_ascii_equivalents() {
+        let actual = normalize_text("Bitch, Don’t Kill My Vibe — Deluxe");
+        assert_eq!(actual, "bitch don t kill my vibe deluxe");
     }
 }

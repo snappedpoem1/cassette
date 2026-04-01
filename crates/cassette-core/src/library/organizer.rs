@@ -83,7 +83,9 @@ pub fn canonical_path(library_base: &str, track: &Track) -> PathBuf {
         .unwrap_or("flac")
         .to_lowercase();
 
-    let filename = if disc > 1 {
+    let filename = if should_preserve_existing_basename(track, effective_num) {
+        existing_filename_or_title(&track.path, &title, &ext)
+    } else if disc > 1 {
         format!("{:02}-{:02} - {}.{}", disc, effective_num, title, ext)
     } else {
         format!("{:02} - {}.{}", effective_num, title, ext)
@@ -93,6 +95,23 @@ pub fn canonical_path(library_base: &str, track: &Track) -> PathBuf {
         .join(artist)
         .join(album_folder)
         .join(filename)
+}
+
+fn existing_filename_or_title(path: &str, title: &str, ext: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("{title}.{ext}"))
+}
+
+fn should_preserve_existing_basename(track: &Track, effective_num: i32) -> bool {
+    if effective_num <= 0 {
+        return true;
+    }
+
+    track.album.eq_ignore_ascii_case("Singles") && existing_track_number_prefix(&track.path).is_none()
 }
 
 /// Organize a batch of tracks into canonical folder structure.
@@ -421,6 +440,44 @@ mod tests {
         assert_eq!(
             path.to_string_lossy(),
             r"A:\music\girl in red\if i could make it go quiet (2021)\09 - dot.flac"
+        );
+    }
+
+    #[test]
+    fn canonical_path_preserves_existing_basename_when_track_number_is_untrusted() {
+        let mut track = sample_track();
+        track.path = r"A:\music\Artist\Singles\In America.flac".to_string();
+        track.title = "In America".to_string();
+        track.artist = "Artist".to_string();
+        track.album = "Singles".to_string();
+        track.album_artist = "Artist".to_string();
+        track.track_number = Some(0);
+        track.disc_number = Some(0);
+        track.year = None;
+
+        let path = canonical_path(r"A:\music", &track);
+        assert_eq!(
+            path.to_string_lossy(),
+            r"A:\music\Artist\Singles\In America.flac"
+        );
+    }
+
+    #[test]
+    fn canonical_path_preserves_existing_basename_for_catch_all_singles_without_prefix() {
+        let mut track = sample_track();
+        track.path = r"A:\music\Artist\Singles\2 X 4.flac".to_string();
+        track.title = "2 X 4".to_string();
+        track.artist = "Artist".to_string();
+        track.album = "Singles".to_string();
+        track.album_artist = "Artist".to_string();
+        track.track_number = Some(2);
+        track.disc_number = Some(1);
+        track.year = None;
+
+        let path = canonical_path(r"A:\music", &track);
+        assert_eq!(
+            path.to_string_lossy(),
+            r"A:\music\Artist\Singles\2 X 4.flac"
         );
     }
 }

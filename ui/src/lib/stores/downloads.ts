@@ -10,6 +10,8 @@ import {
   type ProviderStatus,
   type DownloadMetadataSearchResult,
   type DownloadArtistDiscography,
+  type BacklogRunStatus,
+  type DirectorDebugStats,
 } from '$lib/api/tauri';
 
 export const downloadJobs = writable<DownloadJob[]>([]);
@@ -19,6 +21,8 @@ export const providerHealth = writable<Record<string, ProviderHealthEvent>>({});
 export const metadataSearchResults = writable<DownloadMetadataSearchResult | null>(null);
 export const artistDiscography = writable<DownloadArtistDiscography | null>(null);
 export const isSearchingMetadata = writable(false);
+export const backlogStatus = writable<BacklogRunStatus | null>(null);
+export const debugStats = writable<DirectorDebugStats | null>(null);
 
 export async function loadDownloadJobs() {
   try {
@@ -132,11 +136,15 @@ export async function startDownloadSupervision() {
     listen<ProviderHealthEvent>('director-provider-health', ({ payload }) => {
       providerHealth.update((current) => ({ ...current, [payload.provider_id]: payload }));
     }),
+    listen<BacklogRunStatus>('director-backlog-progress', ({ payload }) => {
+      backlogStatus.set(payload);
+    }),
   ]);
 
   visibilityHandler = () => {
     if (document.visibilityState === 'visible') {
       void loadDownloadJobs();
+      void refreshBacklogStatus();
     }
   };
   document.addEventListener('visibilitychange', visibilityHandler);
@@ -150,5 +158,39 @@ export function stopDownloadSupervision() {
   if (visibilityHandler) {
     document.removeEventListener('visibilitychange', visibilityHandler);
     visibilityHandler = null;
+  }
+}
+
+export async function refreshBacklogStatus() {
+  try {
+    backlogStatus.set(await api.getBacklogStatus());
+  } catch {
+    // ignore
+  }
+}
+
+export async function startBacklogRun(batchSize?: number, limit?: number) {
+  try {
+    const status = await api.startBacklogRun(batchSize, limit);
+    backlogStatus.set(status);
+  } catch (e) {
+    console.error('startBacklogRun failed:', e);
+  }
+}
+
+export async function stopBacklogRun() {
+  try {
+    await api.stopBacklogRun();
+    await refreshBacklogStatus();
+  } catch {
+    // ignore
+  }
+}
+
+export async function refreshDebugStats() {
+  try {
+    debugStats.set(await api.getDirectorDebugStats(100));
+  } catch {
+    debugStats.set(null);
   }
 }

@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-03-30
+Last updated: 2026-04-01
 
 ## Architecture
 
@@ -61,7 +61,7 @@ Last updated: 2026-03-30
 | slskd/Soulseek | 10 | P2P search with queue recovery, transfer polling + filesystem fallback | Implemented |
 | Usenet | 30 | NZBgeek search + SABnzbd execution, filesystem polling | Implemented |
 | yt-dlp | 50 | Subprocess fallback, `ytsearch1` + `scsearch1` | Proven working |
-| Real-Debrid | 80 | TPB search + torrent resolution + 7z extraction | Implemented |
+| Real-Debrid | 80 | TPB/apibay search → magnet → RD unrestrict → archive extraction via 7z | Live-proven |
 
 ### Metadata Services
 
@@ -188,11 +188,45 @@ It now:
 - `tag_rescue_cli --report <path>` emits a JSON repair report with repaired rows and explicit unresolved rows
 - Organizer filename-prefix fallback now recognizes multi-disc and whitespace-prefixed patterns, not only `NN - Title`
 - `organize_cli --live` now aborts if a suspicious fraction of moves would rename files to `00 - ...`
-- A live tag-rescue pass on 2026-03-30 updated `0` rows, so the remaining organizer issue is not a simple “DB blank, embedded tags present” case
+- Remaining organizer risk is now tracked through explicit unresolved rows and the bounded live organize proof, rather than assumed to be solvable by embedded-tag repair alone
 
 ### Legacy / Manual Path
 
 `batch_download_cli` still exists for direct/manual use, but it is no longer the canonical integrated control-plane path.
+
+## Spotify Backlog Acquisition — 2026-04-01
+
+`torrent_album_cli` added as a dedicated album-first torrent downloader that bypasses the per-track Director flow for albums where torrent is the best source.
+
+**Flow:**
+1. Pull missing albums from `spotify_album_history` (app DB)
+2. Filter singles (feat./with/ft. patterns, remix/EP labels)
+3. Strip edition/remaster suffixes from album names for cleaner search
+4. Search apibay.org (TPB) — cat 104 (FLAC) then 101 (Music), min 2 seeders
+5. Score by artist+album word-boundary match + FLAC bonus + seeder bonus; require album title match
+6. Add magnet to Real-Debrid (dedup by hash — reuse existing torrent)
+7. Poll until `downloaded`, retry on transient connection errors (30s timeout, 5 retries per poll)
+8. Unrestrict links → detect audio vs archive (RAR/ZIP/7z)
+9. Archives extracted via `C:/Program Files/7-Zip/7z.exe`
+10. Audio files copied to `library_base/Artist/Album/`, upserted to app DB
+
+**Albums installed as of 2026-04-01 (selected):**
+- Black Star — Mos Def & Talib Kweli Are Black Star (13 tracks)
+- Bush — Sixteen Stone (12 tracks)
+- Fall Out Boy — From Under The Cork Tree (13 tracks)
+- blink-182 — Enema of the State (12 tracks)
+- Kevin Gates — Islah (15 tracks)
+- Lorde — Pure Heroine (10 tracks)
+- Weezer — Weezer (White Album) (10 tracks)
+- AJR — OK Orchestra (13 tracks)
+- Tame Impala — Lonerism (12 tracks)
+- Phantogram — Three (10 tracks)
+- Fitz and the Tantrums — self-titled (12 tracks)
+- + ongoing batch drain of remaining ~489 backlog albums
+
+**Known gaps:**
+- ~26 albums per 40-album batch are genuinely absent from TPB (Drake, Eminem, Jack Harlow, etc. — streaming exclusives/mixtapes)
+- Taylor Swift — Red (Taylor's Version): emoji in RAR filename causes decode error; needs alternate torrent
 
 ## Known Limitations
 
@@ -207,6 +241,113 @@ It now:
 - Organizer repair tooling is deeper now, but the live app-DB repair proof and bounded live organize proof are still pending
 - Album batching currently groups queue work into `DiscographyBatch` strategy selection in the coordinator, but provider locking remains strategy-led rather than a separately persisted album lane
 - Structured run observability is improved through queue claims and persisted request payloads, but the frontend does not yet expose a dedicated coordinator timeline view
+
+## End-to-End Coordinator Proof — 2026-03-31
+
+Run command: `engine_pipeline_cli --resume --limit 5 --skip-organize-subset`
+
+**Pre-run sidecar state:**
+- `desired_tracks`: 1 row — Doechii / DENIAL IS A RIVER (manual source, no track number)
+- `reconciliation_results`: 1 row — status=`missing`, reason="no local match"
+- `delta_queue`: 1 row — `missing_download`, unclaimed, unprocessed
+- `scan_checkpoints`: `A:\music` = `in_progress` (stale from prior interrupted run)
+
+**Phase 1 — librarian sync (resume mode):**
+- Discovered 22,998 files; re-indexed all (skipped=0 because checkpoint was `in_progress`)
+- 22,806 files upserted into sidecar `local_files`
+- Reconciliation: 1 desired track reconciled
+- Delta generation: 1 row generated
+- Checkpoint advanced to `completed`, files_seen=43,501
+
+**Phase 2 — queue claim:**
+- 1 row claimed: `desired_track_id=1`, `action_type=missing_download`
+- `claimed_at` + `claim_run_id=engine-run-8a10af41-...` stamped atomically
+
+**Phase 3 — Director acquisition:**
+- Provider: Qobuz (lossless, attempts=8 across waterfall)
+- Result: `Finalized`
+- Final path: `A:\music\Doechii\Alligator Bites Never Heal\04 - DENIAL IS A RIVER.flac`
+- Track number resolved: 4 (from Qobuz metadata, overriding missing desired-state number)
+
+**Phase 4 — queue closure:**
+- `delta_queue` row 1: `processed_at=2026-03-31 20:35:36`, `claimed_at` preserved (audit trail intact)
+- `claimed_at` and `claim_run_id` remain stamped — proves the `mark_processed` fix is live
+
+**Phase 5 — post-run librarian sync (delta-only):**
+- Discovered 43,501 files; scanned=3 (only changed/new files), skipped=43,498
+- Reconciliation ran: 1 processed — status now `weak_match` (title match within artist)
+- Delta re-generated: 1 row (the `manual_review` action for the weak-match)
+- The `missing_download` row was NOT re-created — gap is closed for acquisition
+
+**director_task_history (app DB):**
+- `task_id=delta-1-denial is a river`, `disposition=Finalized`, `provider=qobuz`, `final_path=A:\music\Doechii\Alligator Bites Never Heal\04 - DENIAL IS A RIVER.flac`
+
+**Observations / follow-up:**
+- Resume scan re-indexes the full library when checkpoint is `in_progress` — this is correct but slow. The fix is: mark checkpoint `completed` at the end of a successful full scan so subsequent `--resume` runs skip unchanged files. Currently the checkpoint becomes `completed` only at the end of the post-run delta-only scan, not the full scan itself. The full scan does set checkpoint rows per-batch via `upsert_scan_checkpoint`, but only marks `completed` at walk-end.
+- The reconciliation result is `weak_match` not `exact_match` or `strong_match` because the file has `track_number=NULL` in the DB and is named `00 - DENIAL IS A RIVER.flac` (the pre-acquisition stub). The newly acquired `04 - DENIAL IS A RIVER.flac` appears as a separate track in the app DB. The sidecar needs a re-scan pass against the updated app DB to pull the correct metadata.
+- `manual_review` delta row appeared because the reconciliation found the track but couldn't confirm it with sufficient confidence — expected given the `00 -` stub still in the DB.
+
+## Organizer Live Proof — 2026-03-31
+
+Run command: `organize_cli --live`
+
+**Pre-proof state:**
+- 43,458 tracks in DB; 1,833 with zero/null track_number (irrecoverable via tag rescue)
+- `tag_rescue_cli` run live: `updated=0 unresolved=1833` — no embedded-tag, filename-prefix, or album-pattern recovery available
+- Dry-run showed: 39,262 proposed moves, 0 zero-track renames, 0 errors → safety check clear
+
+**Live run result:**
+- 23,393 files moved to canonical paths (`Artist/Album (Year)/NN - Title.ext`)
+- 20,065 already in place (skipped)
+- 1 error: stale DB entry pointing to `A:\music\Kyle\Light of Mine\15 - iSpy.flac` (file no longer on disk — handled gracefully, no crash)
+- 0 zero-track renames — safety guard not triggered
+
+**Unresolved 1,833 zero-track rows breakdown:**
+- 1,371 in `Singles/` folders — single tracks with no track number context, intentionally left as-is
+- 389 album tracks with `00 -` filename prefix — no embedded tag, no album-pattern recovery
+- 73 other (no prefix, not in Singles) — also irrecoverable without re-acquisition metadata
+
+**Post-organize:** All well-tagged tracks are now at canonical paths. Zero-track rows remain in place with existing filenames (organizer's `should_preserve_existing_basename` correctly keeps them stable).
+
+## Interruption + Resume Recovery Proof — 2026-03-31
+
+Run command: `engine_pipeline_cli --resume --stale-claim-minutes 1 --limit 5 --skip-post-sync --skip-organize-subset`
+
+**Pre-proof state (injected via `proof_interruption_resume.ps1`):**
+- `desired_tracks`: 3 new rows — Tyler, the Creator / EARFQUAKE; Frank Ocean / Pyramids; Kendrick Lamar / Money Trees
+- `delta_queue` rows 200-202: claimed by `interrupted-run-proof-20260331164515` (stamped 2 min prior), `processed_at NULL`
+- `scan_checkpoints`: `A:\music` = `completed`, files_seen=43,501 (from prior proof run)
+
+**Phase 1 — librarian sync (resume mode, queue-only):**
+- Scan phase: skipped — "scan phase skipped because completed checkpoints already exist mode=queue-only"
+- files_scanned=0, files_upserted=0 — checkpoint fast-path proven
+- Reconciliation: 4 desired tracks processed; delta generation: 4 entries
+- Note: `clear_reconciliation` preserves claimed rows (rows 200-202 survive delta regeneration)
+
+**Phase 2 — stale claim reclaim:**
+- "Reclaimed 3 stale queue claims" — rows 200-202 released from `interrupted-run-proof-*`
+- Threshold: 1 minute (`--stale-claim-minutes 1`); rows were 2 min old
+
+**Phase 3 — re-claim + Director acquisition:**
+- 3 rows re-claimed under `engine-run-5e6a7fde-ee72-46bf-9f92-0b8efc7d6528`
+- `delta-102-money trees`: Finalized via Qobuz → `A:\music\Kendrick Lamar\good kid, m.A.A.d city\05 - Money Trees.flac` (attempts=6)
+- `delta-101-pyramids`: Finalized via Deezer → `A:\music\Frank Ocean\channel ORANGE\00 - Pyramids.flac` (attempts=4)
+- `delta-100-earfquake`: Finalized via Qobuz → `A:\music\Tyler, the Creator\IGOR\02 - EARFQUAKE.flac` (attempts=5)
+
+**Phase 4 — queue closure:**
+- Rows 200-202: `processed_at` stamped, `claimed_at` preserved (audit trail intact)
+
+**No re-acquisition of DENIAL IS A RIVER (row 1):**
+- `delta_queue` row 1: `processed_at=2026-03-31 20:35:36` — unchanged
+- `director_task_history`: only one `delta-1-denial is a river` row, disposition=Finalized from original run
+- Row 203 (`manual_review` for desired_track_id=1) generated by reconciler but not submitted as a download claim
+
+**Proof demonstrates:**
+- Interrupted-run claimed rows survive intact (not wiped by `clear_reconciliation`)
+- Stale claims reclaimed deterministically via `--stale-claim-minutes` threshold
+- Resumed scan uses checkpoint fast-path (0 files scanned when all roots are `completed`)
+- Re-claimed rows re-submitted to Director and finalized correctly
+- Already-finalized rows are NOT re-acquired
 
 ## Verification Snapshot
 
@@ -233,6 +374,11 @@ Verified on 2026-03-30:
 - `provider_probe_cli` and `provider_acquire_probe_cli` still prove configured-provider readiness and live Deezer acquisition on this machine
 - `tag_rescue_cli` repair heuristics and sidecar scan resume/delta behavior are covered by new Rust tests
 - A real `engine_pipeline_cli --limit 5` run now bootstraps the sidecar DB and performs a live scan; an interrupted proof run reached `local_files=4500` and `tracks=3811` in the sidecar before being stopped
+- `engine_pipeline_cli` now accepts `--stale-claim-minutes N` (default 30) to configure the stale-claim reclaim threshold; used in the interruption/resume proof with `--stale-claim-minutes 1`
+- Interruption/resume recovery proof captured 2026-03-31: 3 stale claims reclaimed, checkpoint fast-path (0 files scanned), 3 tracks finalized, already-processed row not re-acquired
+- `start_backlog_run` / `stop_backlog_run` / `get_backlog_status` Tauri commands added: background async loop through Spotify missing albums, emits `director-backlog-progress` events with live stats
+- `get_director_debug_stats` command added: returns pending task count, per-provider success/fail breakdown, and recent task results
+- Downloads UI: Backlog panel with start/stop/limit controls and live progress display; Debug panel with per-provider stats and scrollable recent results list
 
 ## Documentation
 

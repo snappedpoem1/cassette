@@ -1,9 +1,10 @@
 use crate::director::error::MetadataError;
 use crate::director::models::{CandidateSelection, TrackTask};
 use lofty::picture::{MimeType, Picture, PictureType};
+use lofty::tag::{ItemKey, ItemValue, Tag, TagItem};
 use lofty::prelude::{Accessor, TaggedFileExt};
 use lofty::probe::Probe;
-use lofty::tag::{ItemKey, ItemValue, TagItem, TagExt};
+use lofty::tag::TagExt;
 
 pub async fn apply_metadata(
     task: TrackTask,
@@ -40,12 +41,20 @@ fn apply_metadata_blocking(
             message: error.to_string(),
         })?;
 
-    let tag = if let Some(tag) = tagged.primary_tag_mut() {
+    let primary_tag_type = tagged.file_type().primary_tag_type();
+    if tagged.tag(primary_tag_type).is_none() {
+        tagged.insert_tag(Tag::new(primary_tag_type));
+    }
+
+    let tag = if let Some(tag) = tagged.tag_mut(primary_tag_type) {
         tag
     } else if let Some(tag) = tagged.first_tag_mut() {
         tag
     } else {
-        return Ok(());
+        return Err(MetadataError::TagWrite {
+            path: path.clone(),
+            message: "no writable tag container available".to_string(),
+        });
     };
 
     tag.set_artist(task.target.artist.clone());

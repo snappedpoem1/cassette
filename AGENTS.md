@@ -19,10 +19,14 @@ Before substantial work, read:
 
 - The app is a Tauri 2 shell in `src-tauri/`, a SvelteKit UI in `ui/`, and shared Rust domain code in `crates/cassette-core/`.
 - The active desktop runtime stores its main SQLite database in the Tauri app-data directory as `cassette.db`.
+- The integrated librarian/orchestrator control-plane database lives alongside it as `cassette_librarian.db`.
 - Repo-root `*.db` files may exist for probes, tests, or local inspection. Do not assume they are the live desktop runtime database.
-- `cargo check` currently succeeds with warnings.
-- `cargo test` is not currently green.
-- The top hardening priorities are Deezer full-track proof, audit completeness proof, async/recovery hardening, and packaging confidence.
+- `cargo check --workspace` passes.
+- `cargo test --workspace` passes.
+- `npm run build` passes in `ui/` with an existing accessibility warning in `src/routes/downloads/+page.svelte`.
+- `.\scripts\smoke_desktop.ps1` passes.
+- Deezer full-track acquisition is live-proven on this machine.
+- The top hardening priorities are audit completeness proof, bounded coordinator proof, organizer safe-subset proof, and packaging confidence.
 
 ## Verification Rule
 
@@ -31,8 +35,8 @@ Do not inherit pass/fail claims from stale docs. Re-verify current state when th
 Primary commands:
 
 ```powershell
-cargo check
-cargo test
-Set-Location ui; npm run build; Set-Location ..
+cargo check --workspace
+cargo test --workspace
+Set-Location ui; npm install; npm run build; Set-Location ..
 .\scripts\smoke_desktop.ps1
 ```

@@ -76,8 +76,17 @@ fn multi_disc_regex() -> &'static Regex {
 fn single_disc_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
-        Regex::new(r"^(?P<track>\d{1,2})(?:\s*[-_.]\s*|\s+)").expect("single-disc filename regex")
+        Regex::new(r"^(?P<track>\d{1,2})\s*[-_.]\s*").expect("single-disc filename regex")
     })
+}
+
+fn is_catch_all_singles_folder(path: &str) -> bool {
+    Path::new(path)
+        .parent()
+        .and_then(|value| value.file_name())
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("singles"))
+        .unwrap_or(false)
 }
 
 pub fn parse_filename_numbers(path: &str) -> Option<FilenameNumbers> {
@@ -104,6 +113,20 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
     let mut unresolved = Vec::new();
 
     for track in tracks {
+        let current_track_number = track.track_number.filter(|value| *value > 0);
+        let current_disc_number = track.disc_number.filter(|value| *value > 0);
+
+        if current_track_number.is_some() {
+            candidates.push(CandidateTrack {
+                track: track.clone(),
+                filename_numbers: None,
+                embedded_track_number: None,
+                embedded_disc_number: current_disc_number,
+                embedded_error: None,
+            });
+            continue;
+        }
+
         let path = Path::new(&track.path);
         if !path.exists() {
             unresolved.push(UnresolvedRow {
@@ -201,6 +224,14 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
     }
 
     for mut group in by_folder.into_values() {
+        if group
+            .first()
+            .map(|candidate| is_catch_all_singles_folder(&candidate.track.path))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
         group.sort_by(|left, right| {
             let left_name = Path::new(&left.track.path)
                 .file_name()
@@ -397,11 +428,8 @@ mod tests {
         );
         assert_eq!(
             parse_filename_numbers(r"A:\Music\Artist\Album\07 Hysteria – Live.flac")
-                .expect("whitespace title separator"),
-            super::FilenameNumbers {
-                track_number: 7,
-                disc_number: None,
-            }
+                .is_none(),
+            true
         );
         assert!(parse_filename_numbers(r"A:\Music\Artist\Album\Track Name.flac").is_none());
     }
@@ -448,5 +476,19 @@ mod tests {
         assert!(plan.repaired.is_empty());
         assert_eq!(plan.unresolved.len(), 1);
         assert!(!plan.unresolved[0].reason.is_empty());
+    }
+
+    #[test]
+    fn valid_track_numbers_do_not_force_file_reads() {
+        let missing_path = r"A:\Music\Artist\Album\01 - Existing.flac";
+        let plan = build_track_repair_plan(&[sample_track(
+            1,
+            missing_path,
+            Some(1),
+            Some(1),
+        )]);
+
+        assert!(plan.repaired.is_empty());
+        assert!(plan.unresolved.is_empty());
     }
 }

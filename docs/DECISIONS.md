@@ -303,7 +303,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 12: Startup Recovery Must Prefer Newer Terminal History Over Stale Pending Rows
+## Decision 16: Startup Recovery Must Prefer Newer Terminal History Over Stale Pending Rows
 
 **Status**: approved (applied 2026-03-28)
 **Rationale**:
@@ -326,7 +326,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 13: Terminal Director History Must Preserve The Original Request Payload
+## Decision 17: Terminal Director History Must Preserve The Original Request Payload
 
 **Status**: approved (applied 2026-03-28)
 **Rationale**:
@@ -349,7 +349,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 14: Active Runtime Provenance Should Converge On A Request-Signature Spine
+## Decision 18: Active Runtime Provenance Should Converge On A Request-Signature Spine
 
 **Status**: approved (applied 2026-03-28)
 **Rationale**:

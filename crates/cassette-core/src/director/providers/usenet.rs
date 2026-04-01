@@ -262,6 +262,7 @@ impl Provider for UsenetProvider {
                     temp_path: destination,
                     file_size,
                     extension_hint: Some(extension),
+                    resolved_metadata: None,
                 });
             }
         }

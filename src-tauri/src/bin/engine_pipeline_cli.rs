@@ -13,15 +13,44 @@ use cassette_core::librarian::{LibrarianConfig, ScanMode, run_librarian_sync};
 use cassette_core::library::organizer;
 use cassette_core::orchestrator::delta::adapter::{ClaimedDownloadRow, DeltaQueueAdapter};
 use cassette_core::sources::{RemoteProviderConfig, SlskdConnectionConfig};
+use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
 
-const STALE_CLAIM_MINUTES: i64 = 30;
+const STALE_CLAIM_MINUTES_DEFAULT: i64 = 30;
 const MAX_ZERO_TRACK_RENAMES_ABSOLUTE: usize = 25;
 const MAX_ZERO_TRACK_RENAMES_RATIO: f64 = 0.05;
+
+async fn pending_non_download_summary(pool: &sqlx::SqlitePool) -> Result<Option<String>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT action_type, COUNT(*) AS row_count
+         FROM delta_queue
+         WHERE processed_at IS NULL
+           AND action_type NOT IN ('missing_download', 'upgrade_quality')
+         GROUP BY action_type
+         ORDER BY action_type ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let summary = rows
+        .into_iter()
+        .map(|row| {
+            let action_type: String = row.get("action_type");
+            let row_count: i64 = row.get("row_count");
+            format!("{action_type}={row_count}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Some(summary))
+}
 
 fn parse_scan_mode(args: &[String], resume_shorthand: bool) -> Result<ScanMode, String> {
     let explicit = args
@@ -44,6 +73,29 @@ fn parse_scan_mode(args: &[String], resume_shorthand: bool) -> Result<ScanMode, 
     }
 }
 
+fn skip_content_hash(args: &[String], scan_mode: ScanMode) -> bool {
+    let explicit_skip = args.iter().any(|arg| arg == "--skip-content-hash");
+    let explicit_enable = args.iter().any(|arg| arg == "--with-content-hash");
+
+    if explicit_skip && explicit_enable {
+        return true;
+    }
+
+    if explicit_skip {
+        return true;
+    }
+
+    if explicit_enable {
+        return false;
+    }
+
+    !matches!(scan_mode, ScanMode::Full)
+}
+
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
+}
+
 fn app_db_path() -> Result<PathBuf, String> {
     let app_data = std::env::var("APPDATA").map_err(|e| e.to_string())?;
     Ok(PathBuf::from(app_data)
@@ -60,11 +112,18 @@ fn librarian_db_path() -> Result<PathBuf, String> {
 }
 
 fn read_setting(db: &Db, key: &str) -> Option<String> {
+    // DB wins; fall back to env var (uppercase key, e.g. real_debrid_key → REAL_DEBRID_KEY)
     db.get_setting(key)
         .ok()
         .flatten()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var(key.to_ascii_uppercase())
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
 }
 
 fn load_remote_provider_config(db: &Db) -> RemoteProviderConfig {
@@ -271,6 +330,171 @@ fn organize_finalized_subset(db: &Db, library_base: &str, finalized_paths: &Hash
     Ok(())
 }
 
+/// Returns true for tracks that are virtually never available on streaming providers:
+/// skits, intros, interludes, outros, spoken word inserts, hidden tracks, and
+/// version suffixes that indicate alternate-only releases (live version, slow version, etc.).
+fn is_unfetchable_track(title: &str) -> bool {
+    let t = title.to_ascii_lowercase();
+    // Substring patterns
+    let contains_patterns = [
+        "skit", "interlude", " intro", " outro", " instrumental",
+        " reprise", " spoken", " narration", " monologue",
+        " slow version", " live version", " acoustic version",
+        " self titled demo", " demo", " revised", " dub",
+        "endless nameless",
+        "public service announcement", "drill sergeant", "bong hit",
+        "mad flava", "heavy flow",
+    ];
+    // Suffix-only patterns (track title ends with these)
+    let suffix_patterns = [
+        "intro", "outro", "skit", "interlude", "instrumental",
+        "reprise", " arto",
+    ];
+    contains_patterns.iter().any(|p| t.contains(p))
+        || suffix_patterns.iter().any(|p| t.ends_with(p))
+}
+
+/// Resolve and submit Spotify missing albums directly to the Director.
+/// Each album is resolved via MusicBrainz to per-track tasks, then submitted.
+/// Returns (albums_attempted, tracks_submitted, errors).
+async fn run_spotify_backlog(
+    db: &Db,
+    handle_director: &DirectorHandle,
+    min_plays: i64,
+    limit: usize,
+) -> Result<(usize, usize, Vec<String>), Box<dyn std::error::Error>> {
+    use cassette_core::metadata::MetadataService;
+    use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+
+    let missing = db.get_missing_spotify_albums_with_min_plays(min_plays)?;
+    let completed_keys = db.get_completed_task_keys()?;
+
+    let mut albums_attempted = 0usize;
+    let mut tracks_submitted = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    let metadata = MetadataService::new()?;
+
+    for album in &missing {
+        if tracks_submitted >= limit {
+            break;
+        }
+        let artist = album.artist.trim();
+        let title = album.album.trim();
+        if artist.is_empty() || title.is_empty() {
+            continue;
+        }
+        albums_attempted += 1;
+
+        // Resolve tracklist via MusicBrainz
+        let releases = match metadata.search_release(artist, title).await {
+            Ok(r) => r,
+            Err(e) => {
+                errors.push(format!("{artist} - {title}: search failed: {e}"));
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
+        };
+        // Prefer standard editions: pick the release with track count in 6..=20 range,
+        // smallest count first (avoids deluxe/bonus-disc editions). Fall back to any
+        // release with tracks if nothing fits the range.
+        let release = {
+            let mut candidates: Vec<_> = releases.into_iter()
+                .filter(|r| r.track_count.unwrap_or(0) > 0)
+                .collect();
+            candidates.sort_by_key(|r| r.track_count.unwrap_or(999));
+            let preferred = candidates.iter()
+                .find(|r| {
+                    let n = r.track_count.unwrap_or(0);
+                    n >= 6 && n <= 20
+                })
+                .or_else(|| candidates.first())
+                .cloned();
+            match preferred {
+                Some(r) => r,
+                None => {
+                    errors.push(format!("{artist} - {title}: no MusicBrainz release found"));
+                    continue;
+                }
+            }
+        };
+        let release_with_tracks = match metadata.get_release_tracks(&release.id).await {
+            Ok(r) => r,
+            Err(e) => {
+                errors.push(format!("{artist} - {title}: tracklist fetch failed: {e}"));
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                continue;
+            }
+        };
+        if release_with_tracks.tracks.is_empty() {
+            errors.push(format!("{artist} - {title}: empty tracklist"));
+            continue;
+        }
+
+        let bundle_size = release_with_tracks.tracks.len();
+        let strategy = if bundle_size > 1 {
+            AcquisitionStrategy::DiscographyBatch
+        } else {
+            AcquisitionStrategy::Standard
+        };
+
+        // Skip bonus discs entirely — providers don't carry deluxe-only content
+        let has_bonus_disc = release_with_tracks.tracks.iter().any(|t| t.disc_number > 1);
+        for track in &release_with_tracks.tracks {
+            if tracks_submitted >= limit {
+                break;
+            }
+            // Skip bonus disc tracks
+            if has_bonus_disc && track.disc_number > 1 {
+                continue;
+            }
+            // Skip skits, intros, interludes, and other unfetchable track types
+            if is_unfetchable_track(&track.title) {
+                continue;
+            }
+            let task_id = format!(
+                "spotify-album-track::{}::{}::{}::{:02}::{}",
+                artist.to_ascii_lowercase(),
+                title.to_ascii_lowercase(),
+                track.disc_number,
+                track.track_number,
+                track.title.trim().to_ascii_lowercase()
+                    .chars().map(|c| if c.is_alphanumeric() { c } else { ' ' })
+                    .collect::<String>().split_whitespace().collect::<Vec<_>>().join(" "),
+            );
+            if completed_keys.contains(&task_id) {
+                continue;
+            }
+            let task = TrackTask {
+                task_id: task_id.clone(),
+                source: TrackTaskSource::SpotifyHistory,
+                desired_track_id: None,
+                source_operation_id: None,
+                target: NormalizedTrack {
+                    spotify_track_id: None,
+                    source_playlist: None,
+                    artist: if track.artist.trim().is_empty() { artist.to_string() } else { track.artist.clone() },
+                    album_artist: Some(artist.to_string()),
+                    title: track.title.clone(),
+                    album: Some(release.title.clone()),
+                    track_number: Some(track.track_number),
+                    disc_number: Some(track.disc_number),
+                    year: release.year,
+                    duration_secs: if track.duration_ms > 0 { Some(track.duration_ms as f64 / 1000.0) } else { None },
+                    isrc: None,
+                },
+                strategy,
+            };
+            handle_director.submitter.submit(task).await?;
+            tracks_submitted += 1;
+        }
+
+        // Rate-limit MusicBrainz
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+    }
+
+    Ok((albums_attempted, tracks_submitted, errors))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (reload_layer, handle) =
@@ -283,6 +507,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let resume_shorthand = args.iter().any(|arg| arg == "--resume");
     let scan_mode = parse_scan_mode(&args, resume_shorthand)?;
+    let disable_content_hash = skip_content_hash(&args, scan_mode);
+    let skip_scan = has_flag(&args, "--skip-scan");
+    let skip_post_sync = has_flag(&args, "--skip-post-sync");
+    let skip_organize_subset = has_flag(&args, "--skip-organize-subset");
     let limit = args
         .windows(2)
         .find(|window| window[0] == "--limit")
@@ -292,6 +520,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .windows(2)
         .find(|window| window[0] == "--desired-state")
         .map(|window| PathBuf::from(&window[1]));
+    let stale_claim_minutes = args
+        .windows(2)
+        .find(|window| window[0] == "--stale-claim-minutes")
+        .and_then(|window| window[1].parse::<i64>().ok())
+        .unwrap_or(STALE_CLAIM_MINUTES_DEFAULT);
+    let import_spotify_missing = has_flag(&args, "--import-spotify-missing");
+    let spotify_min_plays = args
+        .windows(2)
+        .find(|window| window[0] == "--min-plays")
+        .and_then(|window| window[1].parse::<i64>().ok())
+        .unwrap_or(10);
 
     let db_path = app_db_path().map_err(|e| format!("app db: {e}"))?;
     let librarian_db_path = librarian_db_path().map_err(|e| format!("librarian db: {e}"))?;
@@ -319,10 +558,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     librarian_config.desired_state_path = desired_state_path.clone();
     librarian_config.scan_mode = scan_mode;
+    librarian_config.enable_content_hashing = !disable_content_hash;
+    librarian_config.skip_scan = skip_scan;
+
+    // Spotify backlog mode: resolve missing albums directly via Director, bypass sidecar queue
+    if import_spotify_missing {
+        println!(
+            "engine_pipeline_cli: spotify-backlog mode (min_plays={}, limit={})",
+            spotify_min_plays, limit
+        );
+        let handle_director = build_director(&db);
+        let mut results = handle_director.subscribe_results();
+
+        let (albums_attempted, tracks_submitted, errors) =
+            run_spotify_backlog(&db, &handle_director, spotify_min_plays, limit).await?;
+
+        println!(
+            "spotify-backlog: albums_attempted={} tracks_submitted={} errors={}",
+            albums_attempted, tracks_submitted, errors.len()
+        );
+        for err in &errors {
+            eprintln!("  backlog-error: {err}");
+        }
+
+        let mut completed_spotify = 0usize;
+        let mut finalized_spotify = HashSet::new();
+        while completed_spotify < tracks_submitted {
+            let result = results.recv().await?;
+            db.save_director_task_result(&result, None)?;
+            db.delete_director_pending_task(&result.task_id)?;
+            if let Some(finalized) = &result.finalized {
+                finalized_spotify.insert(finalized.path.to_string_lossy().to_string());
+                if let Ok(track) = cassette_core::library::read_track_metadata(&finalized.path) {
+                    db.upsert_track(&track)?;
+                }
+            }
+            completed_spotify += 1;
+            if completed_spotify % 10 == 0 || completed_spotify == tracks_submitted {
+                println!(
+                    "  spotify-backlog progress: {}/{} tracks done, {} finalized",
+                    completed_spotify,
+                    tracks_submitted,
+                    finalized_spotify.len()
+                );
+            }
+        }
+
+        handle_director.shutdown().await?;
+        println!(
+            "spotify-backlog complete: tracks_finalized={}",
+            finalized_spotify.len()
+        );
+        return Ok(());
+    }
 
     println!(
-        "engine_pipeline_cli starting with scan mode: {}",
-        librarian_config.scan_mode.as_str()
+        "engine_pipeline_cli starting with scan mode: {} (content_hashing={}, skip_scan={}, skip_post_sync={}, skip_organize_subset={})",
+        librarian_config.scan_mode.as_str(),
+        if librarian_config.enable_content_hashing {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        librarian_config.skip_scan,
+        skip_post_sync,
+        skip_organize_subset
     );
     let outcome = run_librarian_sync(
         &pool,
@@ -335,7 +635,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", outcome.summary);
 
     let queue = DeltaQueueAdapter::new(pool.clone());
-    let reclaimed = queue.reclaim_stale_claims(STALE_CLAIM_MINUTES).await?;
+    let reclaimed = queue.reclaim_stale_claims(stale_claim_minutes).await?;
     if reclaimed > 0 {
         println!("Reclaimed {} stale queue claims", reclaimed);
     }
@@ -343,7 +643,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let run_id = format!("engine-run-{}", uuid::Uuid::new_v4());
     let claimed = queue.claim_download_rows(&run_id, limit).await?;
     if claimed.is_empty() {
-        println!("No actionable delta_queue rows.");
+        if let Some(summary) = pending_non_download_summary(&pool).await? {
+            println!("No actionable download rows. Pending review queue: {summary}");
+        } else {
+            println!("No actionable delta_queue rows.");
+        }
         return Ok(());
     }
 
@@ -400,13 +704,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     handle_director.shutdown().await?;
 
-    let mut post_sync_config = librarian_config.clone();
-    post_sync_config.scan_mode = ScanMode::DeltaOnly;
-    let post_outcome = run_librarian_sync(&pool, &post_sync_config, None, true, &handle).await?;
-    println!("{}", post_outcome.summary);
+    if skip_post_sync {
+        println!("Skipping post-run librarian sync by request.");
+    } else {
+        let mut post_sync_config = librarian_config.clone();
+        post_sync_config.scan_mode = ScanMode::DeltaOnly;
+        post_sync_config.skip_scan = false;
+        let post_outcome = run_librarian_sync(&pool, &post_sync_config, None, true, &handle).await?;
+        println!("{}", post_outcome.summary);
+    }
 
-    organize_finalized_subset(&db, &library_base, &finalized_paths)
-        .map_err(|error| format!("organize subset failed: {error}"))?;
+    if skip_organize_subset {
+        println!("Skipping organizer subset by request.");
+    } else {
+        organize_finalized_subset(&db, &library_base, &finalized_paths)
+            .map_err(|error| format!("organize subset failed: {error}"))?;
+    }
 
     println!(
         "engine_pipeline_cli complete: claimed={} finalized_paths={}",

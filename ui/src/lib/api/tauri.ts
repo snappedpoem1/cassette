@@ -282,6 +282,29 @@ export interface TaskResultSummary {
   error: string | null;
 }
 
+export interface BacklogRunStatus {
+  running: boolean;
+  albums_queued: number;
+  albums_skipped: number;
+  tracks_submitted: number;
+  current_album: string | null;
+  errors: string[];
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface ProviderStat {
+  provider: string;
+  success: number;
+  failed: number;
+}
+
+export interface DirectorDebugStats {
+  pending_count: number;
+  provider_stats: ProviderStat[];
+  recent_results: TaskResultSummary[];
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -423,4 +446,12 @@ export const api = {
   getConfig: () => invoke<DownloadConfig>('get_config'),
   getProviderStatuses: () => invoke<ProviderStatus[]>('get_provider_statuses'),
   saveConfig: (config: DownloadConfig) => invoke<void>('save_config', { config }),
+
+  // Background backlog downloader
+  startBacklogRun: (batchSize?: number, limit?: number) =>
+    invoke<BacklogRunStatus>('start_backlog_run', { batch_size: batchSize, limit }),
+  stopBacklogRun: () => invoke<void>('stop_backlog_run'),
+  getBacklogStatus: () => invoke<BacklogRunStatus>('get_backlog_status'),
+  getDirectorDebugStats: (limit?: number) =>
+    invoke<DirectorDebugStats>('get_director_debug_stats', { limit }),
 };

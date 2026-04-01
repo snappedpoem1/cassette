@@ -229,6 +229,7 @@ impl Provider for YtDlpProvider {
             temp_path,
             file_size,
             extension_hint: Some(extension),
+            resolved_metadata: None,
         })
     }
 }

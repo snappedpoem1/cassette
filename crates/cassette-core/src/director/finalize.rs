@@ -3,6 +3,73 @@ use crate::director::error::FinalizationError;
 use crate::director::models::{CandidateSelection, FinalizedTrack, NormalizedTrack, ProvenanceRecord};
 use std::path::{Path, PathBuf};
 
+pub fn merge_normalized_track(
+    requested: &NormalizedTrack,
+    resolved: Option<&NormalizedTrack>,
+) -> NormalizedTrack {
+    let Some(resolved) = resolved else {
+        return requested.clone();
+    };
+
+    NormalizedTrack {
+        spotify_track_id: requested
+            .spotify_track_id
+            .clone()
+            .or_else(|| resolved.spotify_track_id.clone()),
+        source_playlist: requested.source_playlist.clone(),
+        artist: if requested.artist.trim().is_empty() {
+            resolved.artist.clone()
+        } else {
+            requested.artist.clone()
+        },
+        album_artist: requested
+            .album_artist
+            .clone()
+            .or_else(|| resolved.album_artist.clone()),
+        title: if requested.title.trim().is_empty() {
+            resolved.title.clone()
+        } else {
+            requested.title.clone()
+        },
+        album: requested.album.clone().or_else(|| resolved.album.clone()),
+        track_number: requested.track_number.or(resolved.track_number),
+        disc_number: requested.disc_number.or(resolved.disc_number),
+        year: requested.year.or(resolved.year),
+        duration_secs: requested.duration_secs.or(resolved.duration_secs),
+        isrc: requested.isrc.clone().or_else(|| resolved.isrc.clone()),
+    }
+}
+
+fn merge_embedded_metadata(requested: &NormalizedTrack, staged_path: &Path) -> NormalizedTrack {
+    match crate::library::read_track_metadata(staged_path) {
+        Ok(track) => merge_normalized_track(
+            requested,
+            Some(&NormalizedTrack {
+                spotify_track_id: None,
+                source_playlist: None,
+                artist: track.artist,
+                album_artist: if track.album_artist.trim().is_empty() {
+                    None
+                } else {
+                    Some(track.album_artist)
+                },
+                title: track.title,
+                album: if track.album.trim().is_empty() {
+                    None
+                } else {
+                    Some(track.album)
+                },
+                track_number: track.track_number.and_then(|value| u32::try_from(value).ok()),
+                disc_number: track.disc_number.and_then(|value| u32::try_from(value).ok()),
+                year: track.year,
+                duration_secs: Some(track.duration_secs),
+                isrc: None,
+            }),
+        ),
+        Err(_) => requested.clone(),
+    }
+}
+
 pub fn build_final_path(library_root: &Path, target: &NormalizedTrack, extension: &str) -> PathBuf {
     let artist = sanitize_component(
         target
@@ -63,7 +130,8 @@ pub async fn finalize_selected_candidate(
         .and_then(|value| value.to_str())
         .unwrap_or("bin")
         .to_string();
-    let destination = build_final_path(&library_root, &target, &extension);
+    let effective_target = merge_embedded_metadata(&target, &selection.temp_path);
+    let destination = build_final_path(&library_root, &effective_target, &extension);
     let source = selection.temp_path.clone();
 
     tokio::task::spawn_blocking(move || {
@@ -283,6 +351,26 @@ mod tests {
         assert!(path.to_string_lossy().contains("AC_DC"));
         assert!(path.to_string_lossy().contains("Greatest_ Hits"));
         assert!(path.to_string_lossy().contains("01 - Back_In_Black.flac"));
+    }
+
+    #[test]
+    fn merge_normalized_track_uses_resolved_track_number_when_request_is_missing() {
+        let mut requested = target();
+        requested.track_number = None;
+        requested.disc_number = None;
+
+        let resolved = NormalizedTrack {
+            track_number: Some(7),
+            disc_number: Some(2),
+            isrc: Some("ISRC123".to_string()),
+            ..target()
+        };
+
+        let merged = merge_normalized_track(&requested, Some(&resolved));
+        assert_eq!(merged.track_number, Some(7));
+        assert_eq!(merged.disc_number, Some(2));
+        assert_eq!(merged.isrc.as_deref(), Some("ISRC123"));
+        assert_eq!(merged.title, requested.title);
     }
 
     #[tokio::test]

@@ -252,12 +252,42 @@ impl RealDebridProvider {
         cached
     }
 
+    /// Look up an existing RD torrent by infohash. Returns the torrent ID if found.
+    async fn find_existing_torrent(&self, hash: &str) -> Option<String> {
+        let hash_upper = hash.to_ascii_uppercase();
+        // RD paginates at 100; page=1 covers recent activity which is all we need
+        let url = "https://api.real-debrid.com/rest/1.0/torrents?limit=100&page=1";
+        let response = self.client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let items: Vec<Value> = response.json().await.ok()?;
+        items.into_iter().find_map(|item| {
+            let item_hash = item.get("hash")?.as_str()?.to_ascii_uppercase();
+            if item_hash == hash_upper {
+                item.get("id")?.as_str().map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Submit a magnet/link to Real-Debrid and wait for it to resolve.
     async fn submit_and_resolve(
         &self,
         magnet_or_link: &str,
     ) -> Result<Vec<String>, ProviderError> {
-        // Step 1: Add magnet/link
+        // Step 1: Add magnet/link — but first check if it already exists to avoid duplicates
+        let existing_id = if let Some(hash) = Self::magnet_hash(magnet_or_link) {
+            self.find_existing_torrent(&hash).await
+        } else {
+            None
+        };
+
+        let torrent_id = if let Some(id) = existing_id {
+            info!(torrent_id = %id, "Real-Debrid torrent already exists — reusing");
+            id
+        } else {
         let add_response: Value = self
             .client
             .post("https://api.real-debrid.com/rest/1.0/torrents/addMagnet")
@@ -269,7 +299,7 @@ impl RealDebridProvider {
             .await
             .map_err(|error| self.map_network_error(error))?;
 
-        let torrent_id = add_response
+        let new_id = add_response
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| {
@@ -294,8 +324,9 @@ impl RealDebridProvider {
                 }
             })?
             .to_string();
-
-        info!(torrent_id = %torrent_id, "Real-Debrid torrent submitted");
+        info!(torrent_id = %new_id, "Real-Debrid torrent submitted");
+        new_id
+        }; // end new-or-existing
 
         // Step 2: Select all files
         self.client
@@ -711,6 +742,7 @@ impl Provider for RealDebridProvider {
             temp_path: destination,
             file_size,
             extension_hint: Some(extension),
+            resolved_metadata: None,
         })
     }
 }

@@ -2,10 +2,10 @@
 
 ## Two-Minute Cassette Overview
 
-**Status**: Active - hardening, provider proof, and release confidence
-**Next Priority**: Deezer full-track proof, audit completeness, async recovery hardening
+**Status**: Active - hardening, audit proof, coordinator proof, and release confidence
+**Next Priority**: end-to-end coordinator proof, organizer safe-subset proof, packaging confidence
 **Codebase Shape**: Rust workspace + Tauri 2 + SvelteKit + SQLite
-**Last Updated**: 2026-03-27
+**Last Updated**: 2026-03-30
 
 ---
 
@@ -17,7 +17,7 @@ It is simultaneously:
 
 - a desktop app (Tauri 2 + SvelteKit)
 - a library organizer with staging and quarantine
-- a downloader and acquisition tool (multi-provider: Qobuz, Deezer, slskd, Usenet, yt-dlp, local archive, Real-Debrid)
+- an acquisition system with Director-owned providers (Qobuz, Deezer, slskd, Usenet, yt-dlp, local archive, Real-Debrid)
 - a validation and audit system with file lineage goals
 - a playback and queue surface
 
@@ -30,10 +30,11 @@ The most useful mental model is not "music player." It is "trustworthy personal 
 - Canonical project docs live under `docs/`, not the repo root.
 - Workspace layout is `src-tauri/` + `crates/cassette-core/` + `ui/`.
 - Domain modules include `librarian`, `custodian`, `orchestrator`, `director`, `gatekeeper`, `library`, `validation`, and `metadata`.
-- `cargo check` currently succeeds with warnings.
-- `cargo test` currently has failures.
-- UI production build and desktop smoke state should be verified before claiming green.
-- Provider acquisition proof is incomplete for Deezer full-track flow and other live-provider paths.
+- `cargo check --workspace` passes.
+- `cargo test --workspace` passes.
+- `npm run build` in `ui/` passes, with an existing accessibility warning in `src/routes/downloads/+page.svelte`.
+- `.\scripts\smoke_desktop.ps1` passes.
+- Deezer full-track acquisition is live-proven on this machine.
 - Packaging for a clean machine has not been proven.
 - This is a git repository. History is available.
 
@@ -77,21 +78,20 @@ Supporting runtime responsibilities:
 
 ## Baseline Commands
 
-```bash
-cargo check
-cargo test
+```powershell
+cargo check --workspace
+cargo test --workspace
 
-cd ui && npm run build
+Set-Location ui; npm install; npm run build; Set-Location ..
 
-# Windows:
 .\scripts\smoke_desktop.ps1
 ```
 
-These are verification commands, not guaranteed pass indicators. Check fresh command output or `PROJECT_STATE.md` before claiming status.
+These are the baseline verification commands. Re-run them when the task depends on current pass/fail state instead of inheriting stale claims.
 
 Validation and inspection CLI:
 
-```bash
+```powershell
 cargo run -p cassette-core --bin cassette -- validate --help
 cargo run -p cassette-core --bin cassette -- lineage --help
 cargo run -p cassette-core --bin cassette -- operation --help
@@ -115,7 +115,7 @@ You are done with a change when:
 
 - the task is scoped and implemented
 - relevant verification has been run
-- docs reflect the new reality (`TODO.md`, `PROJECT_STATE.md`, `TELEMETRY.md` as needed)
+- docs reflect the new reality (`TODO.md`, `PROJECT_STATE.md`, `DECISIONS.md`, `TELEMETRY.md` as needed)
 - the next agent can continue without rediscovery
 
 ---

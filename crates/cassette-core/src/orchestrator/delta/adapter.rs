@@ -179,9 +179,11 @@ impl DeltaQueueAdapter {
     }
 
     pub async fn mark_processed(&self, desired_track_id: i64) -> Result<()> {
+        // Keep claimed_at and claim_run_id intact so the audit trail shows which
+        // run finalized this row. processed_at is the authoritative completion stamp.
         sqlx::query(
             "UPDATE delta_queue
-             SET processed_at = CURRENT_TIMESTAMP, claimed_at = NULL, claim_run_id = NULL
+             SET processed_at = CURRENT_TIMESTAMP
              WHERE desired_track_id = ?1 AND processed_at IS NULL",
         )
         .bind(desired_track_id)

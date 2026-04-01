@@ -157,6 +157,7 @@ impl Provider for LocalArchiveProvider {
             temp_path: destination,
             file_size,
             extension_hint: candidate.extension_hint.clone(),
+            resolved_metadata: None,
         })
     }
 }

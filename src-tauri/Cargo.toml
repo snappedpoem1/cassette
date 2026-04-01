@@ -34,6 +34,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
+urlencoding = "2"
 tauri-plugin-global-shortcut = "2"
 uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
@@ -56,3 +57,7 @@ path = "src/bin/tag_rescue_cli.rs"
 [[bin]]
 name = "engine_pipeline_cli"
 path = "src/bin/engine_pipeline_cli.rs"
+
+[[bin]]
+name = "torrent_album_cli"
+path = "src/bin/torrent_album_cli.rs"

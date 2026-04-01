@@ -16,13 +16,27 @@ use cassette_core::{
     provider_settings::DownloadConfig,
     sources::{RemoteProviderConfig, SlskdConnectionConfig},
 };
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use toml::Table as TomlTable;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tracing::warn;
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct BacklogRunStatus {
+    pub running: bool,
+    pub albums_queued: usize,
+    pub albums_skipped: usize,
+    pub tracks_submitted: usize,
+    pub current_album: Option<String>,
+    pub errors: Vec<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
 
 pub struct AppState {
     pub db: Arc<Mutex<Db>>,
@@ -34,6 +48,8 @@ pub struct AppState {
     pub director_submitter: DirectorSubmission,
     pub download_config: DownloadConfig,
     pub http_client: reqwest::Client,
+    pub backlog_status: Arc<Mutex<BacklogRunStatus>>,
+    pub backlog_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -94,6 +110,8 @@ impl AppState {
             director_submitter,
             download_config,
             http_client,
+            backlog_status: Arc::new(Mutex::new(BacklogRunStatus::default())),
+            backlog_cancel: Arc::new(AtomicBool::new(false)),
         };
 
         spawn_director_event_listener(

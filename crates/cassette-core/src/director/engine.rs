@@ -1,6 +1,6 @@
 use crate::director::config::{DirectorConfig, DuplicatePolicy};
 use crate::director::error::{DirectorError, ProviderError};
-use crate::director::finalize::finalize_selected_candidate;
+use crate::director::finalize::{finalize_selected_candidate, merge_normalized_track};
 use crate::director::metadata::apply_metadata;
 use crate::director::models::{
     CandidateDisposition, CandidateRecord, CandidateSelection, CandidateSelectionMode,
@@ -1203,6 +1203,10 @@ async fn finalize_candidate(
     best: CandidateDisposition,
     attempts_len: usize,
 ) -> Result<FinalizedTrack, DirectorError> {
+    let effective_target = merge_normalized_track(&task.target, best.acquisition.resolved_metadata.as_ref());
+    let mut effective_task = task.clone();
+    effective_task.target = effective_target.clone();
+
     let selection = CandidateSelection {
         provider_id: best.candidate.provider_id.clone(),
         provider_candidate_id: best.candidate.provider_candidate_id.clone(),
@@ -1220,7 +1224,7 @@ async fn finalize_candidate(
         Some(selection.provider_id.clone()),
         "applying metadata",
     );
-    if let Err(error) = apply_metadata(task.clone(), selection.clone()).await {
+    if let Err(error) = apply_metadata(effective_task.clone(), selection.clone()).await {
         warn!(task_id = %task.task_id, error = %error, "metadata tagging failed — continuing to finalization without tags");
     }
 
@@ -1233,7 +1237,7 @@ async fn finalize_candidate(
     );
     let provenance = ProvenanceRecord {
         task_id: task.task_id.clone(),
-        source_metadata: task.target.clone(),
+        source_metadata: effective_target.clone(),
         selected_provider: selection.provider_id.clone(),
         selected_provider_candidate_id: Some(selection.provider_candidate_id.clone()),
         score_reason: selection.reason.clone(),
@@ -1244,7 +1248,7 @@ async fn finalize_candidate(
     let finalized = finalize_selected_candidate(
         config.library_root.clone(),
         selection,
-        task.target.clone(),
+        effective_target,
         config.duplicate_policy,
         provenance,
     )
@@ -1732,6 +1736,7 @@ mod tests {
                 temp_path: path,
                 file_size: self.payload.len() as u64,
                 extension_hint: Some(extension),
+                resolved_metadata: None,
             })
         }
     }

@@ -88,17 +88,28 @@ pub async fn test_manager() -> LibraryManager {
         .fetch_all(manager.db_pool())
         .await
         .expect("delta queue columns");
-    let has_source = cols.iter().any(|c| {
-        use sqlx::Row;
-        c.try_get::<String, _>("name")
-            .map(|n| n == "source_operation_id")
-            .unwrap_or(false)
-    });
-    if !has_source {
+    use sqlx::Row;
+    let col_names: std::collections::HashSet<String> = cols
+        .iter()
+        .filter_map(|c| c.try_get::<String, _>("name").ok())
+        .collect();
+    if !col_names.contains("source_operation_id") {
         sqlx::query("ALTER TABLE delta_queue ADD COLUMN source_operation_id TEXT")
             .execute(manager.db_pool())
             .await
             .expect("add source op id");
+    }
+    if !col_names.contains("claimed_at") {
+        sqlx::query("ALTER TABLE delta_queue ADD COLUMN claimed_at TIMESTAMP")
+            .execute(manager.db_pool())
+            .await
+            .expect("add claimed_at");
+    }
+    if !col_names.contains("claim_run_id") {
+        sqlx::query("ALTER TABLE delta_queue ADD COLUMN claim_run_id TEXT")
+            .execute(manager.db_pool())
+            .await
+            .expect("add claim_run_id");
     }
 
     manager
