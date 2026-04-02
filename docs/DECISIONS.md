@@ -2,7 +2,7 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-03-30
+**Last Updated**: 2026-04-02
 
 ---
 
@@ -369,6 +369,132 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Revisit Condition**:
 
 - If the active runtime fully converges onto the richer normalized reconciliation schema already present elsewhere in the repo
+
+---
+
+## Decision 19: Useful Provider Evidence Is Retained Even When The Immediate Task Does Not Need It
+
+**Status**: approved (applied 2026-04-02)
+**Rationale**:
+
+- If the Director asks for one narrow fact and a provider returns several more useful identity or candidate facts,
+  discarding that surplus guarantees repeated re-discovery later.
+- The active runtime now persists search evidence, candidate evidence, response snapshots, identity evidence, and
+  source aliases as separate tables instead of treating `result_json` as the only durable memory.
+- This keeps Cassette on the sovereignty path: evidence learned once becomes queryable later for review, reuse, and AI context.
+
+**Tradeoffs**:
+
+- Larger runtime tables
+- More persistence work on terminal result saves
+- Cache/retention pruning policy now matters
+
+**Revisit Condition**:
+
+- If evidence volume becomes materially expensive, tighten TTL/pruning only for the truly ephemeral cache rows rather than reverting to write-only memory
+
+---
+
+## Decision 20: Organizer Moves Must Converge App And Sidecar Path Truth Together
+
+**Status**: approved (applied 2026-04-02)
+**Rationale**:
+
+- Updating only `tracks.path` after a live move left the sidecar `local_files.file_path` behind, which created a long-lived split-brain between the runtime library view and the control-plane scan index.
+- Organizer flows now apply path updates to both databases in the same convergence pass and displace stale conflicting sidecar rows at the destination path.
+- This keeps organize passes auditable and prevents fresh sidecar drift from being introduced by routine file moves.
+
+**Tradeoffs**:
+
+- Organizer code now depends on the sidecar DB being present
+- Cross-database updates are still not truly atomic because SQLite transactions cannot span both files
+
+**Revisit Condition**:
+
+- If the runtime and sidecar ever converge onto one authoritative DB, collapse this bridge into a single transactional path
+
+---
+
+## Decision 21: Persisted Provider Memory Must Act As A Runtime Control Plane, Not A Write-Only Audit Trail
+
+**Status**: approved (applied 2026-04-02)
+**Rationale**:
+
+- Cassette was already persisting negative-result memory and provider response snapshots, but the Director still behaved like every request was brand new.
+- Fresh dead-end memory now short-circuits providers before network search, and fresh cached candidate payloads can hydrate the in-memory search cache for identical requests.
+- This keeps the system deterministic under repetition: if Cassette already learned that a provider is a dead lane for a specific request signature, it should not keep paying the search cost to relearn it.
+
+**Tradeoffs**:
+
+- Reuse policy now depends on freshness windows and careful failure-class handling
+- Bad cache hygiene could preserve stale provider knowledge longer than intended
+- Director config now needs runtime DB awareness
+
+**Revisit Condition**:
+
+- If provider catalogs or search semantics become volatile enough that current freshness windows are too sticky, narrow the TTLs rather than removing persisted reuse entirely
+
+---
+
+## Decision 22: Fingerprint Evidence Must Accumulate In `local_files` Through Bounded Backfill
+
+**Status**: approved (applied 2026-04-02)
+**Rationale**:
+
+- Acoustic identity is too expensive to keep discovering from scratch and too important to leave stranded inside Gatekeeper-only flows.
+- `local_files` now persists `acoustid_fingerprint`, backfill attempt state, and the source file mtime used for the last fingerprint decision; Gatekeeper writes fingerprints during admission, and librarian sync backfills missing fingerprints in deterministic bounded parallel slices.
+- This preserves sovereignty without turning every normal scan into a full-library fingerprint marathon.
+
+**Tradeoffs**:
+
+- Sync runs now have a small extra CPU/decode budget when backfill is enabled
+- Backfill state management is more complex because unchanged failures must be suppressed without hiding legitimately rewritten files
+- Full convergence still takes multiple bounded passes on large libraries
+
+**Revisit Condition**:
+
+- If a future canonical backfill worker supersedes this path, keep the same storage contract and move only the execution surface
+
+---
+
+## Decision 23: The Sidecar Owns Acquisition Request Lifecycle Before Any Physical DB Merge
+
+**Status**: approved (applied 2026-04-02)
+**Rationale**:
+
+- Cassette already had the right execution spine in Director and the right durable control-plane primitives in the sidecar, but request intent was still being created ad hoc in the Tauri command layer.
+- `cassette_librarian.db` now owns acquisition requests, request timeline events, and canonical planning identities (`canonical_artists`, `canonical_releases`, `canonical_recordings`) so request intent exists before execution starts.
+- `cassette.db` remains the playback/runtime projection and terminal-result store for now; convergence means linking the two stores by `task_id`, `request_signature`, `desired_track_id`, and `source_operation_id`, not collapsing them blindly.
+
+**Tradeoffs**:
+
+- Request data is now split across two DBs during the convergence period
+- Event listeners must keep the sidecar timeline in sync with Director progress and terminal outcomes
+- Some legacy runtime tables (such as the older runtime `acquisition_requests`) are now transitional rather than canonical
+
+**Revisit Condition**:
+
+- When the runtime can deliberately cut over more read/write ownership without reintroducing split-brain behavior, not before
+
+---
+
+## Decision 24: Windows Workspace Tests Must Not Depend On The Tauri Lib Harness
+
+**Status**: approved (applied 2026-04-02)
+**Rationale**:
+
+- The failing `cassette_lib-*` unit-test executable imported `comctl32!TaskDialogIndirect` but did not carry the desktop manifest that activates Common Controls v6, so Windows aborted the process with `STATUS_ENTRYPOINT_NOT_FOUND` before any Rust test code ran.
+- The failure was in the GUI-linked harness startup path, not in the pure command/bootstrap logic we actually needed to verify.
+- Pure `src-tauri` assertions now live in `src-tauri/tests/pure_logic.rs`, and the Tauri lib target is no longer part of `cargo test --workspace`.
+
+**Tradeoffs**:
+
+- A small slice of `src-tauri` logic had to be factored into pure helper modules (`now_playing`, `spotify_history`, `pending_recovery`, `runtime_bootstrap`)
+- GUI-shell behavior still needs smoke or desktop-level verification rather than ordinary unit tests
+
+**Revisit Condition**:
+
+- If the repo gains a reliable manifest-aware Windows GUI test harness, the test split can be reconsidered without putting the workspace gate back on a flaky startup path
 
 ---
 

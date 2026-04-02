@@ -23,6 +23,7 @@
 //! - `validation` - sandbox validation, logging checks, and operational audit helpers
 //! - `metadata` - supporting metadata lookups and tag-fix flows
 //!
+pub mod acquisition;
 pub mod db;
 pub mod director;
 /// Compatibility-only provider settings/config surface.

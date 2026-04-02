@@ -218,6 +218,10 @@ async fn resolve_album_track_tasks(
                     None
                 },
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy: AcquisitionStrategy::DiscographyBatch,
         })
@@ -426,6 +430,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = DirectorConfig {
         library_root: PathBuf::from(&library_base),
         temp_root: PathBuf::from(&staging_folder).join(".director-temp"),
+        runtime_db_path: Some(db_path.clone()),
         local_search_roots: vec![PathBuf::from(&staging_folder)],
         worker_concurrency: 24,
         provider_timeout_secs: 120,
@@ -606,9 +611,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let request = submitted_tasks.get(&result.task_id);
                 let _ = db.save_director_task_result(&result, request);
                 if let Some(ref finalized_track) = result.finalized {
-                    if let Ok(track) =
+                    if let Ok(mut track) =
                         cassette_core::library::read_track_metadata(&finalized_track.path)
                     {
+                        cassette_core::library::enrich_track_with_director_result(&mut track, &result);
                         let _ = db.upsert_track(&track);
                     }
                 }

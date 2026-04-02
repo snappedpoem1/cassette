@@ -58,7 +58,10 @@ fn is_archive(path: &std::path::Path) -> bool {
 
 /// Extract an archive to dest_dir using 7-Zip, return list of extracted audio files.
 fn extract_archive(archive: &std::path::Path, dest_dir: &std::path::Path) -> Vec<PathBuf> {
-    let sevenz = PathBuf::from("C:/Program Files/7-Zip/7z.exe");
+    let sevenz = std::env::var("SEVENZIP_PATH")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:/Program Files/7-Zip/7z.exe"));
     if !sevenz.exists() {
         warn!("7z.exe not found at {:?}", sevenz);
         return Vec::new();
@@ -116,6 +119,40 @@ fn is_single_not_album(album: &str) -> bool {
         return true;
     }
     false
+}
+
+/// Returns true if the album looks like a live recording, bootleg, or concert date.
+fn is_live_or_bootleg(album: &str) -> bool {
+    let t = album.to_ascii_lowercase();
+
+    // Date patterns: "1994-02-12", "1994‐02‐12" (unicode dash), "yyyy-mm-dd:"
+    // Check for 4-digit year followed by separator and 2-digit month
+    let chars: Vec<char> = t.chars().collect();
+    for i in 0..chars.len().saturating_sub(7) {
+        if chars[i..i+4].iter().all(|c| c.is_ascii_digit()) {
+            let sep = chars[i+4];
+            if (sep == '-' || sep == '\u{2010}' || sep == '/')
+                && i + 7 < chars.len()
+                && chars[i+5..i+7].iter().all(|c| c.is_ascii_digit())
+            {
+                return true;
+            }
+        }
+    }
+
+    // Explicit live/bootleg keywords
+    let live_patterns = [
+        "live at ", "live from ", "live in ", "live on ",
+        ": live", "(live)", "[live]", " - live",
+        "concert at ", "concert in ",
+        "bootleg", "unofficial",
+        "black session", "session #", "fm broadcast",
+        "radio session", "bbc session", "kcrw", "kexp",
+        "morning becomes eclectic",
+        ": venue", "unknown venue",
+        "pre‐fm", "pre-fm",
+    ];
+    live_patterns.iter().any(|p| t.contains(p))
 }
 
 /// Strip feat/with suffixes from artist/album names for cleaner TPB searches.
@@ -297,6 +334,135 @@ impl RdClient {
     }
 }
 
+// ── Jackett search ───────────────────────────────────────────────────────────
+
+/// Search Jackett via the Torznab XML endpoint (works with API key, no login session needed).
+async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &str) -> Vec<TorrentResult> {
+    let query = format!("{artist} {album} FLAC");
+    let encoded = urlencoding::encode(&query);
+    // Torznab: cat=3000 = Audio
+    let url = format!(
+        "{jackett_url}/api/v2.0/indexers/all/results/torznab/?apikey={api_key}&t=search&q={encoded}&cat=3000"
+    );
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(25))
+        .build()
+        .unwrap_or_default();
+
+    let text = match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => match r.text().await {
+            Ok(t) => t,
+            Err(e) => { warn!("Jackett body read failed: {e}"); return Vec::new(); }
+        },
+        Ok(r) => { warn!("Jackett returned {}", r.status()); return Vec::new(); }
+        Err(e) => { warn!("Jackett request failed: {e}"); return Vec::new(); }
+    };
+
+    // Parse Torznab RSS XML — extract <item> elements
+    let artist_n = normalize_text(artist);
+    let album_n = normalize_text(album);
+    let album_words: Vec<String> = album_n.split_whitespace().map(|s| s.to_string()).collect();
+
+    // Simple XML field extractor — no full XML parser dep needed
+    let extract = |block: &str, tag: &str| -> Option<String> {
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
+        let start = block.find(&open)?;
+        let inner_start = block[start..].find('>')? + start + 1;
+        let end = block[inner_start..].find(&close)? + inner_start;
+        Some(block[inner_start..end].trim().to_string())
+    };
+    let extract_attr = |block: &str, tag: &str, attr: &str| -> Option<String> {
+        let open = format!("<{tag}");
+        let start = block.find(&open)?;
+        let tag_end = block[start..].find('>')?  + start;
+        let tag_str = &block[start..tag_end];
+        let attr_pat = format!("{attr}=\"");
+        let a_start = tag_str.find(&attr_pat)? + attr_pat.len();
+        let a_end = tag_str[a_start..].find('"')? + a_start;
+        Some(tag_str[a_start..a_end].to_string())
+    };
+
+    let mut scored: Vec<(i64, TorrentResult)> = Vec::new();
+
+    for item_block in text.split("<item>").skip(1) {
+        let end = item_block.find("</item>").unwrap_or(item_block.len());
+        let item = &item_block[..end];
+
+        let title = match extract(item, "title") {
+            Some(t) => t.replace("<![CDATA[", "").replace("]]>", "").trim().to_string(),
+            None => continue,
+        };
+
+        // Seeders from torznab:attr name="seeders"
+        let seeders: u32 = {
+            let mut s = 0u32;
+            for chunk in item.split("<torznab:attr") {
+                if chunk.contains("\"seeders\"") {
+                    if let Some(v) = extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value") {
+                        s = v.parse().unwrap_or(0);
+                    }
+                    break;
+                }
+            }
+            s
+        };
+        if seeders < 2 { continue; }
+
+        let size: u64 = extract(item, "size").and_then(|s| s.parse().ok()).unwrap_or(0);
+
+        // Magnet from torznab:attr name="magneturl" or link
+        let magnet = {
+            let mut m = None;
+            for chunk in item.split("<torznab:attr") {
+                if chunk.contains("\"magneturl\"") {
+                    m = extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value");
+                    break;
+                }
+            }
+            if m.is_none() {
+                // Fall back to guid/link which is often the magnet
+                m = extract(item, "guid").filter(|s| s.starts_with("magnet:"));
+            }
+            if m.is_none() {
+                // Try infohash
+                let mut hash = None;
+                for chunk in item.split("<torznab:attr") {
+                    if chunk.contains("\"infohash\"") {
+                        hash = extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value");
+                        break;
+                    }
+                }
+                if let Some(h) = hash {
+                    let enc = urlencoding::encode(&title);
+                    m = Some(format!(
+                        "magnet:?xt=urn:btih:{h}&dn={enc}\
+                         &tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+                    ));
+                }
+            }
+            match m { Some(v) => v, None => continue }
+        };
+
+        let t = normalize_text(&title);
+        let has_artist = t.contains(&artist_n);
+        let has_album = album_words.iter().all(|w| t.split_whitespace().any(|tw| tw == w.as_str()));
+        if !has_album { continue; }
+
+        let mut score = 60i64;
+        if has_artist { score += 40; }
+        if t.contains("flac") { score += 50; }
+        if t.contains("24bit") || t.contains("24-bit") || t.contains("24 bit") { score += 20; }
+        score += (seeders.min(50) as i64) * 2;
+        if size > 10 * 1024 * 1024 * 1024 { score -= 100; }
+
+        scored.push((score, TorrentResult { title, magnet, seeders, size }));
+    }
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().map(|(_, r)| r).collect()
+}
+
 // ── TPB search ───────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -455,19 +621,29 @@ async fn process_album(
     library_base: &str,
     db: &Db,
     dry_run: bool,
+    jackett: Option<(&str, &str)>, // (url, api_key)
 ) -> Result<usize, String> {
     let artist = &job.artist;
     let album = &job.album;
 
     println!("  [{artist} - {album}]");
 
-    // 1. TPB search
-    let results = search_tpb(artist, album).await;
+    // 1. Search — Jackett first (if configured), fall back to apibay/TPB
+    let results = if let Some((jurl, jkey)) = jackett {
+        let r = search_jackett(artist, album, jurl, jkey).await;
+        if r.is_empty() {
+            println!("    jackett: no results, trying apibay...");
+            search_tpb(artist, album).await
+        } else { r }
+    } else {
+        search_tpb(artist, album).await
+    };
     if results.is_empty() {
-        return Err(format!("No torrents found on TPB for {artist} - {album}"));
+        return Err(format!("No torrents found for {artist} - {album}"));
     }
     let best = &results[0];
-    println!("    torrent: {} ({} seeders)", best.title, best.seeders);
+    let source = if jackett.is_some() { "jackett" } else { "apibay" };
+    println!("    torrent [{source}]: {} ({} seeders)", best.title, best.seeders);
 
     if dry_run {
         println!("    [dry-run] would add: {}", best.magnet);
@@ -597,6 +773,11 @@ async fn process_album(
         installed += 1;
     }
 
+    // Mark as in_library in spotify_album_history so the queue count stays accurate
+    if installed > 0 {
+        let _ = db.mark_spotify_album_in_library(artist, album);
+    }
+
     Ok(installed)
 }
 
@@ -620,7 +801,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let min_plays: i64 = args.windows(2)
         .find(|w| w[0] == "--min-plays")
         .and_then(|w| w[1].parse().ok())
-        .unwrap_or(1);
+        .unwrap_or(3);
 
     // --album "Artist" "Album" for a single targeted run
     let single_album: Option<(String, String)> = args.windows(3)
@@ -636,6 +817,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let staging_folder = read_setting(&db, "staging_folder").unwrap_or_else(|| "A:\\Staging".to_string());
     let staging_dir = PathBuf::from(&staging_folder).join(".torrent-album-staging");
 
+    // Jackett config — optional; falls back to apibay if not set
+    let jackett_url = read_setting(&db, "jackett_url")
+        .unwrap_or_else(|| "http://localhost:9117".to_string());
+    let jackett_api_key = read_setting(&db, "jackett_api_key");
+    let jackett: Option<(String, String)> = jackett_api_key.map(|k| (jackett_url, k));
+
     let rd = RdClient::new(&rd_key);
 
     let jobs: Vec<AlbumJob> = if let Some((artist, album)) = single_album {
@@ -644,16 +831,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Pull from Spotify missing albums backlog
         let missing = db.get_missing_spotify_albums_with_min_plays(min_plays)?;
         let completed_keys = db.get_completed_task_keys()?;
+        let lib = PathBuf::from(&library_base);
         missing.into_iter()
             .filter(|a| !a.artist.trim().is_empty() && !a.album.trim().is_empty())
-            // Skip singles masquerading as albums: feat/with/ft in title, or very short titles
+            // Skip singles masquerading as albums
             .filter(|a| !is_single_not_album(&a.album))
-            // Skip albums where we already have all tracks
+            // Skip live recordings, bootlegs, concert dates
+            .filter(|a| !is_live_or_bootleg(&a.album))
+            // Skip albums where we already have all tracks via Director
             .filter(|a| {
                 let artist = a.artist.trim().to_ascii_lowercase();
                 let album = a.album.trim().to_ascii_lowercase();
                 let prefix = format!("spotify-album-track::{}::{}", artist, album);
                 !completed_keys.iter().any(|k| k.starts_with(&prefix))
+            })
+            // Skip albums already on disk (installed by a prior torrent_album_cli run)
+            .filter(|a| {
+                let artist_s = strip_feat(&a.artist.trim().to_string());
+                let album_s = strip_feat(&a.album.trim().to_string());
+                let dir = lib.join(sanitize_component(&artist_s)).join(sanitize_component(&album_s));
+                !dir.exists()
             })
             .take(limit)
             .map(|a| AlbumJob {
@@ -679,7 +876,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, job) in jobs.iter().enumerate() {
         println!("\n[{}/{}]", i + 1, jobs.len());
-        match process_album(&job, &rd, &staging_dir, &library_base, &db, dry_run).await {
+        let jref = jackett.as_ref().map(|(u, k)| (u.as_str(), k.as_str()));
+        match process_album(&job, &rd, &staging_dir, &library_base, &db, dry_run, jref).await {
             Ok(n) => {
                 total_installed += n;
                 println!("    -> {n} tracks installed");

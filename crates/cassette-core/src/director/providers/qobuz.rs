@@ -383,6 +383,10 @@ impl Provider for QobuzProvider {
                 .get("isrc")
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
         };
 
         Ok(CandidateAcquisition {

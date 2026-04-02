@@ -3,7 +3,7 @@ use crate::librarian::db::{migrations, LibrarianDb};
 use crate::librarian::error::{LibrarianError, Result};
 use crate::librarian::import::import_desired_spotify_json;
 use crate::librarian::reconcile::reconcile_desired_state as reconcile_pipeline;
-use crate::librarian::scanner::scan_library;
+use crate::librarian::scanner::{backfill_missing_fingerprints, scan_library};
 use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -46,6 +46,7 @@ pub enum SyncStatus {
 pub struct SyncCounts {
     pub files_scanned: usize,
     pub files_upserted: usize,
+    pub fingerprints_backfilled: usize,
     pub desired_tracks_imported: usize,
     pub reconciliation_results: usize,
     pub delta_queue_entries: usize,
@@ -113,6 +114,39 @@ pub async fn run_librarian_sync(
         }
     }
 
+    if config.enable_fingerprint_backfill && config.fingerprint_backfill_limit > 0 {
+        let db = LibrarianDb::from_pool(db_pool.clone());
+        match backfill_missing_fingerprints(
+            &db,
+            config.fingerprint_backfill_limit,
+            config.fingerprint_backfill_concurrency,
+        )
+        .await
+        {
+            Ok(backfilled) => {
+                counts.fingerprints_backfilled = backfilled;
+                info!(
+                    run_id = %run_id,
+                    fingerprints_backfilled = backfilled,
+                    limit = config.fingerprint_backfill_limit,
+                    concurrency = config.fingerprint_backfill_concurrency,
+                    "fingerprint backfill completed"
+                );
+            }
+            Err(error) => {
+                let message = error.to_string();
+                errors.push(("fingerprint_backfill".to_string(), message.clone()));
+                counts.errors += 1;
+                warn!(
+                    run_id = %run_id,
+                    phase = "fingerprint_backfill",
+                    error = %message,
+                    "fingerprint backfill failed, continuing"
+                );
+            }
+        }
+    }
+
     if !skip_import {
         let import_source = desired_state_override.or_else(|| config.desired_state_path.clone());
         if let Some(source) = import_source {
@@ -170,7 +204,7 @@ pub async fn run_librarian_sync(
         SyncStatus::PartialSuccess
     };
     let summary = format!(
-        "Librarian sync completed [{}]: {} scanned, {} upserted, {} imported, {} reconciled, {} deltas",
+        "Librarian sync completed [{}]: {} scanned, {} upserted, {} fingerprints, {} imported, {} reconciled, {} deltas",
         if config.skip_scan {
             "skip-scan"
         } else {
@@ -178,6 +212,7 @@ pub async fn run_librarian_sync(
         },
         counts.files_scanned,
         counts.files_upserted,
+        counts.fingerprints_backfilled,
         counts.desired_tracks_imported,
         counts.reconciliation_results,
         counts.delta_queue_entries
@@ -272,17 +307,30 @@ async fn ensure_local_file_columns(db_pool: &SqlitePool) -> Result<()> {
     let columns = sqlx::query("PRAGMA table_info(local_files)")
         .fetch_all(db_pool)
         .await?;
-    let has_file_mtime_ms = columns.iter().any(|column| {
-        column
-            .try_get::<String, _>("name")
-            .map(|name| name == "file_mtime_ms")
-            .unwrap_or(false)
-    });
-    if !has_file_mtime_ms {
-        sqlx::query("ALTER TABLE local_files ADD COLUMN file_mtime_ms INTEGER")
-            .execute(db_pool)
-            .await?;
+    for (column_name, column_type) in [
+        ("file_mtime_ms", "INTEGER"),
+        ("acoustid_fingerprint", "TEXT"),
+        ("fingerprint_attempted_at", "TIMESTAMP"),
+        ("fingerprint_error", "TEXT"),
+        ("fingerprint_source_mtime_ms", "INTEGER"),
+    ] {
+        let has_column = columns.iter().any(|column| {
+            column
+                .try_get::<String, _>("name")
+                .map(|name| name == column_name)
+                .unwrap_or(false)
+        });
+        if !has_column {
+            sqlx::query(&format!("ALTER TABLE local_files ADD COLUMN {column_name} {column_type}"))
+                .execute(db_pool)
+                .await?;
+        }
     }
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_local_files_acoustid_fingerprint ON local_files(acoustid_fingerprint)",
+    )
+    .execute(db_pool)
+    .await?;
     Ok(())
 }
 
@@ -586,6 +634,7 @@ mod tests {
         let counts = SyncCounts {
             files_scanned: 10,
             files_upserted: 9,
+            fingerprints_backfilled: 0,
             desired_tracks_imported: 2,
             reconciliation_results: 2,
             delta_queue_entries: 3,

@@ -9,7 +9,12 @@
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
   import { debounce } from '$lib/utils';
-  import type { DownloadAlbumResult, CandidateReviewItem } from '$lib/api/tauri';
+  import type {
+    AcquisitionRequestEvent,
+    AcquisitionRequestListItem,
+    CandidateReviewItem,
+    DownloadAlbumResult
+  } from '$lib/api/tauri';
 
   let searchInput = '';
   let discogArtist: string | null = null;
@@ -19,6 +24,12 @@
   let reviewLoading = false;
   let showDebug = false;
   let backlogLimit = 200;
+  let recentRequests: AcquisitionRequestListItem[] = [];
+  let requestLoading = false;
+  let expandedRequestId: number | null = null;
+  let requestTimeline: AcquisitionRequestEvent[] = [];
+  let requestCandidates: CandidateReviewItem[] = [];
+  let requestLineage: any = null;
 
   async function toggleReview(taskId: string) {
     if (expandedJob === taskId) {
@@ -46,8 +57,50 @@
     loadDownloadJobs();
     startDownloadSupervision();
     refreshBacklogStatus();
+    await loadRecentRequests();
   });
   onDestroy(stopDownloadSupervision);
+
+  async function loadRecentRequests() {
+    requestLoading = true;
+    try {
+      recentRequests = await api.listAcquisitionRequests(undefined, 25);
+    } catch {
+      recentRequests = [];
+    } finally {
+      requestLoading = false;
+    }
+  }
+
+  async function toggleRequest(request: AcquisitionRequestListItem) {
+    if (expandedRequestId === request.id) {
+      expandedRequestId = null;
+      requestTimeline = [];
+      requestCandidates = [];
+      requestLineage = null;
+      return;
+    }
+
+    expandedRequestId = request.id;
+    requestTimeline = [];
+    requestCandidates = [];
+    requestLineage = null;
+
+    try {
+      const [timeline, candidates, lineage] = await Promise.all([
+        api.getAcquisitionRequestTimeline(request.id),
+        api.getRequestCandidateReview(request.id),
+        api.getRequestLineage(request.id),
+      ]);
+      requestTimeline = timeline;
+      requestCandidates = candidates;
+      requestLineage = lineage;
+    } catch {
+      requestTimeline = [];
+      requestCandidates = [];
+      requestLineage = null;
+    }
+  }
 
   async function downloadAlbum(album: DownloadAlbumResult) {
     await api.startDownload(album.artist, album.title);
@@ -76,7 +129,10 @@
 
   async function toggleDebug() {
     showDebug = !showDebug;
-    if (showDebug) await refreshDebugStats();
+    if (showDebug) {
+      await refreshDebugStats();
+      await loadRecentRequests();
+    }
   }
 
   const statusColors: Record<string, string> = {
@@ -94,6 +150,17 @@
     AlreadyPresent: 'badge-muted',
     Failed: 'badge-error',
     Cancelled: 'badge-muted',
+  };
+
+  const requestStatusColor: Record<string, string> = {
+    pending: 'badge-muted',
+    queued: 'badge-warning',
+    submitted: 'badge-warning',
+    in_progress: 'badge-accent',
+    finalized: 'badge-success',
+    already_present: 'badge-muted',
+    failed: 'badge-error',
+    cancelled: 'badge-muted',
   };
 </script>
 
@@ -349,6 +416,101 @@
     {/if}
   </div>
 
+  <div class="requests-panel">
+    <div class="requests-header">
+      <div class="dl-section-label" style="margin:0">Recent Requests</div>
+      <button class="btn btn-secondary" style="font-size:0.75rem;padding:4px 10px;" on:click={loadRecentRequests}>
+        Refresh
+      </button>
+    </div>
+
+    {#if requestLoading}
+      <div class="debug-empty">Loading request timeline...</div>
+    {:else if recentRequests.length === 0}
+      <div class="debug-empty">No control-plane requests recorded yet.</div>
+    {:else}
+      <div class="debug-results-list">
+        {#each recentRequests as request}
+          <div
+            class="debug-result-row request-row"
+            role="button"
+            tabindex="0"
+            on:click={() => toggleRequest(request)}
+            on:keydown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggleRequest(request);
+              }
+            }}
+          >
+            <span class="badge {requestStatusColor[request.status] ?? 'badge-muted'}" style="font-size:0.68rem;min-width:72px;text-align:center;">
+              {request.status}
+            </span>
+            <span class="debug-result-provider">{request.selected_provider || request.execution_disposition || 'request'}</span>
+            <span class="debug-result-task" title={request.task_id || request.request_signature}>
+              {request.artist} {request.title ? `- ${request.title}` : ''}{request.album ? ` (${request.album})` : ''}
+            </span>
+            {#if request.failure_class}
+              <span class="debug-result-error" title={request.failure_class}>{request.failure_class}</span>
+            {/if}
+          </div>
+
+          {#if expandedRequestId === request.id}
+            <div class="candidate-review-panel">
+              <div class="review-header">Timeline ({requestTimeline.length})</div>
+              {#if requestTimeline.length === 0}
+                <div class="review-empty">No request events recorded.</div>
+              {:else}
+                {#each requestTimeline as event}
+                  <div class="timeline-row">
+                    <span class="badge {requestStatusColor[event.status] ?? 'badge-muted'}" style="font-size:0.68rem;">{event.status}</span>
+                    <span class="timeline-type">{event.event_type}</span>
+                    <span class="timeline-time">{event.created_at}</span>
+                    {#if event.message}
+                      <div class="timeline-message">{event.message}</div>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+
+              {#if requestLineage?.execution}
+                <div class="review-header" style="margin-top:12px;">Execution</div>
+                <div class="timeline-message">
+                  {requestLineage.execution.disposition}
+                  {#if requestLineage.execution.provider} via {requestLineage.execution.provider}{/if}
+                  {#if requestLineage.execution.final_path}<br />{requestLineage.execution.final_path}{/if}
+                </div>
+              {/if}
+
+              <div class="review-header" style="margin-top:12px;">Candidates ({requestCandidates.length})</div>
+              {#if requestCandidates.length === 0}
+                <div class="review-empty">No candidate review captured for this request.</div>
+              {:else}
+                {#each requestCandidates as cand}
+                  <div class="review-candidate" class:review-selected={cand.is_selected}>
+                    <div class="review-cand-header">
+                      <span class="review-provider">{cand.provider_display_name}</span>
+                      <span class="review-trust">trust {cand.provider_trust_rank}</span>
+                      <span class="badge {cand.is_selected ? 'badge-success' : cand.outcome === 'validation_failed' ? 'badge-error' : 'badge-muted'}">
+                        {cand.is_selected ? 'SELECTED' : cand.outcome}
+                      </span>
+                      {#if cand.score_total != null}
+                        <span class="review-score">score {cand.score_total}</span>
+                      {/if}
+                    </div>
+                    {#if cand.rejection_reason}
+                      <div class="review-rejection">{cand.rejection_reason}</div>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      </div>
+    {/if}
+  </div>
+
   <!-- Debug panel -->
   {#if showDebug}
     <div class="debug-panel">
@@ -519,6 +681,33 @@
 .review-trust { font-size: 0.72rem; color: var(--text-muted); }
 .review-score { font-size: 0.75rem; color: var(--text-secondary); font-weight: 600; }
 .review-rejection { font-size: 0.75rem; color: var(--error); margin-top: 4px; }
+
+.requests-panel {
+  margin: 0 1.5rem 1.5rem;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 70%, var(--bg-primary));
+}
+.requests-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.request-row { cursor: pointer; }
+.request-row:hover { border-color: var(--border-active); }
+.timeline-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.timeline-type { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); }
+.timeline-time { font-size: 0.7rem; color: var(--text-muted); }
+.timeline-message {
+  grid-column: 1 / -1;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
 
 /* Backlog panel */
 .backlog-panel {

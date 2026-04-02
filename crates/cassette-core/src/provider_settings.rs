@@ -9,19 +9,34 @@ use serde::{Deserialize, Serialize};
 pub struct DownloadConfig {
     pub library_base: String,
     pub staging_folder: String,
+    // Soulseek
     pub slskd_url: Option<String>,
     pub slskd_user: Option<String>,
     pub slskd_pass: Option<String>,
+    pub slskd_downloads_dir: Option<String>,
+    // Real-Debrid / torrents
     pub real_debrid_key: Option<String>,
     pub jackett_url: Option<String>,
     pub jackett_api_key: Option<String>,
+    // Usenet
+    pub nzbgeek_api_key: Option<String>,
+    pub sabnzbd_url: Option<String>,
+    pub sabnzbd_api_key: Option<String>,
+    // Streaming
     pub qobuz_email: Option<String>,
     pub qobuz_password: Option<String>,
     pub deezer_arl: Option<String>,
+    // Spotify
     pub spotify_client_id: Option<String>,
     pub spotify_client_secret: Option<String>,
     pub spotify_access_token: Option<String>,
+    // Enrichment
     pub genius_token: Option<String>,
+    pub discogs_token: Option<String>,
+    pub lastfm_api_key: Option<String>,
+    // Tools
+    pub ytdlp_path: Option<String>,
+    pub sevenzip_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -41,9 +56,13 @@ impl DownloadConfig {
             slskd_url: std::env::var("SLSKD_URL").ok(),
             slskd_user: std::env::var("SLSKD_USER").ok(),
             slskd_pass: std::env::var("SLSKD_PASSWORD").ok(),
+            slskd_downloads_dir: std::env::var("SLSKD_DOWNLOADS_DIR").ok(),
             real_debrid_key: std::env::var("REAL_DEBRID_KEY").ok(),
             jackett_url: std::env::var("JACKETT_URL").ok(),
             jackett_api_key: std::env::var("JACKETT_API_KEY").ok(),
+            nzbgeek_api_key: std::env::var("NZBGEEK_API_KEY").ok(),
+            sabnzbd_url: std::env::var("SABNZBD_URL").ok(),
+            sabnzbd_api_key: std::env::var("SABNZBD_API_KEY").ok(),
             qobuz_email: std::env::var("QOBUZ_EMAIL").ok(),
             qobuz_password: std::env::var("QOBUZ_PASSWORD").ok(),
             deezer_arl: std::env::var("DEEZER_ARL").ok(),
@@ -51,33 +70,16 @@ impl DownloadConfig {
             spotify_client_secret: std::env::var("SPOTIFY_CLIENT_SECRET").ok(),
             spotify_access_token: std::env::var("SPOTIFY_ACCESS_TOKEN").ok(),
             genius_token: std::env::var("GENIUS_TOKEN").ok(),
+            discogs_token: std::env::var("DISCOGS_TOKEN").ok(),
+            lastfm_api_key: std::env::var("LASTFM_API_KEY").ok(),
+            ytdlp_path: std::env::var("YTDLP_PATH").ok(),
+            sevenzip_path: std::env::var("SEVENZIP_PATH").ok(),
         }
     }
 
     pub fn provider_statuses(&self) -> Vec<ProviderStatus> {
         vec![
-            Self::build_status(
-                "slskd",
-                "Soulseek / slskd",
-                vec![
-                    ("URL", &self.slskd_url),
-                    ("username", &self.slskd_user),
-                    ("password", &self.slskd_pass),
-                ],
-                None,
-            ),
-            Self::build_status(
-                "real_debrid",
-                "Real-Debrid",
-                vec![("API key", &self.real_debrid_key)],
-                None,
-            ),
-            Self::build_status(
-                "deezer",
-                "Deezer",
-                vec![("ARL", &self.deezer_arl)],
-                None,
-            ),
+            // ── Streaming / lossless ──────────────────────────────────────
             Self::build_status(
                 "qobuz",
                 "Qobuz",
@@ -88,6 +90,45 @@ impl DownloadConfig {
                 None,
             ),
             Self::build_status(
+                "deezer",
+                "Deezer",
+                vec![("ARL", &self.deezer_arl)],
+                None,
+            ),
+            // ── Torrent / debrid ─────────────────────────────────────────
+            Self::build_status(
+                "real_debrid",
+                "Real-Debrid",
+                vec![("API key", &self.real_debrid_key)],
+                Some(vec![
+                    ("Jackett URL", &self.jackett_url),
+                    ("Jackett API key", &self.jackett_api_key),
+                ]),
+            ),
+            // ── Usenet ───────────────────────────────────────────────────
+            Self::build_status(
+                "usenet",
+                "Usenet (NZBGeek + SABnzbd)",
+                vec![
+                    ("NZBGeek API key", &self.nzbgeek_api_key),
+                    ("SABnzbd URL", &self.sabnzbd_url),
+                    ("SABnzbd API key", &self.sabnzbd_api_key),
+                ],
+                None,
+            ),
+            // ── P2P ──────────────────────────────────────────────────────
+            Self::build_status(
+                "slskd",
+                "Soulseek / slskd",
+                vec![
+                    ("URL", &self.slskd_url),
+                    ("username", &self.slskd_user),
+                    ("password", &self.slskd_pass),
+                ],
+                Some(vec![("downloads dir", &self.slskd_downloads_dir)]),
+            ),
+            // ── Metadata ─────────────────────────────────────────────────
+            Self::build_status(
                 "spotify",
                 "Spotify",
                 vec![
@@ -97,10 +138,36 @@ impl DownloadConfig {
                 Some(vec![("access token", &self.spotify_access_token)]),
             ),
             Self::build_status(
+                "discogs",
+                "Discogs",
+                vec![],
+                Some(vec![("token", &self.discogs_token)]),
+            ),
+            Self::build_status(
+                "lastfm",
+                "Last.fm",
+                vec![],
+                Some(vec![("API key", &self.lastfm_api_key)]),
+            ),
+            // ── Enrichment ───────────────────────────────────────────────
+            Self::build_status(
                 "genius",
                 "Genius",
                 vec![("access token", &self.genius_token)],
                 None,
+            ),
+            // ── Tools ────────────────────────────────────────────────────
+            Self::build_status(
+                "ytdlp",
+                "yt-dlp",
+                vec![],
+                Some(vec![("binary path", &self.ytdlp_path)]),
+            ),
+            Self::build_status(
+                "sevenzip",
+                "7-Zip",
+                vec![],
+                Some(vec![("binary path", &self.sevenzip_path)]),
             ),
         ]
     }

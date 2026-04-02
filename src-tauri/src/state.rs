@@ -1,6 +1,9 @@
+use crate::pending_recovery::build_pending_recovery_plan;
+use crate::runtime_bootstrap::open_runtime_and_control_db;
 use anyhow::Result;
 use cassette_core::{
-    db::{Db, PendingDirectorTask, TerminalDirectorTaskUpdate},
+    acquisition::{AcquisitionRequest, AcquisitionRequestStatus},
+    db::Db,
     director::{
         providers::{
             DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
@@ -11,6 +14,7 @@ use cassette_core::{
         DirectorHandle, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy,
         TempRecoveryPolicy, TrackTask,
     },
+    librarian::db::LibrarianDb,
     models::{DownloadJob, DownloadStatus, PlaybackState},
     player::Player,
     provider_settings::DownloadConfig,
@@ -40,6 +44,7 @@ pub struct BacklogRunStatus {
 
 pub struct AppState {
     pub db: Arc<Mutex<Db>>,
+    pub control_db: Arc<LibrarianDb>,
     pub player: Arc<Player>,
     pub playback_state: Arc<Mutex<PlaybackState>>,
     pub download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
@@ -54,13 +59,14 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(db_path: &Path, app_handle: Option<AppHandle>) -> Result<Self> {
-        let db = Db::open(db_path)?;
+        let (db, control_db) = open_runtime_and_control_db(db_path)?;
         bootstrap_library_roots(&db);
 
         let download_config = bootstrap_download_config(&db);
-        let director_handle = build_director(&db, &download_config);
+        let director_handle = build_director(&db, &download_config, Some(db_path.to_path_buf()));
         Ok(Self::from_parts(
             db,
+            control_db,
             director_handle,
             download_config,
             app_handle,
@@ -74,10 +80,11 @@ impl AppState {
         download_config: DownloadConfig,
         app_handle: Option<AppHandle>,
     ) -> Result<Self> {
-        let db = Db::open(db_path)?;
+        let (db, control_db) = open_runtime_and_control_db(db_path)?;
         bootstrap_library_roots(&db);
         Ok(Self::from_parts(
             db,
+            control_db,
             director_handle,
             download_config,
             app_handle,
@@ -86,6 +93,7 @@ impl AppState {
 
     fn from_parts(
         db: Db,
+        control_db: LibrarianDb,
         director_handle: DirectorHandle,
         download_config: DownloadConfig,
         app_handle: Option<AppHandle>,
@@ -102,6 +110,7 @@ impl AppState {
 
         let state = Self {
             db: Arc::new(Mutex::new(db)),
+            control_db: Arc::new(control_db),
             player: Arc::new(Player::new()),
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
             download_jobs: Arc::new(Mutex::new(HashMap::new())),
@@ -117,6 +126,7 @@ impl AppState {
         spawn_director_event_listener(
             app_handle.clone(),
             Arc::clone(&state.db),
+            Arc::clone(&state.control_db),
             Arc::clone(&state.download_jobs),
             Arc::clone(&state.cancelled_downloads),
             event_rx,
@@ -124,6 +134,7 @@ impl AppState {
         spawn_director_result_listener(
             app_handle.clone(),
             Arc::clone(&state.db),
+            Arc::clone(&state.control_db),
             Arc::clone(&state.download_jobs),
             Arc::clone(&state.cancelled_downloads),
             result_rx,
@@ -139,6 +150,67 @@ impl AppState {
         db.upsert_director_pending_task(task, director_progress_label(progress))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         Ok(())
+    }
+
+    pub async fn create_acquisition_request(
+        &self,
+        request: &AcquisitionRequest,
+    ) -> Result<cassette_core::librarian::models::AcquisitionRequestRow> {
+        self.control_db
+            .create_acquisition_request(request)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn submit_acquisition_request(
+        &self,
+        request: &AcquisitionRequest,
+    ) -> Result<cassette_core::librarian::models::AcquisitionRequestRow> {
+        let row = self.create_acquisition_request(request).await?;
+        let task = request.to_track_task();
+
+        self.persist_pending_task(&task, DirectorProgress::Queued)?;
+        let task_payload = serde_json::to_string(&task).ok();
+        let _ = self
+            .control_db
+            .update_acquisition_request_status_by_task_id(
+                &task.task_id,
+                AcquisitionRequestStatus::Queued.as_str(),
+                "runtime_queued",
+                Some("queued for director submission"),
+                task_payload.as_deref(),
+            )
+            .await;
+
+        match self.director_submitter.submit(task).await {
+            Ok(()) => {
+                let _ = self
+                    .control_db
+                    .update_acquisition_request_status_by_task_id(
+                        row.task_id.as_deref().unwrap_or_default(),
+                        AcquisitionRequestStatus::Submitted.as_str(),
+                        "director_submitted",
+                        Some("submitted to director"),
+                        None,
+                    )
+                    .await;
+                Ok(row)
+            }
+            Err(error) => {
+                let _ = self.delete_pending_task(row.task_id.as_deref().unwrap_or_default());
+                let _ = self
+                    .control_db
+                    .update_acquisition_request_status_by_task_id(
+                        row.task_id.as_deref().unwrap_or_default(),
+                        AcquisitionRequestStatus::Failed.as_str(),
+                        "director_submit_failed",
+                        Some(&error.to_string()),
+                        None,
+                    )
+                    .await;
+                Err(anyhow::anyhow!(error.to_string()))
+            }
+        }
     }
 
     pub fn delete_pending_task(&self, task_id: &str) -> Result<()> {
@@ -236,43 +308,11 @@ impl AppState {
     }
 }
 
-struct PendingRecoveryPlan {
-    resumable_tasks: Vec<PendingDirectorTask>,
-    stale_task_ids: Vec<String>,
-}
-
-fn build_pending_recovery_plan(
-    pending: Vec<PendingDirectorTask>,
-    terminal_updates: &HashMap<String, TerminalDirectorTaskUpdate>,
-) -> PendingRecoveryPlan {
-    let mut resumable_tasks = Vec::new();
-    let mut stale_task_ids = Vec::new();
-
-    for pending_task in pending {
-        let is_terminal_progress = matches!(
-            pending_task.progress.as_str(),
-            "Finalized" | "Cancelled" | "Failed" | "Exhausted" | "Skipped"
-        );
-        let has_newer_terminal_result = terminal_updates
-            .get(&pending_task.task.task_id)
-            .map(|update| update.updated_at >= pending_task.updated_at)
-            .unwrap_or(false);
-
-        if is_terminal_progress || has_newer_terminal_result {
-            stale_task_ids.push(pending_task.task.task_id);
-            continue;
-        }
-
-        resumable_tasks.push(pending_task);
-    }
-
-    PendingRecoveryPlan {
-        resumable_tasks,
-        stale_task_ids,
-    }
-}
-
-fn build_director(db: &Db, download_config: &DownloadConfig) -> cassette_core::director::DirectorHandle {
+fn build_director(
+    db: &Db,
+    download_config: &DownloadConfig,
+    runtime_db_path: Option<PathBuf>,
+) -> cassette_core::director::DirectorHandle {
     let library_root = db
         .get_setting("library_base")
         .ok()
@@ -295,6 +335,7 @@ fn build_director(db: &Db, download_config: &DownloadConfig) -> cassette_core::d
     let config = DirectorConfig {
         library_root: PathBuf::from(&library_root),
         temp_root: PathBuf::from(&staging_root).join(".director-temp"),
+        runtime_db_path,
         local_search_roots: vec![PathBuf::from(&staging_root)],
         worker_concurrency: 8,
         provider_timeout_secs: 300,
@@ -420,6 +461,7 @@ fn read_setting(db: &Db, key: &str) -> Option<String> {
 fn spawn_director_event_listener(
     app_handle: Option<AppHandle>,
     db: Arc<Mutex<Db>>,
+    control_db: Arc<LibrarianDb>,
     download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
     cancelled_downloads: Arc<Mutex<HashSet<String>>>,
     mut event_rx: tokio::sync::broadcast::Receiver<cassette_core::director::DirectorEvent>,
@@ -454,6 +496,18 @@ fn spawn_director_event_listener(
                 }
             }
 
+            let status = acquisition_status_from_progress(event.progress);
+            let event_payload = serde_json::to_string(&event).ok();
+            let _ = control_db
+                .update_acquisition_request_status_by_task_id(
+                    &event.task_id,
+                    status,
+                    "director_progress",
+                    Some(&event.message),
+                    event_payload.as_deref(),
+                )
+                .await;
+
             if let Some(app_handle) = &app_handle {
                 if let Err(error) = app_handle.emit("director-event", &event) {
                     warn!(task_id = %event.task_id, error = %error, "failed to emit director event");
@@ -466,6 +520,7 @@ fn spawn_director_event_listener(
 fn spawn_director_result_listener(
     app_handle: Option<AppHandle>,
     db: Arc<Mutex<Db>>,
+    control_db: Arc<LibrarianDb>,
     download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
     cancelled_downloads: Arc<Mutex<HashSet<String>>>,
     mut result_rx: tokio::sync::broadcast::Receiver<cassette_core::director::DirectorTaskResult>,
@@ -493,7 +548,8 @@ fn spawn_director_result_listener(
                 let _ = db.save_director_task_result(&result, request.as_ref().map(|task| &task.task));
                 let _ = db.delete_director_pending_task(&result.task_id);
                 if let Some(finalized) = &result.finalized {
-                    if let Ok(track) = cassette_core::library::read_track_metadata(&finalized.path) {
+                    if let Ok(mut track) = cassette_core::library::read_track_metadata(&finalized.path) {
+                        cassette_core::library::enrich_track_with_director_result(&mut track, &result);
                         let _ = db.upsert_track(&track);
                     }
                 }
@@ -534,6 +590,19 @@ fn spawn_director_result_listener(
             if let Ok(mut cancelled) = cancelled_downloads.lock() {
                 cancelled.remove(&result.task_id);
             }
+
+            let status = acquisition_status_from_disposition(result.disposition);
+            let result_payload = serde_json::to_string(&result).ok();
+            let message = result.error.as_deref();
+            let _ = control_db
+                .update_acquisition_request_status_by_task_id(
+                    &result.task_id,
+                    status,
+                    "director_result",
+                    message,
+                    result_payload.as_deref(),
+                )
+                .await;
 
             if let Some(app_handle) = &app_handle {
                 if let Err(error) = app_handle.emit("director-result", &result) {
@@ -787,6 +856,44 @@ fn director_progress_label(progress: DirectorProgress) -> &'static str {
     }
 }
 
+fn acquisition_status_from_progress(progress: DirectorProgress) -> &'static str {
+    match progress {
+        DirectorProgress::Queued => AcquisitionRequestStatus::Queued.as_str(),
+        DirectorProgress::InProgress
+        | DirectorProgress::ProviderAttempt
+        | DirectorProgress::Validating
+        | DirectorProgress::Tagging
+        | DirectorProgress::Finalizing => AcquisitionRequestStatus::InProgress.as_str(),
+        DirectorProgress::Finalized | DirectorProgress::Skipped => {
+            AcquisitionRequestStatus::Finalized.as_str()
+        }
+        DirectorProgress::Cancelled => AcquisitionRequestStatus::Cancelled.as_str(),
+        DirectorProgress::Failed | DirectorProgress::Exhausted => {
+            AcquisitionRequestStatus::Failed.as_str()
+        }
+    }
+}
+
+fn acquisition_status_from_disposition(
+    disposition: cassette_core::director::FinalizedTrackDisposition,
+) -> &'static str {
+    match disposition {
+        cassette_core::director::FinalizedTrackDisposition::Finalized
+        | cassette_core::director::FinalizedTrackDisposition::MetadataOnly => {
+            AcquisitionRequestStatus::Finalized.as_str()
+        }
+        cassette_core::director::FinalizedTrackDisposition::AlreadyPresent => {
+            AcquisitionRequestStatus::AlreadyPresent.as_str()
+        }
+        cassette_core::director::FinalizedTrackDisposition::Cancelled => {
+            AcquisitionRequestStatus::Cancelled.as_str()
+        }
+        cassette_core::director::FinalizedTrackDisposition::Failed => {
+            AcquisitionRequestStatus::Failed.as_str()
+        }
+    }
+}
+
 fn download_job_from_task(task: &TrackTask, progress: &str) -> DownloadJob {
     let (status, pct) = match progress {
         "Queued" => (DownloadStatus::Queued, 0.0),
@@ -862,79 +969,5 @@ fn apply_director_event_to_job(job: &mut DownloadJob, event: &DirectorEvent) {
             job.status = DownloadStatus::Done;
             job.progress = 1.0;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
-
-    fn pending_task(task_id: &str, progress: &str, updated_at: &str) -> PendingDirectorTask {
-        PendingDirectorTask {
-            task: TrackTask {
-                task_id: task_id.to_string(),
-                source: TrackTaskSource::Manual,
-                desired_track_id: None,
-                source_operation_id: None,
-                target: NormalizedTrack {
-                    spotify_track_id: None,
-                    source_playlist: None,
-                    artist: "Artist".to_string(),
-                    album_artist: Some("Artist".to_string()),
-                    title: "Song".to_string(),
-                    album: Some("Album".to_string()),
-                    track_number: Some(1),
-                    disc_number: Some(1),
-                    year: Some(2024),
-                    duration_secs: Some(35.0),
-                    isrc: None,
-                },
-                strategy: AcquisitionStrategy::ObscureFallbackHeavy,
-            },
-            strategy: "ObscureFallbackHeavy".to_string(),
-            progress: progress.to_string(),
-            created_at: updated_at.to_string(),
-            updated_at: updated_at.to_string(),
-        }
-    }
-
-    #[test]
-    fn pending_recovery_plan_keeps_newer_retry_and_drops_stale_terminal_row() {
-        let pending = vec![
-            pending_task("stale-failed", "Queued", "2026-03-27 12:00:00"),
-            pending_task("retry-failed", "Queued", "2026-03-27 12:00:03"),
-            pending_task("terminal-progress", "Cancelled", "2026-03-27 12:00:04"),
-        ];
-        let terminal_updates = HashMap::from([
-            (
-                "stale-failed".to_string(),
-                TerminalDirectorTaskUpdate {
-                    disposition: "Failed".to_string(),
-                    updated_at: "2026-03-27 12:00:02".to_string(),
-                },
-            ),
-            (
-                "retry-failed".to_string(),
-                TerminalDirectorTaskUpdate {
-                    disposition: "Failed".to_string(),
-                    updated_at: "2026-03-27 12:00:01".to_string(),
-                },
-            ),
-        ]);
-
-        let plan = build_pending_recovery_plan(pending, &terminal_updates);
-
-        assert_eq!(
-            plan.resumable_tasks
-                .iter()
-                .map(|task| task.task.task_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["retry-failed"]
-        );
-        assert_eq!(
-            plan.stale_task_ids,
-            vec!["stale-failed".to_string(), "terminal-progress".to_string()]
-        );
     }
 }

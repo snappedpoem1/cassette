@@ -26,6 +26,7 @@ pub use types::{
 mod tests;
 
 use crate::db::Db;
+use crate::director::models::{CandidateQuality, DirectorTaskResult, NormalizedTrack};
 use crate::models::{ScanProgress, Track};
 use crate::Result;
 use lofty::prelude::*;
@@ -271,8 +272,70 @@ pub fn read_track_metadata(path: &Path) -> Result<Track> {
         format,
         file_size,
         cover_art_path,
+        isrc: None,
+        musicbrainz_recording_id: None,
+        musicbrainz_release_id: None,
+        canonical_artist_id: None,
+        canonical_release_id: None,
+        quality_tier: None,
+        content_hash: None,
         added_at: String::new(),
     })
+}
+
+pub fn enrich_track_with_normalized_metadata(track: &mut Track, metadata: &NormalizedTrack) {
+    if track.artist.trim().is_empty() && !metadata.artist.trim().is_empty() {
+        track.artist = metadata.artist.clone();
+    }
+    if track.album_artist.trim().is_empty() {
+        if let Some(album_artist) = metadata.album_artist.as_ref().filter(|value| !value.trim().is_empty()) {
+            track.album_artist = album_artist.clone();
+        }
+    }
+    if track.album.trim().is_empty() {
+        if let Some(album) = metadata.album.as_ref().filter(|value| !value.trim().is_empty()) {
+            track.album = album.clone();
+        }
+    }
+    if track.track_number.is_none() {
+        track.track_number = metadata.track_number.map(|value| value as i32);
+    }
+    if track.disc_number.is_none() {
+        track.disc_number = metadata.disc_number.map(|value| value as i32);
+    }
+    if track.year.is_none() {
+        track.year = metadata.year;
+    }
+    if track.isrc.is_none() {
+        track.isrc = metadata.isrc.clone();
+    }
+    if track.musicbrainz_recording_id.is_none() {
+        track.musicbrainz_recording_id = metadata.musicbrainz_recording_id.clone();
+    }
+    if track.musicbrainz_release_id.is_none() {
+        track.musicbrainz_release_id = metadata.musicbrainz_release_id.clone();
+    }
+    if track.canonical_artist_id.is_none() {
+        track.canonical_artist_id = metadata.canonical_artist_id;
+    }
+    if track.canonical_release_id.is_none() {
+        track.canonical_release_id = metadata.canonical_release_id;
+    }
+}
+
+pub fn enrich_track_with_director_result(track: &mut Track, result: &DirectorTaskResult) {
+    let Some(finalized) = result.finalized.as_ref() else {
+        return;
+    };
+
+    enrich_track_with_normalized_metadata(track, &finalized.provenance.source_metadata);
+    if track.quality_tier.is_none() {
+        track.quality_tier = match finalized.provenance.validation_summary.quality {
+            CandidateQuality::Lossless => Some("lossless_preferred".to_string()),
+            CandidateQuality::Lossy => Some("lossy_acceptable".to_string()),
+            CandidateQuality::Unknown => None,
+        };
+    }
 }
 
 fn find_cover_art(track_path: &Path) -> Option<String> {

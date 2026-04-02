@@ -37,6 +37,16 @@ pub fn merge_normalized_track(
         year: requested.year.or(resolved.year),
         duration_secs: requested.duration_secs.or(resolved.duration_secs),
         isrc: requested.isrc.clone().or_else(|| resolved.isrc.clone()),
+        musicbrainz_recording_id: requested
+            .musicbrainz_recording_id
+            .clone()
+            .or_else(|| resolved.musicbrainz_recording_id.clone()),
+        musicbrainz_release_id: requested
+            .musicbrainz_release_id
+            .clone()
+            .or_else(|| resolved.musicbrainz_release_id.clone()),
+        canonical_artist_id: requested.canonical_artist_id.or(resolved.canonical_artist_id),
+        canonical_release_id: requested.canonical_release_id.or(resolved.canonical_release_id),
     }
 }
 
@@ -64,6 +74,10 @@ fn merge_embedded_metadata(requested: &NormalizedTrack, staged_path: &Path) -> N
                 year: track.year,
                 duration_secs: Some(track.duration_secs),
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             }),
         ),
         Err(_) => requested.clone(),
@@ -281,6 +295,10 @@ mod tests {
             year: None,
             duration_secs: None,
             isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
         }
     }
 

@@ -16,6 +16,14 @@ pub struct NormalizedTrack {
     pub year: Option<i32>,
     pub duration_secs: Option<f64>,
     pub isrc: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_recording_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_release_id: Option<String>,
+    #[serde(default)]
+    pub canonical_artist_id: Option<i64>,
+    #[serde(default)]
+    pub canonical_release_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -156,6 +156,10 @@ fn desired_track_to_task(track: &DesiredTrack) -> TrackTask {
             year: None,
             duration_secs: track.duration_ms.map(|v| v as f64 / 1000.0),
             isrc: track.isrc.clone(),
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
         },
         strategy: AcquisitionStrategy::Standard,
     }

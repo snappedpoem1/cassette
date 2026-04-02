@@ -57,6 +57,10 @@ fn make_task(task_id: &str, artist: &str, title: &str, album: &str) -> TrackTask
             year: Some(2024),
             duration_secs: Some(35.0),
             isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
         },
         strategy: AcquisitionStrategy::Standard,
     }
@@ -101,10 +105,15 @@ fn seed_probe_db(db_path: &Path, library_root: &Path, staging_root: &Path) -> Re
     Ok(())
 }
 
-fn build_probe_director(library_root: &Path, staging_root: &Path) -> cassette_core::director::DirectorHandle {
+fn build_probe_director(
+    library_root: &Path,
+    staging_root: &Path,
+    db_path: &Path,
+) -> cassette_core::director::DirectorHandle {
     let config = DirectorConfig {
         library_root: library_root.to_path_buf(),
         temp_root: staging_root.join(".director-temp"),
+        runtime_db_path: Some(db_path.to_path_buf()),
         local_search_roots: vec![staging_root.to_path_buf()],
         worker_concurrency: 1,
         provider_timeout_secs: 5,
@@ -162,7 +171,7 @@ async fn main() -> Result<(), String> {
         staging_folder: staging_root.to_string_lossy().to_string(),
         ..DownloadConfig::default()
     };
-    let director_handle = build_probe_director(&library_root, &staging_root);
+    let director_handle = build_probe_director(&library_root, &staging_root, &db_path);
     let state = AppState::new_with_director(&db_path, director_handle, download_config, None)
         .map_err(|error| error.to_string())?;
     let mut result_rx = state

@@ -423,6 +423,13 @@ mod tests {
             format: "flac".to_string(),
             file_size: 0,
             cover_art_path: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            quality_tier: None,
+            content_hash: None,
             added_at: String::new(),
         }
     }

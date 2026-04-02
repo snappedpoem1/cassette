@@ -2,7 +2,7 @@
 
 **Status**: Active - hardening, audit proof, and packaging confidence
 **Next**: audit completeness proof, packaging confidence, provenance reuse and review
-**Last Updated**: 2026-03-30
+**Last Updated**: 2026-04-02
 **Owner**: Christian (Capn)
 
 ---
@@ -99,6 +99,7 @@ Spotify history/import helpers, settings, provider status, and library organizat
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
 | Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, and startup recovery exist | `MetadataRepairOnly` stubbed; bounded coordinator live proof still pending |
+| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, and request -> task translation now exist | UI and runtime still need deeper convergence beyond request/timeline surfaces |
 | Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
 | Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
 | Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
@@ -189,6 +190,11 @@ Current evidence is qualitative:
 
 Formal baselines live in [TELEMETRY.md](TELEMETRY.md) and should be updated when benchmarks are added.
 
+Current verification note:
+
+- `cargo test -p cassette-core` passes
+- `cargo test --workspace` passes, with the pure `src-tauri` logic tests moved to `src-tauri/tests/pure_logic.rs` so the Windows Tauri lib harness is no longer part of the gate
+
 ---
 
 ## Testing Strategy
@@ -236,6 +242,7 @@ Full rationale in [DECISIONS.md](DECISIONS.md).
 - [PATTERNS.md](PATTERNS.md)
 - [TELEMETRY.md](TELEMETRY.md)
 - [PROJECT_STATE.md](PROJECT_STATE.md)
+- [CLEAN_MACHINE_CHECKLIST.md](CLEAN_MACHINE_CHECKLIST.md)
 - [RECOVERY_STATUS.md](RECOVERY_STATUS.md)
 
 ---

@@ -1,4 +1,4 @@
-use cassette_core::db::Db;
+use cassette_core::db::{Db, TrackPathUpdate};
 use cassette_core::library::organizer;
 use cassette_core::models::Track;
 use rayon::prelude::*;
@@ -15,6 +15,14 @@ fn app_db_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(app_data)
         .join("dev.cassette.app")
         .join("cassette.db"))
+}
+
+fn librarian_db_path() -> Result<PathBuf, String> {
+    let app_db = app_db_path()?;
+    let parent = app_db
+        .parent()
+        .ok_or_else(|| "app db has no parent directory".to_string())?;
+    Ok(parent.join("cassette_librarian.db"))
 }
 
 fn main() -> Result<(), String> {
@@ -213,10 +221,18 @@ fn main() -> Result<(), String> {
         }
 
         println!("\nMoving files and updating DB paths...");
-        for mv in &result.moved {
-            if let Err(e) = db.update_track_path(mv.track_id, &mv.new_path) {
-                eprintln!("  DB update error for track {}: {e}", mv.track_id);
-            }
+        let sidecar_db_path = librarian_db_path()?;
+        let updates = result
+            .moved
+            .iter()
+            .map(|mv| TrackPathUpdate {
+                track_id: mv.track_id,
+                old_path: mv.old_path.clone(),
+                new_path: mv.new_path.clone(),
+            })
+            .collect::<Vec<_>>();
+        if let Err(e) = db.apply_track_path_updates(&sidecar_db_path, &updates) {
+            eprintln!("  path convergence error: {e}");
         }
         println!("Done.");
     }

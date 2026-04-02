@@ -20,13 +20,20 @@ pub async fn upsert_local_file(
         .and_then(|x| x.to_str())
         .unwrap_or("")
         .to_string();
+    let file_mtime_ms = std::fs::metadata(file_path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|value| i64::try_from(value.as_millis()).ok());
 
     sqlx::query(
         "INSERT INTO local_files (
             track_id, file_path, file_name, extension,
             codec, bitrate, sample_rate, bit_depth, channels,
-            duration_ms, file_size, content_hash, integrity_status, quality_tier
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            duration_ms, file_size, file_mtime_ms, content_hash, acoustid_fingerprint,
+            fingerprint_attempted_at, fingerprint_error, fingerprint_source_mtime_ms,
+            integrity_status, quality_tier
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP, NULL, ?15, ?16, ?17)
         ON CONFLICT(file_path) DO UPDATE SET
             track_id = excluded.track_id,
             codec = excluded.codec,
@@ -36,7 +43,12 @@ pub async fn upsert_local_file(
             channels = excluded.channels,
             duration_ms = excluded.duration_ms,
             file_size = excluded.file_size,
+            file_mtime_ms = excluded.file_mtime_ms,
             content_hash = excluded.content_hash,
+            acoustid_fingerprint = excluded.acoustid_fingerprint,
+            fingerprint_attempted_at = CURRENT_TIMESTAMP,
+            fingerprint_error = NULL,
+            fingerprint_source_mtime_ms = excluded.fingerprint_source_mtime_ms,
             integrity_status = excluded.integrity_status,
             quality_tier = excluded.quality_tier,
             updated_at = CURRENT_TIMESTAMP",
@@ -52,7 +64,10 @@ pub async fn upsert_local_file(
     .bind(identity.channels as i64)
     .bind(identity.duration_ms as i64)
     .bind(identity.file_size as i64)
+    .bind(file_mtime_ms)
     .bind(&identity.content_hash)
+    .bind(&identity.acoustid_fingerprint)
+    .bind(file_mtime_ms)
     .bind("verified")
     .bind(format!("{:?}", quality.quality_tier))
     .execute(db_pool)

@@ -101,6 +101,13 @@ pub struct LocalFile {
     pub file_size: i64,
     pub file_mtime_ms: Option<i64>,
     pub content_hash: Option<String>,
+    pub acoustid_fingerprint: Option<String>,
+    #[sqlx(default)]
+    pub fingerprint_attempted_at: Option<String>,
+    #[sqlx(default)]
+    pub fingerprint_error: Option<String>,
+    #[sqlx(default)]
+    pub fingerprint_source_mtime_ms: Option<i64>,
     pub integrity_status: String,
     pub quality_tier: Option<String>,
     pub last_scanned_at: Option<String>,
@@ -123,6 +130,7 @@ pub struct NewLocalFile {
     pub file_size: i64,
     pub file_mtime_ms: Option<i64>,
     pub content_hash: Option<String>,
+    pub acoustid_fingerprint: Option<String>,
     pub integrity_status: IntegrityStatus,
     pub quality_tier: Option<QualityTier>,
 }
@@ -239,6 +247,100 @@ pub struct LocalFileScanState {
     pub file_path: String,
     pub file_size: i64,
     pub file_mtime_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CanonicalArtist {
+    pub id: i64,
+    pub name: String,
+    pub normalized_name: String,
+    pub musicbrainz_id: Option<String>,
+    pub spotify_id: Option<String>,
+    pub discogs_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CanonicalRelease {
+    pub id: i64,
+    pub canonical_artist_id: i64,
+    pub title: String,
+    pub normalized_title: String,
+    pub release_group_mbid: Option<String>,
+    pub release_mbid: Option<String>,
+    pub spotify_id: Option<String>,
+    pub discogs_id: Option<String>,
+    pub release_type: Option<String>,
+    pub year: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CanonicalRecording {
+    pub id: i64,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub title: String,
+    pub normalized_title: String,
+    pub musicbrainz_recording_id: Option<String>,
+    pub isrc: Option<String>,
+    pub track_number: Option<i64>,
+    pub disc_number: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AcquisitionRequestRow {
+    pub id: i64,
+    pub scope: String,
+    pub source_name: String,
+    pub source_track_id: Option<String>,
+    pub source_album_id: Option<String>,
+    pub source_artist_id: Option<String>,
+    pub artist: String,
+    pub album: Option<String>,
+    pub title: String,
+    pub normalized_artist: String,
+    pub normalized_album: Option<String>,
+    pub normalized_title: String,
+    pub track_number: Option<i64>,
+    pub disc_number: Option<i64>,
+    pub year: Option<i64>,
+    pub duration_secs: Option<f64>,
+    pub isrc: Option<String>,
+    pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_release_id: Option<String>,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub strategy: String,
+    pub quality_policy: Option<String>,
+    pub excluded_providers_json: Option<String>,
+    pub edition_policy: Option<String>,
+    pub confirmation_policy: String,
+    pub desired_track_id: Option<i64>,
+    pub source_operation_id: Option<String>,
+    pub task_id: Option<String>,
+    pub request_signature: String,
+    pub status: String,
+    pub raw_payload_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AcquisitionRequestEvent {
+    pub id: i64,
+    pub request_id: i64,
+    pub task_id: Option<String>,
+    pub event_type: String,
+    pub status: String,
+    pub message: Option<String>,
+    pub payload_json: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

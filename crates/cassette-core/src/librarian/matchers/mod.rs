@@ -304,6 +304,7 @@ mod tests {
             file_size: 1024,
             file_mtime_ms: Some(1),
             content_hash: None,
+            acoustid_fingerprint: None,
             integrity_status: IntegrityStatus::Readable,
             quality_tier: None,
         })

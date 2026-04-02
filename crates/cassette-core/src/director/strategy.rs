@@ -155,6 +155,10 @@ mod tests {
                 year: None,
                 duration_secs: None,
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy,
         }

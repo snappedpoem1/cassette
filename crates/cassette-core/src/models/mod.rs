@@ -26,6 +26,13 @@ pub struct Track {
     pub format: String,
     pub file_size: u64,
     pub cover_art_path: Option<String>,
+    pub isrc: Option<String>,
+    pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_release_id: Option<String>,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub quality_tier: Option<String>,
+    pub content_hash: Option<String>,
     pub added_at: String,
 }
 

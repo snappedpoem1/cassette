@@ -20,7 +20,9 @@ use crate::orchestrator::sequencing::custodian_phase::run_custodian_phase_manage
 use crate::orchestrator::sequencing::librarian_phase::run_librarian_phase_managed;
 use crate::orchestrator::OrchestratorConfig;
 use crate::validation::error::{Result, ValidationError};
-use crate::validation::logging::{verify_complete_operation_log, verify_operation_log, LogVerification};
+use crate::validation::logging::{
+    explain_audit_trace, verify_complete_operation_log, verify_operation_log, LogVerification,
+};
 use crate::validation::spotify_import::{import_spotify_export, verify_spotify_import, ImportSummary};
 use crate::validation::test_library::{sqlite_url_for_path, reset_validation_environment, TestLibraryConfig, TestLibrarySetup};
 use serde::{Deserialize, Serialize};
@@ -87,6 +89,7 @@ pub struct ValidationReport {
 
     pub gatekeeper_admitted: usize,
     pub gatekeeper_logged: bool,
+    pub audit_trace_ok: bool,
 
     pub total_operations: usize,
     pub total_events: usize,
@@ -103,7 +106,7 @@ pub struct ValidationReport {
 impl ValidationReport {
     pub fn summary(&self) -> String {
         format!(
-            "\nCASSETTE VALIDATION REPORT\n\nIMPORT\n  Desired tracks: {}\n\nLIBRARIAN\n  Scanned: {} files\n  Logged: {}\n\nCUSTODIAN\n  Sorted: {} files\n  Logged: {}\n\nORCHESTRATOR\n  Matched: {} tracks\n  Missing: {} tracks -> {}\n  DeltaQueue: {} entries\n  Logged: {}\n\nDIRECTOR\n  Downloaded: {} files\n  Failed: {} files\n  Logged: {}\n\nGATEKEEPER\n  Admitted: {} files\n  Logged: {}\n\nOPERATION LOG\n  Total operations: {}\n  Total events: {}\n  Max concurrent locks: {}\n  Stalled operations: {}\n  Orphaned successful operations: {}\n\nVALIDATION\n  Gaps filled: {}\n  Library consistent: {}\n  All logged: {}\n",
+            "\nCASSETTE VALIDATION REPORT\n\nIMPORT\n  Desired tracks: {}\n\nLIBRARIAN\n  Scanned: {} files\n  Logged: {}\n\nCUSTODIAN\n  Sorted: {} files\n  Logged: {}\n\nORCHESTRATOR\n  Matched: {} tracks\n  Missing: {} tracks -> {}\n  DeltaQueue: {} entries\n  Logged: {}\n\nDIRECTOR\n  Downloaded: {} files\n  Failed: {} files\n  Logged: {}\n\nGATEKEEPER\n  Admitted: {} files\n  Logged: {}\n  Audit trace: {}\n\nOPERATION LOG\n  Total operations: {}\n  Total events: {}\n  Max concurrent locks: {}\n  Stalled operations: {}\n  Orphaned successful operations: {}\n\nVALIDATION\n  Gaps filled: {}\n  Library consistent: {}\n  All logged: {}\n",
             self.desired_tracks_imported,
             self.librarian_scanned,
             self.librarian_logged,
@@ -119,6 +122,7 @@ impl ValidationReport {
             self.director_logged,
             self.gatekeeper_admitted,
             self.gatekeeper_logged,
+            self.audit_trace_ok,
             self.total_operations,
             self.total_events,
             self.max_concurrent_locks,
@@ -410,6 +414,16 @@ async fn run_validation_internal(
             report.gatekeeper_admitted = outcome.admitted;
 
             report.gatekeeper_logged = verify_operation_log(manager, Module::Gatekeeper, "batch_ingest").await.is_ok();
+            if let Some((path, desired_id)) = owned_entries.first() {
+                let trace = explain_audit_trace(
+                    manager,
+                    path.to_str(),
+                    Some(*desired_id),
+                )
+                .await?;
+                report.audit_trace_ok =
+                    !trace.operation_events.is_empty() && !trace.gatekeeper_audit.is_empty();
+            }
         }
     }
 
@@ -582,6 +596,11 @@ async fn run_download_only(
             .await?;
         report.gatekeeper_admitted = outcome.admitted;
         report.gatekeeper_logged = verify_operation_log(manager, Module::Gatekeeper, "batch_ingest").await.is_ok();
+        if let Some((path, desired_id)) = owned_entries.first() {
+            let trace = explain_audit_trace(manager, path.to_str(), Some(*desired_id)).await?;
+            report.audit_trace_ok =
+                !trace.operation_events.is_empty() && !trace.gatekeeper_audit.is_empty();
+        }
     }
 
     Ok(())

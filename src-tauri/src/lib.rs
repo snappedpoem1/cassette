@@ -1,4 +1,8 @@
 mod commands;
+mod now_playing;
+mod pending_recovery;
+mod runtime_bootstrap;
+mod spotify_history;
 pub mod state;
 
 use state::AppState;
@@ -93,6 +97,11 @@ pub fn run() {
             commands::downloads::get_candidate_review,
             commands::downloads::get_task_provenance,
             commands::downloads::get_recent_task_results,
+            commands::downloads::create_acquisition_request,
+            commands::downloads::list_acquisition_requests,
+            commands::downloads::get_acquisition_request_timeline,
+            commands::downloads::get_request_candidate_review,
+            commands::downloads::get_request_lineage,
             commands::downloads::start_backlog_run,
             commands::downloads::stop_backlog_run,
             commands::downloads::get_backlog_status,

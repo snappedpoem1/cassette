@@ -7,9 +7,11 @@ use crate::librarian::config::{LibrarianConfig, ScanMode};
 use crate::librarian::db::LibrarianDb;
 use crate::librarian::error::{LibrarianError, Result};
 use crate::librarian::models::{IntegrityStatus, ScanStats};
+use crate::gatekeeper::validation::fingerprint::compute_fingerprint;
 use crate::librarian::scanner::audio::{parse_audio_file, to_new_local_file};
 use crate::librarian::scanner::hashing::blake3_hash_file;
 use crate::librarian::scanner::walker::discover_audio_files;
+use futures_util::{stream, StreamExt};
 use sanitize_filename::sanitize;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -31,6 +33,79 @@ pub async fn scan_library(db: &LibrarianDb, config: &LibrarianConfig, run_id: &s
     }
 
     Ok(stats)
+}
+
+pub async fn backfill_missing_fingerprints(
+    db: &LibrarianDb,
+    limit: usize,
+    concurrency: usize,
+) -> Result<usize> {
+    if limit == 0 || concurrency == 0 {
+        return Ok(0);
+    }
+
+    let candidates = db.list_local_files_missing_fingerprint(limit).await?;
+    let db = db.clone();
+
+    let outcomes = stream::iter(candidates.into_iter().map(|local_file| {
+        let db = db.clone();
+        async move {
+            let path = PathBuf::from(&local_file.file_path);
+            if !path.exists() {
+                let error = "file_missing".to_string();
+                db.mark_local_file_fingerprint_failure(
+                    local_file.id,
+                    local_file.file_mtime_ms,
+                    &error,
+                )
+                .await?;
+                debug!(
+                    path = %path.display(),
+                    local_file_id = local_file.id,
+                    "suppressed fingerprint backfill for missing file"
+                );
+                return Ok::<usize, LibrarianError>(0);
+            }
+
+            match compute_fingerprint(&path).await {
+                Ok(fingerprint) => {
+                    db.set_local_file_fingerprint(
+                        local_file.id,
+                        &fingerprint,
+                        local_file.file_mtime_ms,
+                    )
+                    .await?;
+                    Ok(1)
+                }
+                Err(error) => {
+                    let error_message = error.to_string();
+                    db.mark_local_file_fingerprint_failure(
+                        local_file.id,
+                        local_file.file_mtime_ms,
+                        &error_message,
+                    )
+                    .await?;
+                    warn!(
+                        path = %path.display(),
+                        local_file_id = local_file.id,
+                        error = %error_message,
+                        "failed to compute acoustid fingerprint during backfill"
+                    );
+                    Ok(0)
+                }
+            }
+        }
+    }))
+    .buffer_unordered(concurrency)
+    .collect::<Vec<_>>()
+    .await;
+
+    let mut backfilled = 0usize;
+    for outcome in outcomes {
+        backfilled += outcome?;
+    }
+
+    Ok(backfilled)
 }
 
 async fn scan_root(
@@ -271,8 +346,9 @@ async fn maybe_flush_checkpoint(
 
 #[cfg(test)]
 mod tests {
-    use super::scan_library;
+    use super::{backfill_missing_fingerprints, scan_library};
     use crate::librarian::{LibrarianConfig, LibrarianDb, ScanMode};
+    use crate::librarian::models::{IntegrityStatus, NewLocalFile};
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::tempdir;
 
@@ -289,6 +365,34 @@ mod tests {
 
     fn write_audio_stub(path: &std::path::Path) {
         std::fs::write(path, b"not-audio").expect("write audio stub");
+    }
+
+    fn write_wav_stub(path: &std::path::Path) {
+        let sample_rate = 44_100_u32;
+        let channels = 1_u16;
+        let bits_per_sample = 16_u16;
+        let duration_samples = sample_rate;
+        let data_len = duration_samples * u32::from(channels) * u32::from(bits_per_sample / 8);
+        let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample / 8);
+        let block_align = channels * (bits_per_sample / 8);
+        let riff_len = 36 + data_len;
+
+        let mut bytes = Vec::<u8>::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&riff_len.to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&block_align.to_le_bytes());
+        bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(bytes.len() + data_len as usize, 0_u8);
+        std::fs::write(path, bytes).expect("write wav stub");
     }
 
     #[tokio::test]
@@ -358,5 +462,177 @@ mod tests {
             .expect("checkpoint row");
         assert_eq!(checkpoint.status, "completed");
         assert_eq!(checkpoint.last_scanned_path.as_deref(), Some(third_string.as_str()));
+    }
+
+    #[tokio::test]
+    async fn fingerprint_backfill_persists_missing_fingerprint() {
+        let db = setup_db().await;
+        let root = tempdir().expect("root");
+        let path = root.path().join("01 - One.wav");
+        write_wav_stub(&path);
+
+        db.upsert_local_file(&NewLocalFile {
+            track_id: None,
+            file_path: path.to_string_lossy().to_string(),
+            file_name: "01 - One.wav".to_string(),
+            extension: "wav".to_string(),
+            codec: Some("wav".to_string()),
+            bitrate: Some(1411),
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(1),
+            duration_ms: Some(1_000),
+            file_size: std::fs::metadata(&path).expect("metadata").len() as i64,
+            file_mtime_ms: None,
+            content_hash: None,
+            acoustid_fingerprint: None,
+            integrity_status: IntegrityStatus::Readable,
+            quality_tier: None,
+        })
+        .await
+        .expect("insert local file");
+
+        let backfilled = backfill_missing_fingerprints(&db, 10, 2)
+            .await
+            .expect("backfill fingerprints");
+        assert_eq!(backfilled, 1);
+
+        let fingerprint: Option<String> = sqlx::query_scalar(
+            "SELECT acoustid_fingerprint FROM local_files WHERE file_path = ?1",
+        )
+        .bind(path.to_string_lossy().to_string())
+        .fetch_one(db.pool())
+        .await
+        .expect("fingerprint lookup");
+        assert!(fingerprint.is_some());
+    }
+
+    #[tokio::test]
+    async fn fingerprint_backfill_marks_failure_and_suppresses_repeat_for_unchanged_file() {
+        let db = setup_db().await;
+        let missing_path = "C:/definitely-missing/ghost.wav".to_string();
+
+        db.upsert_local_file(&NewLocalFile {
+            track_id: None,
+            file_path: missing_path.clone(),
+            file_name: "ghost.wav".to_string(),
+            extension: "wav".to_string(),
+            codec: Some("wav".to_string()),
+            bitrate: Some(1411),
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(2),
+            duration_ms: Some(1_000),
+            file_size: 1_024,
+            file_mtime_ms: Some(1234),
+            content_hash: None,
+            acoustid_fingerprint: None,
+            integrity_status: IntegrityStatus::Readable,
+            quality_tier: None,
+        })
+        .await
+        .expect("insert local file");
+
+        let first = backfill_missing_fingerprints(&db, 10, 2)
+            .await
+            .expect("first backfill");
+        let second = backfill_missing_fingerprints(&db, 10, 2)
+            .await
+            .expect("second backfill");
+
+        assert_eq!(first, 0);
+        assert_eq!(second, 0);
+
+        let remaining = db
+            .list_local_files_missing_fingerprint(10)
+            .await
+            .expect("remaining rows");
+        assert!(remaining.is_empty());
+
+        let fingerprint_error: Option<String> = sqlx::query_scalar(
+            "SELECT fingerprint_error FROM local_files WHERE file_path = ?1",
+        )
+        .bind(missing_path)
+        .fetch_one(db.pool())
+        .await
+        .expect("fingerprint error lookup");
+        assert_eq!(fingerprint_error.as_deref(), Some("file_missing"));
+    }
+
+    #[tokio::test]
+    async fn local_file_mtime_change_clears_stale_fingerprint_state() {
+        let db = setup_db().await;
+        let root = tempdir().expect("root");
+        let path = root.path().join("01 - Changed.wav");
+        write_wav_stub(&path);
+        let path_string = path.to_string_lossy().to_string();
+
+        db.upsert_local_file(&NewLocalFile {
+            track_id: None,
+            file_path: path_string.clone(),
+            file_name: "01 - Changed.wav".to_string(),
+            extension: "wav".to_string(),
+            codec: Some("wav".to_string()),
+            bitrate: Some(1411),
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(1),
+            duration_ms: Some(1_000),
+            file_size: std::fs::metadata(&path).expect("metadata").len() as i64,
+            file_mtime_ms: Some(100),
+            content_hash: None,
+            acoustid_fingerprint: Some("stale-fingerprint".to_string()),
+            integrity_status: IntegrityStatus::Readable,
+            quality_tier: None,
+        })
+        .await
+        .expect("insert local file");
+
+        sqlx::query(
+            "UPDATE local_files
+             SET fingerprint_attempted_at = CURRENT_TIMESTAMP,
+                 fingerprint_error = 'old-error',
+                 fingerprint_source_mtime_ms = 100
+             WHERE file_path = ?1",
+        )
+        .bind(&path_string)
+        .execute(db.pool())
+        .await
+        .expect("seed stale fingerprint state");
+
+        db.upsert_local_file(&NewLocalFile {
+            track_id: None,
+            file_path: path_string.clone(),
+            file_name: "01 - Changed.wav".to_string(),
+            extension: "wav".to_string(),
+            codec: Some("wav".to_string()),
+            bitrate: Some(1411),
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(1),
+            duration_ms: Some(1_000),
+            file_size: std::fs::metadata(&path).expect("metadata").len() as i64,
+            file_mtime_ms: Some(200),
+            content_hash: None,
+            acoustid_fingerprint: None,
+            integrity_status: IntegrityStatus::Readable,
+            quality_tier: None,
+        })
+        .await
+        .expect("update local file");
+
+        let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<i64>)>(
+            "SELECT acoustid_fingerprint, fingerprint_error, fingerprint_source_mtime_ms
+             FROM local_files
+             WHERE file_path = ?1",
+        )
+        .bind(path_string)
+        .fetch_one(db.pool())
+        .await
+        .expect("state lookup");
+
+        assert_eq!(row.0, None);
+        assert_eq!(row.1, None);
+        assert_eq!(row.2, None);
     }
 }

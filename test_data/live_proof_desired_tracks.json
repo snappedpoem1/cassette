@@ -1,0 +1,41 @@
+{
+  "source_name": "spotify",
+  "tracks": [
+    {
+      "track_id": "0qGFnxDIqGBIq2D3zNbjk9",
+      "album_id": "3DGQ1iZ9XKUQxAUWjfC34w",
+      "artist_id": null,
+      "artist_name": "Kendrick Lamar",
+      "album_title": "good kid, m.A.A.d city (Deluxe)",
+      "track_title": "Sherane a.k.a Master Splinter's Daughter",
+      "track_number": 1,
+      "disc_number": 1,
+      "duration_ms": 273640,
+      "isrc": null
+    },
+    {
+      "track_id": "712uvW1Vezq8WpQi38v2L9",
+      "album_id": "3DGQ1iZ9XKUQxAUWjfC34w",
+      "artist_id": null,
+      "artist_name": "Kendrick Lamar",
+      "album_title": "good kid, m.A.A.d city (Deluxe)",
+      "track_title": "Bitch, Don't Kill My Vibe",
+      "track_number": 2,
+      "disc_number": 1,
+      "duration_ms": 310720,
+      "isrc": null
+    },
+    {
+      "track_id": "3aGibUHhQyBsyumYHylw0K",
+      "album_id": "3DGQ1iZ9XKUQxAUWjfC34w",
+      "artist_id": null,
+      "artist_name": "Kendrick Lamar",
+      "album_title": "good kid, m.A.A.d city (Deluxe)",
+      "track_title": "Backseat Freestyle",
+      "track_number": 3,
+      "disc_number": 1,
+      "duration_ms": 212653,
+      "isrc": null
+    }
+  ]
+}

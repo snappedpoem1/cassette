@@ -161,6 +161,7 @@ pub fn to_new_local_file(
         file_size,
         file_mtime_ms,
         content_hash: hash,
+        acoustid_fingerprint: None,
         integrity_status: facts.integrity_status,
         quality_tier: facts.quality_tier,
     }

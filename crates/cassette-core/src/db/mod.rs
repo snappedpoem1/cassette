@@ -4,13 +4,20 @@ use crate::models::{
 use crate::director::models::{DirectorTaskResult, TrackTask};
 use crate::Result;
 use chrono::{Duration, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct Db {
     conn: Connection,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackPathUpdate {
+    pub track_id: i64,
+    pub old_path: String,
+    pub new_path: String,
 }
 
 impl Db {
@@ -20,6 +27,12 @@ impl Db {
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
+    }
+
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.execute_batch("PRAGMA query_only=ON; PRAGMA foreign_keys=ON;")?;
+        Ok(Self { conn })
     }
 
     fn migrate(&self) -> Result<()> {
@@ -95,6 +108,7 @@ impl Db {
                 task_id              TEXT PRIMARY KEY,
                 disposition          TEXT NOT NULL,
                 provider             TEXT,
+                failure_class        TEXT,
                 final_path           TEXT,
                 request_signature    TEXT,
                 score_total          INTEGER,
@@ -211,6 +225,7 @@ impl Db {
         self.ensure_column_exists("director_task_history", "request_json", "TEXT")?;
         self.ensure_column_exists("director_task_history", "request_strategy", "TEXT")?;
         self.ensure_column_exists("director_task_history", "request_signature", "TEXT")?;
+        self.ensure_column_exists("director_task_history", "failure_class", "TEXT")?;
         self.ensure_column_exists("director_pending_tasks", "request_signature", "TEXT")?;
 
         // ── Schema convergence: canonical identity tables ────────────────────
@@ -270,6 +285,123 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_acquisition_requests_status
                 ON acquisition_requests(status, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS canonical_recordings (
+                id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_artist_id         INTEGER REFERENCES canonical_artists(id),
+                canonical_release_id        INTEGER REFERENCES canonical_releases(id),
+                title                       TEXT NOT NULL,
+                normalized_title            TEXT NOT NULL,
+                musicbrainz_recording_id    TEXT UNIQUE,
+                isrc                        TEXT,
+                track_number                INTEGER,
+                disc_number                 INTEGER,
+                duration_secs               REAL,
+                created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_canonical_recordings_artist
+                ON canonical_recordings(canonical_artist_id);
+            CREATE INDEX IF NOT EXISTS idx_canonical_recordings_release
+                ON canonical_recordings(canonical_release_id);
+            CREATE INDEX IF NOT EXISTS idx_canonical_recordings_normalized
+                ON canonical_recordings(normalized_title);
+            CREATE INDEX IF NOT EXISTS idx_canonical_recordings_isrc
+                ON canonical_recordings(isrc);
+
+            CREATE TABLE IF NOT EXISTS source_aliases (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type     TEXT NOT NULL,
+                entity_key      TEXT NOT NULL,
+                source_name     TEXT NOT NULL,
+                source_key      TEXT NOT NULL,
+                source_value    TEXT NOT NULL,
+                confidence      REAL,
+                raw_json        TEXT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (entity_type, entity_key, source_name, source_key, source_value)
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_aliases_entity
+                ON source_aliases(entity_type, entity_key);
+            CREATE INDEX IF NOT EXISTS idx_source_aliases_lookup
+                ON source_aliases(source_name, source_key, source_value);
+
+            CREATE TABLE IF NOT EXISTS provider_search_evidence (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id             TEXT NOT NULL,
+                request_signature   TEXT,
+                provider_id         TEXT NOT NULL,
+                outcome             TEXT NOT NULL,
+                candidate_count     INTEGER NOT NULL DEFAULT 0,
+                retryable           INTEGER NOT NULL DEFAULT 0,
+                error               TEXT,
+                raw_json            TEXT NOT NULL,
+                retention_class     TEXT NOT NULL DEFAULT 'provenance',
+                recorded_at         TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_provider_search_evidence_task
+                ON provider_search_evidence(task_id, recorded_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_provider_search_evidence_request
+                ON provider_search_evidence(request_signature, provider_id, recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS provider_candidate_evidence (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id                 TEXT NOT NULL,
+                request_signature       TEXT,
+                provider_id             TEXT NOT NULL,
+                provider_candidate_id   TEXT NOT NULL,
+                outcome                 TEXT NOT NULL,
+                rejection_reason        TEXT,
+                is_selected             INTEGER NOT NULL DEFAULT 0,
+                metadata_confidence     REAL,
+                raw_json                TEXT NOT NULL,
+                retention_class         TEXT NOT NULL DEFAULT 'provenance',
+                recorded_at             TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_provider_candidate_evidence_task
+                ON provider_candidate_evidence(task_id, provider_id, recorded_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_provider_candidate_evidence_request
+                ON provider_candidate_evidence(request_signature, provider_id, recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS provider_response_cache (
+                request_signature   TEXT NOT NULL,
+                provider_id         TEXT NOT NULL,
+                last_task_id        TEXT NOT NULL,
+                outcome             TEXT NOT NULL,
+                candidate_count     INTEGER NOT NULL DEFAULT 0,
+                response_json       TEXT NOT NULL,
+                failure_class       TEXT,
+                backoff_until       TEXT,
+                retention_class     TEXT NOT NULL DEFAULT 'ephemeral_cache',
+                updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (request_signature, provider_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_provider_response_cache_updated
+                ON provider_response_cache(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS identity_resolution_evidence (
+                id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id                     TEXT,
+                request_signature           TEXT,
+                entity_type                 TEXT NOT NULL,
+                entity_key                  TEXT NOT NULL,
+                source_name                 TEXT NOT NULL,
+                evidence_type               TEXT NOT NULL,
+                canonical_artist_id         INTEGER,
+                canonical_release_id        INTEGER,
+                musicbrainz_recording_id    TEXT,
+                musicbrainz_release_id      TEXT,
+                isrc                        TEXT,
+                confidence                  REAL,
+                raw_json                    TEXT,
+                retention_class             TEXT NOT NULL DEFAULT 'identity_fact',
+                recorded_at                 TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_identity_resolution_evidence_entity
+                ON identity_resolution_evidence(entity_type, entity_key, recorded_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_identity_resolution_evidence_request
+                ON identity_resolution_evidence(request_signature, recorded_at DESC);
         ")?;
 
         // Add identity columns to tracks table (non-breaking migration)
@@ -340,8 +472,10 @@ impl Db {
         self.conn.execute("
             INSERT INTO tracks
                 (path,title,artist,album,album_artist,track_number,disc_number,year,
-                 duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,cover_art_path)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                 duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,cover_art_path,
+                 isrc,musicbrainz_recording_id,musicbrainz_release_id,canonical_artist_id,
+                 canonical_release_id,quality_tier,content_hash)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
             ON CONFLICT(path) DO UPDATE SET
                 title=excluded.title, artist=excluded.artist, album=excluded.album,
                 album_artist=excluded.album_artist, track_number=excluded.track_number,
@@ -349,13 +483,23 @@ impl Db {
                 duration_secs=excluded.duration_secs, sample_rate=excluded.sample_rate,
                 bit_depth=excluded.bit_depth, bitrate_kbps=excluded.bitrate_kbps,
                 format=excluded.format, file_size=excluded.file_size,
-                cover_art_path=excluded.cover_art_path
+                cover_art_path=excluded.cover_art_path,
+                isrc=COALESCE(excluded.isrc, tracks.isrc),
+                musicbrainz_recording_id=COALESCE(excluded.musicbrainz_recording_id, tracks.musicbrainz_recording_id),
+                musicbrainz_release_id=COALESCE(excluded.musicbrainz_release_id, tracks.musicbrainz_release_id),
+                canonical_artist_id=COALESCE(excluded.canonical_artist_id, tracks.canonical_artist_id),
+                canonical_release_id=COALESCE(excluded.canonical_release_id, tracks.canonical_release_id),
+                quality_tier=COALESCE(excluded.quality_tier, tracks.quality_tier),
+                content_hash=COALESCE(excluded.content_hash, tracks.content_hash)
         ", params![
             t.path, t.title, t.artist, t.album, t.album_artist,
             t.track_number, t.disc_number, t.year, t.duration_secs,
             t.sample_rate, t.bit_depth, t.bitrate_kbps, t.format,
-            t.file_size as i64, t.cover_art_path,
+            t.file_size as i64, t.cover_art_path, t.isrc,
+            t.musicbrainz_recording_id, t.musicbrainz_release_id, t.canonical_artist_id,
+            t.canonical_release_id, t.quality_tier, t.content_hash,
         ])?;
+        self.upsert_track_identity_evidence(t)?;
         Ok(())
     }
 
@@ -370,8 +514,10 @@ impl Db {
                 "
                 INSERT INTO tracks
                     (path,title,artist,album,album_artist,track_number,disc_number,year,
-                     duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,cover_art_path)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                     duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,cover_art_path,
+                     isrc,musicbrainz_recording_id,musicbrainz_release_id,canonical_artist_id,
+                     canonical_release_id,quality_tier,content_hash)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
                 ON CONFLICT(path) DO UPDATE SET
                     title=excluded.title, artist=excluded.artist, album=excluded.album,
                     album_artist=excluded.album_artist, track_number=excluded.track_number,
@@ -379,7 +525,14 @@ impl Db {
                     duration_secs=excluded.duration_secs, sample_rate=excluded.sample_rate,
                     bit_depth=excluded.bit_depth, bitrate_kbps=excluded.bitrate_kbps,
                     format=excluded.format, file_size=excluded.file_size,
-                    cover_art_path=excluded.cover_art_path
+                    cover_art_path=excluded.cover_art_path,
+                    isrc=COALESCE(excluded.isrc, tracks.isrc),
+                    musicbrainz_recording_id=COALESCE(excluded.musicbrainz_recording_id, tracks.musicbrainz_recording_id),
+                    musicbrainz_release_id=COALESCE(excluded.musicbrainz_release_id, tracks.musicbrainz_release_id),
+                    canonical_artist_id=COALESCE(excluded.canonical_artist_id, tracks.canonical_artist_id),
+                    canonical_release_id=COALESCE(excluded.canonical_release_id, tracks.canonical_release_id),
+                    quality_tier=COALESCE(excluded.quality_tier, tracks.quality_tier),
+                    content_hash=COALESCE(excluded.content_hash, tracks.content_hash)
                 "
             )?;
 
@@ -388,7 +541,9 @@ impl Db {
                     t.path, t.title, t.artist, t.album, t.album_artist,
                     t.track_number, t.disc_number, t.year, t.duration_secs,
                     t.sample_rate, t.bit_depth, t.bitrate_kbps, t.format,
-                    t.file_size as i64, t.cover_art_path,
+                    t.file_size as i64, t.cover_art_path, t.isrc,
+                    t.musicbrainz_recording_id, t.musicbrainz_release_id, t.canonical_artist_id,
+                    t.canonical_release_id, t.quality_tier, t.content_hash,
                 ])?;
             }
             Ok(())
@@ -400,6 +555,55 @@ impl Db {
         }
 
         self.conn.execute_batch("COMMIT;")?;
+        for track in tracks {
+            self.upsert_track_identity_evidence(track)?;
+        }
+        Ok(())
+    }
+
+    fn upsert_track_identity_evidence(&self, track: &Track) -> Result<()> {
+        if track.musicbrainz_recording_id.is_none()
+            && track.isrc.is_none()
+            && track.canonical_artist_id.is_none()
+            && track.canonical_release_id.is_none()
+        {
+            return Ok(());
+        }
+
+        let canonical_recording_id = self.upsert_canonical_recording(
+            &track.title,
+            track.canonical_artist_id,
+            track.canonical_release_id,
+            track.musicbrainz_recording_id.as_deref(),
+            track.isrc.as_deref(),
+            track.track_number,
+            track.disc_number,
+            Some(track.duration_secs),
+        )?;
+
+        let entity_key = format!("canonical_recording:{canonical_recording_id}");
+        if let Some(isrc) = track.isrc.as_deref() {
+            self.upsert_source_alias(
+                "canonical_recording",
+                &entity_key,
+                "isrc",
+                "track",
+                isrc,
+                Some(1.0),
+                None,
+            )?;
+        }
+        if let Some(mbid) = track.musicbrainz_recording_id.as_deref() {
+            self.upsert_source_alias(
+                "canonical_recording",
+                &entity_key,
+                "musicbrainz",
+                "recording_id",
+                mbid,
+                Some(1.0),
+                None,
+            )?;
+        }
         Ok(())
     }
 
@@ -425,7 +629,8 @@ impl Db {
         let mut stmt = self.conn.prepare("
             SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
-                   cover_art_path,added_at
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
             FROM tracks
             ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number
             LIMIT ?1 OFFSET ?2
@@ -439,7 +644,8 @@ impl Db {
         let mut stmt = self.conn.prepare("
             SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
-                   cover_art_path,added_at
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
             FROM tracks
             WHERE title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1
             ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_number
@@ -453,7 +659,8 @@ impl Db {
         let mut stmt = self.conn.prepare("
             SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
-                   cover_art_path,added_at
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
             FROM tracks WHERE id = ?1
         ")?;
         let mut rows = stmt.query_map(params![id], Self::row_to_track)?;
@@ -464,7 +671,8 @@ impl Db {
         let mut stmt = self.conn.prepare("
             SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
-                   cover_art_path,added_at
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
             FROM tracks WHERE path = ?1
         ")?;
         let mut rows = stmt.query_map(params![path], Self::row_to_track)?;
@@ -504,7 +712,8 @@ impl Db {
         let mut stmt = self.conn.prepare("
             SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
-                   cover_art_path,added_at
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
             FROM tracks WHERE album_artist = ?1 AND album = ?2
             ORDER BY disc_number, track_number
         ")?;
@@ -545,6 +754,109 @@ impl Db {
         Ok(())
     }
 
+    pub fn apply_track_path_updates(
+        &self,
+        sidecar_db_path: &Path,
+        updates: &[TrackPathUpdate],
+    ) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+        let app_write: Result<()> = (|| {
+            let mut stmt = self
+                .conn
+                .prepare("UPDATE tracks SET path = ?1 WHERE id = ?2")?;
+            for update in updates {
+                stmt.execute(params![update.new_path, update.track_id])?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = app_write {
+            let _ = self.conn.execute_batch("ROLLBACK;");
+            return Err(error);
+        }
+        self.conn.execute_batch("COMMIT;")?;
+
+        Self::sync_sidecar_local_file_paths(sidecar_db_path, updates)
+    }
+
+    pub fn sync_sidecar_local_file_paths(
+        sidecar_db_path: &Path,
+        updates: &[TrackPathUpdate],
+    ) -> Result<()> {
+        if updates.is_empty() || !sidecar_db_path.exists() {
+            return Ok(());
+        }
+
+        let conn = Connection::open(sidecar_db_path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE TRANSACTION;")?;
+
+        let sync_result: Result<()> = (|| {
+            for update in updates {
+                let new_path = PathBuf::from(&update.new_path);
+                let file_name = new_path
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let extension = new_path
+                    .extension()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let file_mtime_ms = std::fs::metadata(&new_path)
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as i64);
+
+                conn.execute(
+                    "
+                    UPDATE local_files
+                    SET file_path = file_path || '.stale-conflict-' || id,
+                        integrity_status = 'missing_on_disk',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE LOWER(file_path) = LOWER(?1)
+                      AND LOWER(file_path) != LOWER(?2)
+                    ",
+                    params![update.new_path, update.old_path],
+                )?;
+
+                conn.execute(
+                    "
+                    UPDATE local_files
+                    SET file_path = ?1,
+                        file_name = ?2,
+                        extension = ?3,
+                        file_mtime_ms = ?4,
+                        integrity_status = CASE
+                            WHEN integrity_status = 'missing_on_disk' THEN 'readable'
+                            ELSE integrity_status
+                        END,
+                        last_scanned_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE LOWER(file_path) = LOWER(?5)
+                    ",
+                    params![
+                        update.new_path,
+                        file_name,
+                        extension,
+                        file_mtime_ms,
+                        update.old_path,
+                    ],
+                )?;
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = sync_result {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(error);
+        }
+        conn.execute_batch("COMMIT;")?;
+        Ok(())
+    }
+
     pub fn update_track_embedded_metadata(
         &self,
         track_id: i64,
@@ -577,7 +889,8 @@ impl Db {
         let mut stmt = self.conn.prepare("
             SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
-                   cover_art_path,added_at
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
             FROM tracks
             ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number
         ")?;
@@ -645,7 +958,14 @@ impl Db {
             format: row.get(13)?,
             file_size: row.get::<_, i64>(14)? as u64,
             cover_art_path: row.get(15)?,
-            added_at: row.get(16).unwrap_or_default(),
+            isrc: row.get(16)?,
+            musicbrainz_recording_id: row.get(17)?,
+            musicbrainz_release_id: row.get(18)?,
+            canonical_artist_id: row.get(19)?,
+            canonical_release_id: row.get(20)?,
+            quality_tier: row.get(21)?,
+            content_hash: row.get(22)?,
+            added_at: row.get(23).unwrap_or_default(),
         })
     }
 
@@ -656,7 +976,9 @@ impl Db {
             SELECT q.id, q.track_id, q.position,
                    t.id,t.path,t.title,t.artist,t.album,t.album_artist,t.track_number,
                    t.disc_number,t.year,t.duration_secs,t.sample_rate,t.bit_depth,
-                   t.bitrate_kbps,t.format,t.file_size,t.cover_art_path,t.added_at
+                   t.bitrate_kbps,t.format,t.file_size,t.cover_art_path,t.isrc,
+                   t.musicbrainz_recording_id,t.musicbrainz_release_id,t.canonical_artist_id,
+                   t.canonical_release_id,t.quality_tier,t.content_hash,t.added_at
             FROM queue_items q JOIN tracks t ON q.track_id = t.id
             ORDER BY q.position
         ")?;
@@ -682,7 +1004,14 @@ impl Db {
                     format: row.get(16)?,
                     file_size: row.get::<_, i64>(17)? as u64,
                     cover_art_path: row.get(18)?,
-                    added_at: row.get(19).unwrap_or_default(),
+                    isrc: row.get(19)?,
+                    musicbrainz_recording_id: row.get(20)?,
+                    musicbrainz_release_id: row.get(21)?,
+                    canonical_artist_id: row.get(22)?,
+                    canonical_release_id: row.get(23)?,
+                    quality_tier: row.get(24)?,
+                    content_hash: row.get(25)?,
+                    added_at: row.get(26).unwrap_or_default(),
                 }),
             })
         })?;
@@ -783,10 +1112,8 @@ impl Db {
         request: Option<&TrackTask>,
     ) -> Result<()> {
         let request_signature = request.map(director_request_signature);
-        let provider = result
-            .finalized
-            .as_ref()
-            .map(|finalized| finalized.provenance.selected_provider.clone());
+        let provider = derive_result_provider(result);
+        let failure_class = classify_failure(result);
         let selected_provider_candidate_id = result
             .finalized
             .as_ref()
@@ -832,17 +1159,18 @@ impl Db {
             self.conn.execute(
                 "
                 INSERT INTO director_task_history
-                    (task_id, disposition, provider, final_path, request_signature, score_total, error,
+                    (task_id, disposition, provider, failure_class, final_path, request_signature, score_total, error,
                      source_metadata_json, validation_json, score_reason_json,
                      attempts_json, result_json, request_json, request_strategy, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))
                 ON CONFLICT(task_id) DO UPDATE SET
                     disposition=excluded.disposition,
-                    provider=excluded.provider,
-                    final_path=excluded.final_path,
+                    provider=COALESCE(excluded.provider, director_task_history.provider),
+                    failure_class=COALESCE(excluded.failure_class, director_task_history.failure_class),
+                    final_path=COALESCE(excluded.final_path, director_task_history.final_path),
                     request_signature=COALESCE(excluded.request_signature, director_task_history.request_signature),
-                    score_total=excluded.score_total,
-                    error=excluded.error,
+                    score_total=COALESCE(excluded.score_total, director_task_history.score_total),
+                    error=COALESCE(excluded.error, director_task_history.error),
                     source_metadata_json=excluded.source_metadata_json,
                     validation_json=excluded.validation_json,
                     score_reason_json=excluded.score_reason_json,
@@ -856,6 +1184,7 @@ impl Db {
                     result.task_id,
                     format!("{:?}", result.disposition),
                     provider,
+                    failure_class.as_deref(),
                     final_path,
                     request_signature,
                     score_total,
@@ -875,6 +1204,11 @@ impl Db {
             self.persist_candidate_items(result, request_signature.as_deref(), selected_provider_candidate_id.as_deref())?;
             self.persist_provider_attempts(result, request_signature.as_deref())?;
             self.refresh_provider_memory(result, request_signature.as_deref())?;
+            self.persist_provider_search_evidence(result, request_signature.as_deref())?;
+            self.persist_provider_candidate_evidence(result, request_signature.as_deref(), selected_provider_candidate_id.as_deref())?;
+            self.refresh_provider_response_cache(result, request_signature.as_deref(), failure_class.as_deref())?;
+            self.persist_identity_resolution_evidence(result, request, request_signature.as_deref())?;
+            self.persist_source_aliases_for_result(result, request, request_signature.as_deref())?;
             Ok(())
         })();
 
@@ -1162,6 +1496,229 @@ impl Db {
         Ok(())
     }
 
+    fn persist_provider_search_evidence(
+        &self,
+        result: &DirectorTaskResult,
+        request_signature: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM provider_search_evidence WHERE task_id = ?1",
+            params![result.task_id],
+        )?;
+
+        let mut stmt = self.conn.prepare(
+            "
+            INSERT INTO provider_search_evidence
+                (task_id, request_signature, provider_id, outcome, candidate_count,
+                 retryable, error, raw_json, retention_class, recorded_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'provenance', datetime('now'))
+            ",
+        )?;
+
+        for record in &result.provider_searches {
+            stmt.execute(params![
+                result.task_id,
+                request_signature,
+                record.provider_id,
+                record.outcome,
+                record.candidate_count as i64,
+                if record.retryable { 1_i64 } else { 0_i64 },
+                record.error,
+                serde_json::to_string(record)?,
+            ])?;
+        }
+        Ok(())
+    }
+
+    fn persist_provider_candidate_evidence(
+        &self,
+        result: &DirectorTaskResult,
+        request_signature: Option<&str>,
+        selected_provider_candidate_id: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM provider_candidate_evidence WHERE task_id = ?1",
+            params![result.task_id],
+        )?;
+
+        let selected_provider_id = result
+            .finalized
+            .as_ref()
+            .map(|finalized| finalized.provenance.selected_provider.as_str());
+        let mut stmt = self.conn.prepare(
+            "
+            INSERT INTO provider_candidate_evidence
+                (task_id, request_signature, provider_id, provider_candidate_id, outcome,
+                 rejection_reason, is_selected, metadata_confidence, raw_json, retention_class, recorded_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'provenance', datetime('now'))
+            ",
+        )?;
+
+        for record in &result.candidate_records {
+            let is_selected = selected_provider_id == Some(record.provider_id.as_str())
+                && selected_provider_candidate_id == Some(record.candidate.provider_candidate_id.as_str());
+            stmt.execute(params![
+                result.task_id,
+                request_signature,
+                record.provider_id,
+                record.candidate.provider_candidate_id,
+                record.outcome,
+                record.rejection_reason,
+                if is_selected { 1_i64 } else { 0_i64 },
+                f64::from(record.candidate.metadata_confidence),
+                serde_json::to_string(record)?,
+            ])?;
+        }
+        Ok(())
+    }
+
+    fn refresh_provider_response_cache(
+        &self,
+        result: &DirectorTaskResult,
+        request_signature: Option<&str>,
+        failure_class: Option<&str>,
+    ) -> Result<()> {
+        let Some(request_signature) = request_signature else {
+            return Ok(());
+        };
+
+        let mut provider_ids = std::collections::BTreeSet::<String>::new();
+        for record in &result.provider_searches {
+            provider_ids.insert(record.provider_id.clone());
+        }
+        for record in &result.candidate_records {
+            provider_ids.insert(record.provider_id.clone());
+        }
+
+        for provider_id in provider_ids {
+            let provider_searches = result
+                .provider_searches
+                .iter()
+                .filter(|record| record.provider_id == provider_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let provider_candidates = result
+                .candidate_records
+                .iter()
+                .filter(|record| record.provider_id == provider_id)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            let response_json = serde_json::json!({
+                "provider_searches": provider_searches,
+                "candidate_records": provider_candidates,
+                "task_id": result.task_id,
+            })
+            .to_string();
+
+            self.conn.execute(
+                "
+                INSERT INTO provider_response_cache
+                    (request_signature, provider_id, last_task_id, outcome, candidate_count,
+                     response_json, failure_class, backoff_until, retention_class, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 'ephemeral_cache', datetime('now'))
+                ON CONFLICT(request_signature, provider_id) DO UPDATE SET
+                    last_task_id = excluded.last_task_id,
+                    outcome = excluded.outcome,
+                    candidate_count = excluded.candidate_count,
+                    response_json = excluded.response_json,
+                    failure_class = excluded.failure_class,
+                    updated_at = datetime('now')
+                ",
+                params![
+                    request_signature,
+                    provider_id,
+                    result.task_id,
+                    provider_cache_outcome(&result.disposition, &provider_searches, &provider_candidates),
+                    provider_candidates.len() as i64,
+                    response_json,
+                    failure_class,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn persist_identity_resolution_evidence(
+        &self,
+        result: &DirectorTaskResult,
+        request: Option<&TrackTask>,
+        request_signature: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM identity_resolution_evidence WHERE task_id = ?1",
+            params![result.task_id],
+        )?;
+
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let raw_json = serde_json::to_string(&request.target)?;
+        self.conn.execute(
+            "
+            INSERT INTO identity_resolution_evidence
+                (task_id, request_signature, entity_type, entity_key, source_name, evidence_type,
+                 canonical_artist_id, canonical_release_id, musicbrainz_recording_id, musicbrainz_release_id,
+                 isrc, confidence, raw_json, retention_class, recorded_at)
+            VALUES (?1, ?2, 'request_signature', ?3, 'director_request', 'normalized_target',
+                    ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'identity_fact', datetime('now'))
+            ",
+            params![
+                result.task_id,
+                request_signature,
+                request_signature.unwrap_or_default(),
+                request.target.canonical_artist_id,
+                request.target.canonical_release_id,
+                request.target.musicbrainz_recording_id.as_deref(),
+                request.target.musicbrainz_release_id.as_deref(),
+                request.target.isrc.as_deref(),
+                Some(1.0_f64),
+                raw_json,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn persist_source_aliases_for_result(
+        &self,
+        result: &DirectorTaskResult,
+        request: Option<&TrackTask>,
+        request_signature: Option<&str>,
+    ) -> Result<()> {
+        let Some(request_signature) = request_signature else {
+            return Ok(());
+        };
+        let entity_type = "request_signature";
+        let entity_key = request_signature;
+
+        if let Some(request) = request {
+            if let Some(spotify_track_id) = request.target.spotify_track_id.as_deref() {
+                self.upsert_source_alias(
+                    entity_type,
+                    entity_key,
+                    "spotify",
+                    "track_id",
+                    spotify_track_id,
+                    Some(1.0),
+                    Some(&serde_json::to_string(&request.target)?),
+                )?;
+            }
+        }
+
+        for record in &result.candidate_records {
+            self.upsert_source_alias(
+                entity_type,
+                entity_key,
+                &record.provider_id,
+                "candidate_id",
+                &record.candidate.provider_candidate_id,
+                Some(f64::from(record.candidate.metadata_confidence)),
+                Some(&serde_json::to_string(record)?),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Persist or refresh a director task that has not reached a terminal state yet.
     pub fn upsert_director_pending_task(&self, task: &TrackTask, progress: &str) -> Result<()> {
         let task_json = serde_json::to_string(task)?;
@@ -1285,7 +1842,8 @@ impl Db {
     ) -> Result<Vec<StoredProviderMemory>> {
         let mut stmt = self.conn.prepare(
             "
-            SELECT provider_id, last_outcome, failure_class, retryable, candidate_count
+            SELECT provider_id, last_outcome, failure_class, retryable, candidate_count,
+                   backoff_until, updated_at
             FROM director_provider_memory
             WHERE request_signature = ?1
             ORDER BY provider_id ASC
@@ -1298,6 +1856,36 @@ impl Db {
                 failure_class: row.get(2)?,
                 retryable: row.get::<_, i64>(3)? != 0,
                 candidate_count: row.get::<_, i64>(4)? as usize,
+                backoff_until: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_provider_response_cache(
+        &self,
+        request_signature: &str,
+    ) -> Result<Vec<StoredProviderResponseCache>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT provider_id, outcome, candidate_count, response_json, failure_class,
+                   backoff_until, retention_class, updated_at
+            FROM provider_response_cache
+            WHERE request_signature = ?1
+            ORDER BY provider_id ASC
+            ",
+        )?;
+        let rows = stmt.query_map(params![request_signature], |row| {
+            Ok(StoredProviderResponseCache {
+                provider_id: row.get(0)?,
+                outcome: row.get(1)?,
+                candidate_count: row.get::<_, i64>(2)? as usize,
+                response_json: row.get(3)?,
+                failure_class: row.get(4)?,
+                backoff_until: row.get(5)?,
+                retention_class: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1331,6 +1919,14 @@ impl Db {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn mark_spotify_album_in_library(&self, artist: &str, album: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE spotify_album_history SET in_library = 1 WHERE artist = ?1 AND album = ?2",
+            params![artist, album],
+        )?;
+        Ok(())
     }
 
     /// Returns task_ids from director_task_history that have already been finalized
@@ -1442,7 +2038,9 @@ impl Db {
             SELECT pi.id, pi.playlist_id, pi.track_id, pi.position,
                    t.id,t.path,t.title,t.artist,t.album,t.album_artist,t.track_number,
                    t.disc_number,t.year,t.duration_secs,t.sample_rate,t.bit_depth,
-                   t.bitrate_kbps,t.format,t.file_size,t.cover_art_path,t.added_at
+                   t.bitrate_kbps,t.format,t.file_size,t.cover_art_path,t.isrc,
+                   t.musicbrainz_recording_id,t.musicbrainz_release_id,t.canonical_artist_id,
+                   t.canonical_release_id,t.quality_tier,t.content_hash,t.added_at
             FROM playlist_items pi JOIN tracks t ON pi.track_id = t.id
             WHERE pi.playlist_id = ?1 ORDER BY pi.position
         ")?;
@@ -1469,7 +2067,14 @@ impl Db {
                     format: row.get(17)?,
                     file_size: row.get::<_, i64>(18)? as u64,
                     cover_art_path: row.get(19)?,
-                    added_at: row.get(20).unwrap_or_default(),
+                    isrc: row.get(20)?,
+                    musicbrainz_recording_id: row.get(21)?,
+                    musicbrainz_release_id: row.get(22)?,
+                    canonical_artist_id: row.get(23)?,
+                    canonical_release_id: row.get(24)?,
+                    quality_tier: row.get(25)?,
+                    content_hash: row.get(26)?,
+                    added_at: row.get(27).unwrap_or_default(),
                 }),
             })
         })?;
@@ -1539,6 +2144,20 @@ pub struct StoredProviderMemory {
     pub failure_class: String,
     pub retryable: bool,
     pub candidate_count: usize,
+    pub backoff_until: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredProviderResponseCache {
+    pub provider_id: String,
+    pub outcome: String,
+    pub candidate_count: usize,
+    pub response_json: String,
+    pub failure_class: Option<String>,
+    pub backoff_until: Option<String>,
+    pub retention_class: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1550,7 +2169,7 @@ struct ProviderMemorySummary {
     candidate_count: usize,
 }
 
-fn director_request_signature(task: &TrackTask) -> String {
+pub fn director_request_signature(task: &TrackTask) -> String {
     let target = &task.target;
     let duration = target
         .duration_secs
@@ -1567,6 +2186,10 @@ fn director_request_signature(task: &TrackTask) -> String {
         target.year.map(|value| value.to_string()).unwrap_or_default(),
         duration,
         normalize_signature_text(target.isrc.as_deref().unwrap_or_default()),
+        normalize_signature_text(target.musicbrainz_recording_id.as_deref().unwrap_or_default()),
+        normalize_signature_text(target.musicbrainz_release_id.as_deref().unwrap_or_default()),
+        target.canonical_artist_id.map(|value| value.to_string()).unwrap_or_default(),
+        target.canonical_release_id.map(|value| value.to_string()).unwrap_or_default(),
     ]
     .join("|")
 }
@@ -1603,7 +2226,8 @@ fn summarize_provider_memory(
                 "metadata_only" => "unsupported".to_string(),
                 "busy" => "provider_busy".to_string(),
                 "skipped_health_down" => "provider_unhealthy".to_string(),
-                _ => "search_error".to_string(),
+                _ => classify_provider_error_text(search.error.as_deref())
+                    .unwrap_or_else(|| "search_error".to_string()),
             },
             error: search.error.clone(),
             retryable: search.retryable,
@@ -1628,6 +2252,113 @@ fn summarize_provider_memory(
         retryable: false,
         candidate_count: provider_candidates.len(),
     })
+}
+
+fn classify_provider_error_text(error: Option<&str>) -> Option<String> {
+    let error = error?.to_ascii_lowercase();
+    if error.contains("auth failed") {
+        return Some("auth_failed".to_string());
+    }
+    if error.contains("too_many_requests")
+        || error.contains("rate limited")
+        || error.contains("429")
+    {
+        return Some("rate_limited".to_string());
+    }
+    if error.contains("provider busy") || error.contains("cooling down") {
+        return Some("provider_busy".to_string());
+    }
+    if error.contains("temporary outage") || error.contains("provider health down") {
+        return Some("provider_unhealthy".to_string());
+    }
+    None
+}
+
+fn derive_result_provider(result: &DirectorTaskResult) -> Option<String> {
+    result
+        .finalized
+        .as_ref()
+        .map(|finalized| finalized.provenance.selected_provider.clone())
+        .or_else(|| {
+            result
+                .provider_searches
+                .iter()
+                .rev()
+                .find(|record| record.error.is_some() || record.outcome != "candidates_found")
+                .map(|record| record.provider_id.clone())
+        })
+        .or_else(|| result.attempts.last().map(|attempt| attempt.provider_id.clone()))
+}
+
+fn classify_failure(result: &DirectorTaskResult) -> Option<String> {
+    if !matches!(
+        result.disposition,
+        crate::director::models::FinalizedTrackDisposition::Failed
+            | crate::director::models::FinalizedTrackDisposition::Cancelled
+    ) {
+        return None;
+    }
+
+    if result
+        .attempts
+        .iter()
+        .any(|attempt| attempt.outcome.to_ascii_lowercase().contains("auth failed"))
+    {
+        return Some("auth_failed".to_string());
+    }
+    if result.attempts.iter().any(|attempt| {
+        let outcome = attempt.outcome.to_ascii_lowercase();
+        outcome.contains("too_many_requests")
+            || outcome.contains("rate limited")
+            || outcome.contains("429")
+    }) {
+        return Some("rate_limited".to_string());
+    }
+    if result
+        .provider_searches
+        .iter()
+        .any(|record| record.outcome.contains("cooldown") || record.outcome == "busy")
+    {
+        return Some("provider_busy".to_string());
+    }
+    if result
+        .candidate_records
+        .iter()
+        .any(|record| record.outcome == "validation_failed")
+    {
+        return Some("validation_failed".to_string());
+    }
+    if result
+        .provider_searches
+        .iter()
+        .any(|record| record.outcome == "metadata_only")
+    {
+        return Some("metadata_only".to_string());
+    }
+    Some("provider_exhausted".to_string())
+}
+
+fn provider_cache_outcome(
+    disposition: &crate::director::models::FinalizedTrackDisposition,
+    provider_searches: &[crate::director::models::ProviderSearchRecord],
+    provider_candidates: &[crate::director::models::CandidateRecord],
+) -> String {
+    if matches!(
+        disposition,
+        crate::director::models::FinalizedTrackDisposition::Finalized
+            | crate::director::models::FinalizedTrackDisposition::AlreadyPresent
+            | crate::director::models::FinalizedTrackDisposition::MetadataOnly
+    ) && provider_candidates.iter().any(|record| {
+        matches!(record.outcome.as_str(), "valid_candidate" | "selected_immediate")
+    }) {
+        return "usable_candidate".to_string();
+    }
+
+    provider_searches
+        .last()
+        .map(|record| record.outcome.clone())
+        .or_else(|| provider_candidates.last().map(|record| record.outcome.clone()))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 // ── Canonical Identity ────────────────────────────────────────────────────
@@ -1656,6 +2387,20 @@ pub struct CanonicalRelease {
     pub release_type: Option<String>,
     pub year: Option<i32>,
     pub track_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalRecording {
+    pub id: i64,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub title: String,
+    pub normalized_title: String,
+    pub musicbrainz_recording_id: Option<String>,
+    pub isrc: Option<String>,
+    pub track_number: Option<i32>,
+    pub disc_number: Option<i32>,
+    pub duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1688,6 +2433,16 @@ pub struct CandidateReviewItem {
     pub candidate_json: String,
     pub validation_json: Option<String>,
     pub score_reason_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskExecutionSummary {
+    pub task_id: String,
+    pub disposition: String,
+    pub provider: Option<String>,
+    pub failure_class: Option<String>,
+    pub final_path: Option<String>,
+    pub updated_at: String,
 }
 
 impl Db {
@@ -1835,6 +2590,127 @@ impl Db {
         }
     }
 
+    pub fn upsert_canonical_recording(
+        &self,
+        title: &str,
+        canonical_artist_id: Option<i64>,
+        canonical_release_id: Option<i64>,
+        musicbrainz_recording_id: Option<&str>,
+        isrc: Option<&str>,
+        track_number: Option<i32>,
+        disc_number: Option<i32>,
+        duration_secs: Option<f64>,
+    ) -> Result<i64> {
+        let normalized = normalize_canonical(title);
+
+        let existing_id = if let Some(mbid) = musicbrainz_recording_id {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_recordings WHERE musicbrainz_recording_id = ?1",
+                    params![mbid],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT id FROM canonical_recordings
+                     WHERE canonical_artist_id IS ?1
+                       AND canonical_release_id IS ?2
+                       AND normalized_title = ?3
+                       AND COALESCE(track_number, 0) = COALESCE(?4, 0)
+                       AND COALESCE(disc_number, 0) = COALESCE(?5, 0)",
+                    params![
+                        canonical_artist_id,
+                        canonical_release_id,
+                        &normalized,
+                        track_number,
+                        disc_number,
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+        };
+
+        if let Some(id) = existing_id {
+            self.conn.execute(
+                "UPDATE canonical_recordings SET
+                    title = COALESCE(?2, title),
+                    canonical_artist_id = COALESCE(?3, canonical_artist_id),
+                    canonical_release_id = COALESCE(?4, canonical_release_id),
+                    musicbrainz_recording_id = COALESCE(?5, musicbrainz_recording_id),
+                    isrc = COALESCE(?6, isrc),
+                    track_number = COALESCE(?7, track_number),
+                    disc_number = COALESCE(?8, disc_number),
+                    duration_secs = COALESCE(?9, duration_secs),
+                    updated_at = datetime('now')
+                 WHERE id = ?1",
+                params![
+                    id,
+                    title,
+                    canonical_artist_id,
+                    canonical_release_id,
+                    musicbrainz_recording_id,
+                    isrc,
+                    track_number,
+                    disc_number,
+                    duration_secs,
+                ],
+            )?;
+            Ok(id)
+        } else {
+            self.conn.execute(
+                "INSERT INTO canonical_recordings
+                    (canonical_artist_id, canonical_release_id, title, normalized_title,
+                     musicbrainz_recording_id, isrc, track_number, disc_number, duration_secs)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    canonical_artist_id,
+                    canonical_release_id,
+                    title,
+                    &normalized,
+                    musicbrainz_recording_id,
+                    isrc,
+                    track_number,
+                    disc_number,
+                    duration_secs,
+                ],
+            )?;
+            Ok(self.conn.last_insert_rowid())
+        }
+    }
+
+    fn upsert_source_alias(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+        source_name: &str,
+        source_key: &str,
+        source_value: &str,
+        confidence: Option<f64>,
+        raw_json: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO source_aliases
+                (entity_type, entity_key, source_name, source_key, source_value, confidence, raw_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+             ON CONFLICT(entity_type, entity_key, source_name, source_key, source_value) DO UPDATE SET
+                confidence = COALESCE(excluded.confidence, source_aliases.confidence),
+                raw_json = COALESCE(excluded.raw_json, source_aliases.raw_json),
+                updated_at = datetime('now')",
+            params![
+                entity_type,
+                entity_key,
+                source_name,
+                source_key,
+                source_value,
+                confidence,
+                raw_json,
+            ],
+        )?;
+        Ok(())
+    }
+
     // ── Acquisition Requests ─────────────────────────────────────────────
 
     pub fn create_acquisition_request(
@@ -1953,6 +2829,32 @@ impl Db {
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+    pub fn get_task_execution_summary(&self, task_id: &str) -> Result<Option<TaskExecutionSummary>> {
+        let result = self.conn.query_row(
+            "SELECT task_id, disposition, provider, failure_class, final_path, updated_at
+             FROM director_task_history
+             WHERE task_id = ?1
+             LIMIT 1",
+            params![task_id],
+            |row| {
+                Ok(TaskExecutionSummary {
+                    task_id: row.get(0)?,
+                    disposition: row.get(1)?,
+                    provider: row.get(2)?,
+                    failure_class: row.get(3)?,
+                    final_path: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(summary) => Ok(Some(summary)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 fn normalize_canonical(value: &str) -> String {
@@ -1970,7 +2872,7 @@ fn normalize_canonical(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::SpotifyAlbumHistory;
+    use crate::models::{SpotifyAlbumHistory, Track};
     use crate::director::models::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2052,6 +2954,10 @@ mod tests {
                 year: Some(2024),
                 duration_secs: Some(42.0),
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy: AcquisitionStrategy::Standard,
         };
@@ -2073,6 +2979,204 @@ mod tests {
         assert!(tasks.is_empty());
 
         let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn track_roundtrip_preserves_identity_fields() {
+        let db_path = temp_db_path("track-identity-roundtrip");
+        let db = Db::open(&db_path).expect("db should open");
+        let canonical_artist_id = db
+            .upsert_canonical_artist("Artist", Some("artist-mbid-1"), None, None, None)
+            .expect("canonical artist should save");
+        let canonical_release_id = db
+            .upsert_canonical_release(
+                canonical_artist_id,
+                "Album",
+                Some("release-mbid-1"),
+                None,
+                None,
+                Some("album"),
+                Some(2024),
+                Some(1),
+            )
+            .expect("canonical release should save");
+
+        let track = Track {
+            id: 0,
+            path: "C:\\Music\\Artist\\Album\\01 - Song.flac".to_string(),
+            title: "Song".to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            album_artist: "Artist".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2024),
+            duration_secs: 42.0,
+            sample_rate: Some(48_000),
+            bit_depth: Some(24),
+            bitrate_kbps: Some(1000),
+            format: "FLAC".to_string(),
+            file_size: 12_345,
+            cover_art_path: Some("C:\\Music\\Artist\\Album\\cover.jpg".to_string()),
+            isrc: Some("US1234567890".to_string()),
+            musicbrainz_recording_id: Some("mb-recording-1".to_string()),
+            musicbrainz_release_id: Some("mb-release-1".to_string()),
+            canonical_artist_id: Some(canonical_artist_id),
+            canonical_release_id: Some(canonical_release_id),
+            quality_tier: Some("lossless_preferred".to_string()),
+            content_hash: Some("hash-abc".to_string()),
+            added_at: String::new(),
+        };
+
+        db.upsert_track(&track).expect("track should save");
+        let stored = db
+            .get_track_by_path(&track.path)
+            .expect("track should load")
+            .expect("track row should exist");
+
+        assert_eq!(stored.isrc.as_deref(), Some("US1234567890"));
+        assert_eq!(stored.musicbrainz_recording_id.as_deref(), Some("mb-recording-1"));
+        assert_eq!(stored.musicbrainz_release_id.as_deref(), Some("mb-release-1"));
+        assert_eq!(stored.canonical_artist_id, Some(canonical_artist_id));
+        assert_eq!(stored.canonical_release_id, Some(canonical_release_id));
+        assert_eq!(stored.quality_tier.as_deref(), Some("lossless_preferred"));
+        assert_eq!(stored.content_hash.as_deref(), Some("hash-abc"));
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn apply_track_path_updates_updates_sidecar_and_marks_conflicts_stale() {
+        let db_path = temp_db_path("track-path-sync");
+        let sidecar_path = temp_db_path("track-path-sidecar");
+        let db = Db::open(&db_path).expect("db should open");
+
+        let old_path = std::env::temp_dir()
+            .join("cassette-old-song.flac")
+            .to_string_lossy()
+            .to_string();
+        let new_path_buf = std::env::temp_dir().join(format!(
+            "cassette-new-song-{}.flac",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos()
+        ));
+        fs::write(&new_path_buf, b"audio").expect("new file should exist");
+        let new_path = new_path_buf.to_string_lossy().to_string();
+
+        let track = Track {
+            id: 0,
+            path: old_path.clone(),
+            title: "Song".to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            album_artist: "Artist".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2024),
+            duration_secs: 42.0,
+            sample_rate: None,
+            bit_depth: None,
+            bitrate_kbps: None,
+            format: "FLAC".to_string(),
+            file_size: 4,
+            cover_art_path: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            quality_tier: None,
+            content_hash: None,
+            added_at: String::new(),
+        };
+        db.upsert_track(&track).expect("track should save");
+        let stored = db
+            .get_track_by_path(&old_path)
+            .expect("stored track should load")
+            .expect("stored track should exist");
+
+        let sidecar = Connection::open(&sidecar_path).expect("sidecar db should open");
+        sidecar
+            .execute_batch(
+                "
+                CREATE TABLE local_files (
+                    id INTEGER PRIMARY KEY,
+                    file_path TEXT UNIQUE NOT NULL,
+                    file_name TEXT NOT NULL,
+                    extension TEXT NOT NULL,
+                    file_mtime_ms INTEGER,
+                    integrity_status TEXT NOT NULL,
+                    last_scanned_at TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                ",
+            )
+            .expect("sidecar schema should create");
+        sidecar
+            .execute(
+                "INSERT INTO local_files (id, file_path, file_name, extension, integrity_status)
+                 VALUES (1, ?1, 'old.flac', 'flac', 'readable')",
+                params![old_path.clone()],
+            )
+            .expect("old path should insert");
+        sidecar
+            .execute(
+                "INSERT INTO local_files (id, file_path, file_name, extension, integrity_status)
+                 VALUES (2, ?1, 'conflict.flac', 'flac', 'readable')",
+                params![new_path.clone()],
+            )
+            .expect("conflict path should insert");
+        drop(sidecar);
+
+        db.apply_track_path_updates(
+            &sidecar_path,
+            &[TrackPathUpdate {
+                track_id: stored.id,
+                old_path: old_path.clone(),
+                new_path: new_path.clone(),
+            }],
+        )
+        .expect("path updates should converge");
+
+        let updated_track = db
+            .get_track_by_id(stored.id)
+            .expect("updated track should load")
+            .expect("updated track should exist");
+        assert_eq!(updated_track.path, new_path);
+
+        let sidecar = Connection::open(&sidecar_path).expect("sidecar db should reopen");
+        let synced_row: (String, String, String) = sidecar
+            .query_row(
+                "SELECT file_path, file_name, integrity_status FROM local_files WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("synced row should load");
+        assert_eq!(synced_row.0, updated_track.path);
+        assert_eq!(
+            synced_row.1,
+            new_path_buf
+                .file_name()
+                .expect("file name should exist")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(synced_row.2, "readable");
+
+        let conflict_path: String = sidecar
+            .query_row(
+                "SELECT file_path FROM local_files WHERE id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .expect("conflict row should load");
+        assert!(conflict_path.contains(".stale-conflict-2"));
+
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(sidecar_path);
+        let _ = fs::remove_file(new_path_buf);
     }
 
     #[test]
@@ -2140,6 +3244,10 @@ mod tests {
                 year: Some(2024),
                 duration_secs: Some(42.0),
                 isrc: Some("US1234567890".to_string()),
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy: AcquisitionStrategy::DiscographyBatch,
         };
@@ -2177,6 +3285,147 @@ mod tests {
     }
 
     #[test]
+    fn director_task_history_persists_failure_provider_class_and_evidence_tables() {
+        use crate::director::models::{ProviderSearchCandidate, ProviderSearchRecord};
+
+        let db_path = temp_db_path("director-failure-evidence");
+        let db = Db::open(&db_path).expect("db should open");
+        let task = TrackTask {
+            task_id: "task-failure-evidence".to_string(),
+            source: TrackTaskSource::SpotifyHistory,
+            desired_track_id: Some(99),
+            source_operation_id: Some("op-failure".to_string()),
+            target: NormalizedTrack {
+                spotify_track_id: Some("spotify:track:failure".to_string()),
+                source_playlist: None,
+                artist: "Artist".to_string(),
+                album_artist: Some("Artist".to_string()),
+                title: "Song".to_string(),
+                album: Some("Album".to_string()),
+                track_number: Some(1),
+                disc_number: Some(1),
+                year: Some(2024),
+                duration_secs: Some(42.0),
+                isrc: Some("US0000000001".to_string()),
+                musicbrainz_recording_id: Some("mb-recording-failure".to_string()),
+                musicbrainz_release_id: Some("mb-release-failure".to_string()),
+                canonical_artist_id: Some(5),
+                canonical_release_id: Some(8),
+            },
+            strategy: AcquisitionStrategy::Standard,
+        };
+        let result = DirectorTaskResult {
+            task_id: task.task_id.clone(),
+            disposition: crate::director::models::FinalizedTrackDisposition::Failed,
+            finalized: None,
+            attempts: vec![crate::director::models::ProviderAttemptRecord {
+                provider_id: "qobuz".to_string(),
+                attempt: 1,
+                outcome: "validation failed after download".to_string(),
+            }],
+            error: Some("validation failed after download".to_string()),
+            candidate_records: vec![crate::director::models::CandidateRecord {
+                provider_id: "qobuz".to_string(),
+                provider_display_name: "Qobuz".to_string(),
+                provider_trust_rank: 10,
+                provider_order_index: 0,
+                search_rank: 0,
+                candidate: ProviderSearchCandidate {
+                    provider_id: "qobuz".to_string(),
+                    provider_candidate_id: "qbz-1".to_string(),
+                    artist: "Artist".to_string(),
+                    title: "Song".to_string(),
+                    album: Some("Album".to_string()),
+                    duration_secs: Some(42.0),
+                    extension_hint: Some("flac".to_string()),
+                    bitrate_kbps: Some(1000),
+                    cover_art_url: None,
+                    metadata_confidence: 0.91,
+                },
+                acquisition_temp_path: None,
+                validation: None,
+                score: None,
+                score_reason: None,
+                outcome: "validation_failed".to_string(),
+                rejection_reason: Some("duration mismatch".to_string()),
+            }],
+            provider_searches: vec![ProviderSearchRecord {
+                provider_id: "qobuz".to_string(),
+                provider_display_name: "Qobuz".to_string(),
+                provider_trust_rank: 10,
+                provider_order_index: 0,
+                outcome: "candidates_found".to_string(),
+                candidate_count: 1,
+                error: None,
+                retryable: false,
+            }],
+        };
+
+        db.save_director_task_result(&result, Some(&task))
+            .expect("failed result should save");
+
+        let history_row: (Option<String>, Option<String>) = db
+            .conn
+            .query_row(
+                "SELECT provider, failure_class FROM director_task_history WHERE task_id = ?1",
+                params![task.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("history row should load");
+        assert_eq!(history_row.0.as_deref(), Some("qobuz"));
+        assert_eq!(history_row.1.as_deref(), Some("validation_failed"));
+
+        let search_evidence_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM provider_search_evidence WHERE task_id = ?1",
+                params![task.task_id],
+                |row| row.get(0),
+            )
+            .expect("search evidence should count");
+        let candidate_evidence_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM provider_candidate_evidence WHERE task_id = ?1",
+                params![task.task_id],
+                |row| row.get(0),
+            )
+            .expect("candidate evidence should count");
+        let cache_failure_class: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT failure_class FROM provider_response_cache WHERE request_signature = ?1 AND provider_id = 'qobuz'",
+                params![director_request_signature(&task)],
+                |row| row.get(0),
+            )
+            .expect("response cache should load");
+        let identity_evidence_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM identity_resolution_evidence WHERE task_id = ?1",
+                params![task.task_id],
+                |row| row.get(0),
+            )
+            .expect("identity evidence should count");
+        let alias_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM source_aliases WHERE entity_type = 'request_signature' AND entity_key = ?1",
+                params![director_request_signature(&task)],
+                |row| row.get(0),
+            )
+            .expect("aliases should count");
+
+        assert_eq!(search_evidence_count, 1);
+        assert_eq!(candidate_evidence_count, 1);
+        assert_eq!(cache_failure_class.as_deref(), Some("validation_failed"));
+        assert_eq!(identity_evidence_count, 1);
+        assert!(alias_count >= 2);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
     fn director_task_history_persists_candidate_sets_and_negative_memory() {
         use crate::director::models::{
             CandidateQuality, CandidateRecord, CandidateScore, ProviderSearchCandidate,
@@ -2204,6 +3453,10 @@ mod tests {
                 year: Some(2024),
                 duration_secs: Some(42.0),
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy: AcquisitionStrategy::Standard,
         };
@@ -2387,16 +3640,13 @@ mod tests {
         let provider_memory = db
             .get_director_provider_memory(&signature)
             .expect("provider memory should load");
-        assert_eq!(
-            provider_memory,
-            vec![StoredProviderMemory {
-                provider_id: "provider-two".to_string(),
-                last_outcome: "no_usable_candidates".to_string(),
-                failure_class: "validation_failed".to_string(),
-                retryable: false,
-                candidate_count: 1,
-            }]
-        );
+        assert_eq!(provider_memory.len(), 1);
+        assert_eq!(provider_memory[0].provider_id, "provider-two");
+        assert_eq!(provider_memory[0].last_outcome, "no_usable_candidates");
+        assert_eq!(provider_memory[0].failure_class, "validation_failed");
+        assert!(!provider_memory[0].retryable);
+        assert_eq!(provider_memory[0].candidate_count, 1);
+        assert!(provider_memory[0].updated_at.contains('-'));
 
         let _ = fs::remove_file(db_path);
     }

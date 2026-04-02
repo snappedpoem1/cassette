@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.  
 **Rule**: If a task is not in this file, it is not committed project scope yet.  
-**Last Updated**: 2026-03-31
+**Last Updated**: 2026-04-02
 
 Short execution board: see `HIT_LIST.md`.
 
@@ -38,7 +38,7 @@ Do them in this order unless a higher-priority production issue interrupts:
 4. Prove audit completeness across organization and admission flows.
 5. Raise packaging and clean-machine confidence.
 6. Formalize performance baselines and regression budgets.
-7. Reuse persisted provenance and candidate memory in runtime behavior and UI.
+7. Review the live behavior of persisted provenance and candidate-memory reuse.
 8. Add canonical release identity persistence and a stronger acquisition request contract.
 
 ---
@@ -161,6 +161,8 @@ Touchpoints:
 
 Acceptance:
 
+- [x] Canonical audit-trace query surface exists for operation events plus gatekeeper audit rows
+- [x] Regression coverage exists for the audit-trace query surface
 - [ ] Representative tests added or updated
 - [ ] Validation/logging proof is repeatable
 - [ ] Documentation updated if expectations change
@@ -219,6 +221,7 @@ Acceptance:
 - [ ] Install/build steps documented for a clean environment
 - [ ] Gaps and assumptions recorded
 - [ ] Release checklist updated
+- [x] Trust-spine verification script exists (`scripts/verify_trust_spine.ps1`)
 
 ### [P1] [todo] Formalize performance baseline and regression budget
 
@@ -232,7 +235,7 @@ Acceptance:
 - [ ] Baselines recorded in `TELEMETRY.md`
 - [ ] Regression thresholds documented
 
-### [P1] [in_progress] Reuse persisted provenance and candidate memory in runtime behavior
+### [P1] [review] Reuse persisted provenance and candidate memory in runtime behavior
 
 Why:
 
@@ -243,16 +246,49 @@ Why:
 Acceptance:
 
 - [x] At least one user-visible surface explains prior candidate or provider outcomes (debug panel: per-provider success/fail counts, recent task results with disposition and error)
-- [ ] At least one runtime path reuses persisted search/candidate memory before re-querying
-- [ ] Exclusion or negative-result memory is wired into a real decision path
+- [x] Useful provider evidence is retained in normalized runtime tables instead of only nested `result_json` blobs (`provider_search_evidence`, `provider_candidate_evidence`, `provider_response_cache`, `identity_resolution_evidence`, `source_aliases`)
+- [x] Failed terminal history rows retain provider attribution and `failure_class`
+- [x] At least one runtime path reuses persisted search/candidate memory before re-querying
+- [x] Exclusion or negative-result memory is wired into a real decision path
 
-### [P1] [done] Clean the remaining warning budget
+### [P1] [review] Accumulate librarian fingerprint evidence without full-library reruns
+
+Why:
+
+- Gatekeeper could already compute fingerprints, but the librarian/control-plane side still did not
+  retain that identity evidence as a first-class fact.
+- The bounded fix is to persist `acoustid_fingerprint` in `local_files`, track per-file backfill
+  attempt state, and backfill in small deterministic slices during sync instead of treating it as
+  throwaway validation output.
 
 Acceptance:
 
-- [x] `cargo check --workspace` is warning-free
+- [x] `local_files` persists `acoustid_fingerprint`
+- [x] Gatekeeper admission writes `acoustid_fingerprint` back into `local_files`
+- [x] Librarian sync exposes a bounded fingerprint backfill path
+- [x] Regression coverage proves missing fingerprints are backfilled and stored
+- [x] Unchanged fingerprint failures are suppressed instead of retried every sync
+- [x] File mtime changes invalidate stale fingerprint state so rewritten files can be re-backfilled
+
+### [P1] [review] Clean the remaining warning budget
+
+Acceptance:
+
+- [ ] `cargo check --workspace` is warning-free
 - [x] Real-Debrid dead fields resolved
 - [x] CLI bin warnings caused by `state.rs` inclusion removed
+
+### [P1] [done] Repair `cargo test --workspace` on Windows
+
+Why:
+
+- The old Windows failure was in the Tauri lib-test harness startup path, not in the underlying pure Rust logic.
+- The fix was to move pure `src-tauri` assertions into `src-tauri/tests/pure_logic.rs` and stop treating the Tauri-linked lib harness as a workspace test dependency.
+
+Acceptance:
+
+- [x] Root cause identified and documented
+- [x] `cargo test --workspace` passes again, or the test split is deliberately redesigned and documented
 
 ### [P1] [done] Add provider health awareness to the Director waterfall
 
@@ -293,6 +329,7 @@ Why:
 Acceptance:
 
 - [ ] Request contract supports more than `artist + title + optional album`
+- [x] Runtime schema now includes canonical artist/release/recording and alias persistence surfaces (`canonical_artists`, `canonical_releases`, `canonical_recordings`, `source_aliases`)
 - [ ] MusicBrainz-backed artist/release-group/release/recording identity persistence plan is documented
 - [ ] Follow-on implementation scope is recorded in `WORKLIST.md`
 

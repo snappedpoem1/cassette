@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 
 ## Architecture
 
@@ -73,16 +73,25 @@ Last updated: 2026-04-01
 | Spotify | History import, search, discography seeds | Optional OAuth |
 
 ### Data Pipeline
+- Sidecar-owned acquisition requests now persist in `cassette_librarian.db` with request status, task linkage, request signatures, normalized target fields, and event timeline rows
+- Current download entrypoints (`start_download`, album queueing, discography queueing, backlog runner) now create control-plane request rows before submitting Director tasks
 - Spotify play history import from external SQLite DB
 - Missing album detection (Spotify albums not in local library)
 - Album and Spotify-missing queues expand releases into per-track `TrackTask` submissions via MusicBrainz release tracklists
 - Director task result persistence to `director_task_history`
 - Terminal history retains the original `TrackTask` request payload and strategy for failed/cancelled/finalized results
+- Terminal history also preserves the last known provider and `failure_class` for failed/cancelled rows instead of leaving those outcomes provider-blank
 - Pending director task persistence in `director_pending_tasks` for deterministic startup recovery
 - Request-signature persistence threads through pending tasks, terminal history, candidate sets, and provider memory
 - Full candidate-set persistence captures scored, rejected, and selected candidates in `director_candidate_sets` and `director_candidate_items`
 - Provider search outcomes and negative-result memory persist in `director_provider_searches`, `director_provider_attempts`, and `director_provider_memory`
+- Provider search/candidate evidence, per-provider response snapshots, identity evidence, and source aliases now also persist in `provider_search_evidence`, `provider_candidate_evidence`, `provider_response_cache`, `identity_resolution_evidence`, and `source_aliases`
+- Director search now consults persisted provider memory before network search: fresh dead-end memory can skip a provider entirely, and fresh cached candidate payloads can hydrate the in-memory search cache for identical requests
+- Runtime `tracks` rows now persist sovereignty/evidence fields (`isrc`, MusicBrainz IDs, canonical artist/release IDs, `quality_tier`, `content_hash`) instead of silently dropping them on upsert
+- Canonical identity persistence now includes `canonical_recordings` in the active runtime DB
+- Sidecar canonical identity persistence now includes `canonical_artists`, `canonical_releases`, and `canonical_recordings` for request-planning ownership
 - `TrackTask` payloads now carry `desired_track_id` and `source_operation_id` for control-plane closure
+- Librarian `local_files` rows now persist `acoustid_fingerprint`, per-file fingerprint attempt state, and source mtime proof; Gatekeeper admission writes fingerprints back into the same table, and `run_librarian_sync` performs bounded parallel backfill with unchanged-failure suppression and stale-fingerprint invalidation on file mtime change
 
 ## Active Runtime Database Schema
 
@@ -127,6 +136,8 @@ Director runtime behavior now exposes config for:
 - provider busy/temp-outage/rate-limit cooldowns
 - validation failure bail threshold
 - search cache TTL/capacity
+- persisted provider-memory freshness TTL
+- persisted provider-response-cache freshness TTL
 
 ## Pipeline Integration Architecture
 
@@ -232,10 +243,12 @@ It now:
 
 - Frontend still keeps `get_download_jobs` as a catch-up and resume fallback even though push events are now primary
 - Dual schema: richer librarian/library model exists but isn't fully wired into the active runtime UI path
+- `cargo test --workspace` is a reliable gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure was isolated to the Tauri lib-test harness missing the desktop manifest; the pure `src-tauri` assertions now live in `src-tauri/tests/pure_logic.rs`.
 - `MetadataRepairOnly` strategy is still a stub
 - Discogs/Last.fm enrichers outside now-playing remain stubbed/no-op
 - Bandcamp source remains placeholder-only
 - Candidate persistence exists, but the app still does not reuse that memory for pre-acquisition review, exclusion decisions, or explicit user override lanes
+- Fingerprint accumulation is now bounded and incremental, not a full-library canonical backfill worker; large libraries will converge over repeated syncs rather than one sweep
 - `batch_download_cli` still uses the older album-history/manual workflow and has not been removed yet
 - `director/providers/` is the active acquisition path; `downloader/` is now only a legacy compatibility re-export for provider settings types
 - Organizer repair tooling is deeper now, but the live app-DB repair proof and bounded live organize proof are still pending
@@ -351,12 +364,15 @@ Run command: `engine_pipeline_cli --resume --stale-claim-minutes 1 --limit 5 --s
 
 ## Verification Snapshot
 
-Verified on 2026-03-30:
+Verified on 2026-04-02:
 
-- `cargo check --workspace` passes
+- `cargo check --workspace` passes, with existing dead-code warnings in `src-tauri/src/bin/torrent_album_cli.rs`
+- `cargo test -p cassette-core` passes
 - `cargo test --workspace` passes
 - `npm run build` passes in `ui/` (with existing Svelte accessibility warnings on `src/routes/downloads/+page.svelte`)
 - `.\scripts\smoke_desktop.ps1` passes
+- `.\scripts\verify_trust_spine.ps1` exists for the request-contract, audit-trace, core-test, UI-build, and smoke verification pass
+- `src-tauri/tests/pure_logic.rs` now carries the Windows-safe `src-tauri` pure-logic assertions (Spotify import parsing, now-playing parsing, pending recovery planning, and sidecar bootstrap) so the test suite no longer depends on the Tauri lib harness startup path
 - `engine_pipeline_cli` and `tag_rescue_cli` compile and test as part of the workspace
 - `engine_pipeline_cli` now targets a dedicated sidecar DB (`cassette_librarian.db`) because the active runtime `tracks` table shape is not compatible with the librarian schema
 - Librarian/orchestrator migrations now ensure `delta_queue.source_operation_id`, `claimed_at`, and `claim_run_id`
@@ -366,6 +382,7 @@ Verified on 2026-03-30:
 - `tag_rescue_cli` now plans/applies staged track-number recovery and can emit a JSON repair report
 - Organizer canonical path generation now preserves an existing non-zero filename track prefix when DB `track_number` is zero or missing
 - `organize_cli --live` now aborts when the proposed move set crosses the zero-track rename threshold
+- Organizer path updates now converge app `tracks.path` and sidecar `local_files` path metadata together, including stale-conflict displacement for pre-existing sidecar rows at the destination path
 - Deezer acquisition now uses streaming decryption and recoverable session invalidation
 - Director validation now reports truthful `audio_readable` / `header_readable` fields and rejects codec/container mismatches
 - Director staged-download resume now honors `Retry-After`, preflights `Content-Length`, and validates range semantics before append
@@ -379,6 +396,8 @@ Verified on 2026-03-30:
 - `start_backlog_run` / `stop_backlog_run` / `get_backlog_status` Tauri commands added: background async loop through Spotify missing albums, emits `director-backlog-progress` events with live stats
 - `get_director_debug_stats` command added: returns pending task count, per-provider success/fail breakdown, and recent task results
 - Downloads UI: Backlog panel with start/stop/limit controls and live progress display; Debug panel with per-provider stats and scrollable recent results list
+- Downloads UI now also exposes recent control-plane requests, per-request timeline events, and request-level candidate/provenance inspection
+- Tauri command surface now includes `create_acquisition_request`, `list_acquisition_requests`, `get_acquisition_request_timeline`, `get_request_candidate_review`, and `get_request_lineage`
 
 ## Documentation
 
@@ -392,3 +411,4 @@ Verified on 2026-03-30:
 | `docs/TOOL_AND_SERVICE_REGISTRY.md` | Tool/service usage vs potential |
 | `docs/CACHE_PROVENANCE_STRATEGY.md` | Cache and provenance persistence strategy |
 | `docs/ARCHITECTURAL_RECOMMENDATIONS.md` | Architecture convergence recommendations |
+| `docs/CLEAN_MACHINE_CHECKLIST.md` | Bootstrap assumptions and trust-spine verification pass |

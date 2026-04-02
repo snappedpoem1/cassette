@@ -133,17 +133,34 @@ export interface ProviderHealthEvent {
 export interface DownloadConfig {
   library_base: string;
   staging_folder: string;
+  // Soulseek
   slskd_url: string | null;
   slskd_user: string | null;
   slskd_pass: string | null;
+  slskd_downloads_dir: string | null;
+  // Real-Debrid / torrents
   real_debrid_key: string | null;
+  jackett_url: string | null;
+  jackett_api_key: string | null;
+  // Usenet
+  nzbgeek_api_key: string | null;
+  sabnzbd_url: string | null;
+  sabnzbd_api_key: string | null;
+  // Streaming
   qobuz_email: string | null;
   qobuz_password: string | null;
   deezer_arl: string | null;
+  // Spotify
   spotify_client_id: string | null;
   spotify_client_secret: string | null;
   spotify_access_token: string | null;
+  // Enrichment
   genius_token: string | null;
+  discogs_token: string | null;
+  lastfm_api_key: string | null;
+  // Tools
+  ytdlp_path: string | null;
+  sevenzip_path: string | null;
 }
 
 export interface ProviderStatus {
@@ -305,6 +322,68 @@ export interface DirectorDebugStats {
   recent_results: TaskResultSummary[];
 }
 
+export interface AcquisitionRequest {
+  id: number;
+  scope: string;
+  source: 'SpotifyLibrary' | 'SpotifyHistory' | 'SpotifyPlaylist' | 'Manual';
+  source_name: string;
+  source_track_id?: string | null;
+  source_album_id?: string | null;
+  source_artist_id?: string | null;
+  artist: string;
+  album?: string | null;
+  title: string;
+  track_number?: number | null;
+  disc_number?: number | null;
+  year?: number | null;
+  duration_secs?: number | null;
+  isrc?: string | null;
+  musicbrainz_recording_id?: string | null;
+  musicbrainz_release_id?: string | null;
+  canonical_artist_id?: number | null;
+  canonical_release_id?: number | null;
+  strategy: string;
+  quality_policy?: string | null;
+  excluded_providers: string[];
+  edition_policy?: string | null;
+  confirmation_policy: string;
+  desired_track_id?: number | null;
+  source_operation_id?: string | null;
+  task_id?: string | null;
+  request_signature?: string | null;
+  status: string;
+  raw_payload_json?: string | null;
+}
+
+export interface AcquisitionRequestListItem {
+  id: number;
+  scope: string;
+  artist: string;
+  album: string | null;
+  title: string;
+  status: string;
+  strategy: string;
+  task_id: string | null;
+  request_signature: string;
+  selected_provider: string | null;
+  failure_class: string | null;
+  final_path: string | null;
+  execution_disposition: string | null;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface AcquisitionRequestEvent {
+  id: number;
+  request_id: number;
+  task_id: string | null;
+  event_type: string;
+  status: string;
+  message: string | null;
+  payload_json: string | null;
+  created_at: string;
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -414,6 +493,16 @@ export const api = {
     invoke<string | null>('get_task_provenance', { task_id: taskId }),
   getRecentTaskResults: (limit?: number) =>
     invoke<TaskResultSummary[]>('get_recent_task_results', { limit }),
+  createAcquisitionRequest: (request: AcquisitionRequest) =>
+    invoke('create_acquisition_request', { request }),
+  listAcquisitionRequests: (status?: string, limit?: number) =>
+    invoke<AcquisitionRequestListItem[]>('list_acquisition_requests', { status, limit }),
+  getAcquisitionRequestTimeline: (requestId: number) =>
+    invoke<AcquisitionRequestEvent[]>('get_acquisition_request_timeline', { requestId }),
+  getRequestCandidateReview: (requestId: number) =>
+    invoke<CandidateReviewItem[]>('get_request_candidate_review', { requestId }),
+  getRequestLineage: (requestId: number) =>
+    invoke<unknown>('get_request_lineage', { requestId }),
 
   // Import
   parseSpotifyHistory: (path: string) =>

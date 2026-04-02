@@ -54,6 +54,21 @@ pub fn save_config(state: State<'_, AppState>, config: DownloadConfig) {
         true,
     );
     persist_optional_setting(&db, "genius_token", &config.genius_token, true);
+
+    persist_optional_setting(&db, "jackett_url", &config.jackett_url, false);
+    persist_optional_setting(&db, "jackett_api_key", &config.jackett_api_key, true);
+
+    persist_optional_setting(&db, "slskd_downloads_dir", &config.slskd_downloads_dir, false);
+
+    persist_optional_setting(&db, "nzbgeek_api_key", &config.nzbgeek_api_key, true);
+    persist_optional_setting(&db, "sabnzbd_url", &config.sabnzbd_url, false);
+    persist_optional_setting(&db, "sabnzbd_api_key", &config.sabnzbd_api_key, true);
+
+    persist_optional_setting(&db, "discogs_token", &config.discogs_token, true);
+    persist_optional_setting(&db, "lastfm_api_key", &config.lastfm_api_key, true);
+
+    persist_optional_setting(&db, "ytdlp_path", &config.ytdlp_path, false);
+    persist_optional_setting(&db, "sevenzip_path", &config.sevenzip_path, false);
 }
 
 #[tauri::command]
@@ -99,6 +114,24 @@ fn load_config(state: &AppState) -> DownloadConfig {
     );
     config.genius_token = read_optional_setting(&db, "genius_token", config.genius_token);
 
+    config.jackett_url = read_optional_setting(&db, "jackett_url", config.jackett_url);
+    config.jackett_api_key = read_optional_setting(&db, "jackett_api_key", config.jackett_api_key);
+
+    config.slskd_downloads_dir =
+        read_optional_setting(&db, "slskd_downloads_dir", config.slskd_downloads_dir);
+
+    config.nzbgeek_api_key =
+        read_optional_setting(&db, "nzbgeek_api_key", config.nzbgeek_api_key);
+    config.sabnzbd_url = read_optional_setting(&db, "sabnzbd_url", config.sabnzbd_url);
+    config.sabnzbd_api_key =
+        read_optional_setting(&db, "sabnzbd_api_key", config.sabnzbd_api_key);
+
+    config.discogs_token = read_optional_setting(&db, "discogs_token", config.discogs_token);
+    config.lastfm_api_key = read_optional_setting(&db, "lastfm_api_key", config.lastfm_api_key);
+
+    config.ytdlp_path = read_optional_setting(&db, "ytdlp_path", config.ytdlp_path);
+    config.sevenzip_path = read_optional_setting(&db, "sevenzip_path", config.sevenzip_path);
+
     config
 }
 
@@ -126,6 +159,26 @@ fn mask_secret_fields(config: &mut DownloadConfig) {
         .as_ref()
         .map(|_| MASKED_SECRET.to_string());
     config.genius_token = config.genius_token.as_ref().map(|_| MASKED_SECRET.to_string());
+    config.jackett_api_key = config
+        .jackett_api_key
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
+    config.nzbgeek_api_key = config
+        .nzbgeek_api_key
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
+    config.sabnzbd_api_key = config
+        .sabnzbd_api_key
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
+    config.discogs_token = config
+        .discogs_token
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
+    config.lastfm_api_key = config
+        .lastfm_api_key
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
 }
 
 fn persist_string_setting(db: &Db, key: &str, value: &str) {

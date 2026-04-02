@@ -14,8 +14,10 @@ use crate::director::scoring::score_candidate;
 use crate::director::strategy::{StrategyPlan, StrategyPlanner};
 use crate::director::temp::{TaskTempContext, TempManager};
 use crate::director::validation::validate_candidate;
+use crate::db::{director_request_signature, Db, StoredProviderMemory, StoredProviderResponseCache};
 use chrono::Utc;
 use moka::sync::Cache;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
@@ -38,6 +40,8 @@ enum ProviderSkipReason {
     HealthDown(ProviderHealthState),
     Disabled { reason: String },
     CoolingDown { until: chrono::DateTime<Utc>, reason: String },
+    PersistedCoolingDown { until: chrono::DateTime<Utc>, reason: String },
+    PersistedMemory { reason: String },
 }
 
 impl ProviderSkipReason {
@@ -54,6 +58,15 @@ impl ProviderSkipReason {
             Self::CoolingDown { until, reason } => {
                 format!("skipped: provider cooling down until {} - {reason}", until.to_rfc3339())
             }
+            Self::PersistedCoolingDown { until, reason } => {
+                format!(
+                    "skipped: persisted provider cooldown until {} - {reason}",
+                    until.to_rfc3339()
+                )
+            }
+            Self::PersistedMemory { reason } => {
+                format!("skipped: persisted provider memory - {reason}")
+            }
         }
     }
 
@@ -62,6 +75,8 @@ impl ProviderSkipReason {
             Self::HealthDown(_) => "skipped_health_down",
             Self::Disabled { .. } => "skipped_runtime_unavailable",
             Self::CoolingDown { .. } => "skipped_runtime_cooldown",
+            Self::PersistedCoolingDown { .. } => "skipped_persisted_cooldown",
+            Self::PersistedMemory { .. } => "skipped_persisted_memory",
         }
     }
 
@@ -70,12 +85,25 @@ impl ProviderSkipReason {
             Self::HealthDown(state) => state.message.clone(),
             Self::Disabled { reason } => Some(reason.clone()),
             Self::CoolingDown { reason, .. } => Some(reason.clone()),
+            Self::PersistedCoolingDown { reason, .. } => Some(reason.clone()),
+            Self::PersistedMemory { reason } => Some(reason.clone()),
         }
     }
 
     fn retryable(&self) -> bool {
-        !matches!(self, Self::Disabled { .. })
+        !matches!(self, Self::Disabled { .. } | Self::PersistedMemory { .. })
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct PersistedProviderHints {
+    skip_reasons: HashMap<String, ProviderSkipReason>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistedProviderResponseEnvelope {
+    #[serde(default)]
+    candidate_records: Vec<CandidateRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -953,6 +981,13 @@ async fn execute_waterfall(
         .iter()
         .map(|provider| (provider.descriptor().id.clone(), Arc::clone(provider)))
         .collect();
+    let persisted_hints = load_persisted_provider_hints(
+        config,
+        task,
+        search_cache,
+        provider_cache_epochs,
+    )
+    .await;
     let mut valid_candidates = Vec::<(CandidateDisposition, ProviderDescriptor)>::new();
     let mut deferred_providers = Vec::<String>::new();
 
@@ -968,6 +1003,7 @@ async fn execute_waterfall(
                 config,
                 provider_health_state,
                 provider_runtime_state,
+                &persisted_hints.skip_reasons,
                 provider_id,
             )
             .await
@@ -1037,6 +1073,7 @@ async fn execute_waterfall(
             config,
             provider_health_state,
             provider_runtime_state,
+            &persisted_hints.skip_reasons,
             provider_id,
         )
         .await
@@ -1118,6 +1155,7 @@ async fn execute_waterfall(
             config,
             provider_health_state,
             provider_runtime_state,
+            &persisted_hints.skip_reasons,
             provider_id,
         )
         .await
@@ -1500,10 +1538,188 @@ async fn clear_provider_runtime_cooldown(
     }
 }
 
+async fn load_persisted_provider_hints(
+    config: &DirectorConfig,
+    task: &TrackTask,
+    search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_cache_epochs: &Arc<RwLock<HashMap<String, u64>>>,
+) -> PersistedProviderHints {
+    let Some(db_path) = config.runtime_db_path.as_deref() else {
+        return PersistedProviderHints::default();
+    };
+
+    let db = match Db::open_read_only(db_path) {
+        Ok(db) => db,
+        Err(error) => {
+            warn!(
+                path = %db_path.display(),
+                error = %error,
+                "failed to open runtime db for persisted provider hints"
+            );
+            return PersistedProviderHints::default();
+        }
+    };
+
+    let request_signature = director_request_signature(task);
+    let now = Utc::now();
+    let memory_rows = match db.get_director_provider_memory(&request_signature) {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(
+                signature = %request_signature,
+                error = %error,
+                "failed to load persisted provider memory"
+            );
+            Vec::new()
+        }
+    };
+    let response_rows = match db.get_provider_response_cache(&request_signature) {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(
+                signature = %request_signature,
+                error = %error,
+                "failed to load persisted provider response cache"
+            );
+            Vec::new()
+        }
+    };
+
+    hydrate_search_cache_from_persisted_rows(
+        config,
+        task,
+        search_cache,
+        provider_cache_epochs,
+        &response_rows,
+        now,
+    )
+    .await;
+
+    let mut skip_reasons = HashMap::new();
+    for row in memory_rows {
+        if let Some(reason) = persisted_provider_skip_reason(config, &row, now) {
+            skip_reasons.insert(row.provider_id.clone(), reason);
+        }
+    }
+
+    PersistedProviderHints { skip_reasons }
+}
+
+async fn hydrate_search_cache_from_persisted_rows(
+    config: &DirectorConfig,
+    task: &TrackTask,
+    search_cache: &Arc<Cache<String, Arc<Vec<ProviderSearchCandidate>>>>,
+    provider_cache_epochs: &Arc<RwLock<HashMap<String, u64>>>,
+    rows: &[StoredProviderResponseCache],
+    now: chrono::DateTime<Utc>,
+) {
+    for row in rows {
+        let Some(updated_at) = parse_persisted_utc(row.updated_at.as_str()) else {
+            continue;
+        };
+        if now
+            .signed_duration_since(updated_at)
+            .num_seconds()
+            > config.provider_response_cache_max_age_secs.max(1)
+        {
+            continue;
+        }
+        if row.candidate_count == 0 {
+            continue;
+        }
+        let Ok(envelope) =
+            serde_json::from_str::<PersistedProviderResponseEnvelope>(&row.response_json)
+        else {
+            continue;
+        };
+
+        let mut candidate_rows = envelope
+            .candidate_records
+            .into_iter()
+            .filter(|record| record.provider_id == row.provider_id)
+            .collect::<Vec<_>>();
+        if candidate_rows.is_empty() {
+            continue;
+        }
+        candidate_rows.sort_by_key(|record| record.search_rank);
+
+        let mut seen = std::collections::BTreeSet::<String>::new();
+        let candidates = candidate_rows
+            .into_iter()
+            .filter_map(|record| {
+                seen.insert(record.candidate.provider_candidate_id.clone())
+                    .then_some(record.candidate)
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+
+        let cache_key = provider_search_cache_key(provider_cache_epochs, &row.provider_id, task).await;
+        if search_cache.get(&cache_key).is_none() {
+            search_cache.insert(cache_key, Arc::new(candidates));
+        }
+    }
+}
+
+fn persisted_provider_skip_reason(
+    config: &DirectorConfig,
+    row: &StoredProviderMemory,
+    now: chrono::DateTime<Utc>,
+) -> Option<ProviderSkipReason> {
+    let updated_at = parse_persisted_utc(row.updated_at.as_str())?;
+    if now
+        .signed_duration_since(updated_at)
+        .num_seconds()
+        > config.provider_memory_max_age_secs.max(1)
+    {
+        return None;
+    }
+
+    if let Some(until) = row
+        .backoff_until
+        .as_deref()
+        .and_then(parse_persisted_utc)
+        .filter(|until| *until > now)
+    {
+        return Some(ProviderSkipReason::PersistedCoolingDown {
+            until,
+            reason: format!(
+                "{} ({})",
+                row.failure_class,
+                row.last_outcome
+            ),
+        });
+    }
+
+    match row.failure_class.as_str() {
+        "no_result" | "unsupported" | "provider_unhealthy" | "auth_failed" => {
+            Some(ProviderSkipReason::PersistedMemory {
+                reason: format!("fresh {} from {}", row.failure_class, row.last_outcome),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_persisted_utc(value: &str) -> Option<chrono::DateTime<Utc>> {
+    use chrono::{NaiveDateTime, TimeZone};
+
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| Utc.from_utc_datetime(&dt))
+        })
+}
+
 async fn should_skip_provider(
     config: &DirectorConfig,
     provider_health_state: &Arc<RwLock<HashMap<String, ProviderHealthState>>>,
     provider_runtime_state: &Arc<RwLock<HashMap<String, ProviderRuntimeState>>>,
+    persisted_skip_reasons: &HashMap<String, ProviderSkipReason>,
     provider_id: &str,
 ) -> Option<ProviderSkipReason> {
     let runtime_state = provider_runtime_state.read().await.get(provider_id).cloned();
@@ -1521,6 +1737,9 @@ async fn should_skip_provider(
                 });
             }
         }
+    }
+    if let Some(reason) = persisted_skip_reasons.get(provider_id).cloned() {
+        return Some(reason);
     }
     let state = provider_health_state.read().await.get(provider_id).cloned()?;
     let age_secs = chrono::Utc::now()
@@ -1655,10 +1874,12 @@ mod tests {
     use crate::director::config::{ProviderPolicy, TempRecoveryPolicy};
     use crate::director::models::{
         AcquisitionStrategy, NormalizedTrack, ProviderCapabilities, ProviderHealthState,
-        ProviderHealthStatus, TrackTaskSource,
+        ProviderHealthStatus, ProviderSearchRecord, TrackTaskSource,
     };
+    use crate::db::Db;
     use async_trait::async_trait;
     use tempfile::tempdir;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
     #[derive(Clone)]
@@ -1670,6 +1891,7 @@ mod tests {
         health_status: Option<ProviderHealthStatus>,
         search_error: Option<ProviderError>,
         acquire_error: Option<ProviderError>,
+        search_calls: Option<Arc<AtomicUsize>>,
     }
 
     #[async_trait]
@@ -1698,6 +1920,9 @@ mod tests {
             _task: &TrackTask,
             _strategy: &StrategyPlan,
         ) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
+            if let Some(counter) = &self.search_calls {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
             if let Some(error) = &self.search_error {
                 return Err(error.clone());
             }
@@ -1759,6 +1984,10 @@ mod tests {
                 year: Some(2024),
                 duration_secs: Some(1.0),
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy,
         }
@@ -1799,6 +2028,7 @@ mod tests {
             health_status: None,
             search_error: None,
             acquire_error: None,
+            search_calls: None,
         })
     }
 
@@ -1838,6 +2068,7 @@ mod tests {
             health_status: None,
             search_error: None,
             acquire_error: None,
+            search_calls: None,
         })
     }
 
@@ -1871,6 +2102,7 @@ mod tests {
             health_status: Some(ProviderHealthStatus::Down),
             search_error: None,
             acquire_error: None,
+            search_calls: None,
         })
     }
 
@@ -1904,6 +2136,7 @@ mod tests {
             health_status: None,
             search_error: None,
             acquire_error: None,
+            search_calls: None,
         })
     }
 
@@ -1926,6 +2159,47 @@ mod tests {
             health_status: None,
             search_error: Some(error),
             acquire_error: None,
+            search_calls: None,
+        })
+    }
+
+    fn counted_provider(
+        id: &str,
+        trust_rank: i32,
+        payload: Vec<u8>,
+        extension_hint: &str,
+        search_calls: Arc<AtomicUsize>,
+    ) -> Arc<dyn Provider> {
+        Arc::new(MockProvider {
+            descriptor: ProviderDescriptor {
+                id: id.to_string(),
+                display_name: id.to_string(),
+                trust_rank,
+                capabilities: ProviderCapabilities {
+                    supports_search: true,
+                    supports_download: true,
+                    supports_lossless: extension_hint == "wav",
+                    supports_batch: false,
+                },
+            },
+            search_candidates: vec![ProviderSearchCandidate {
+                provider_id: id.to_string(),
+                provider_candidate_id: format!("{id}-candidate"),
+                artist: "Artist".to_string(),
+                title: "Song".to_string(),
+                album: Some("Album".to_string()),
+                duration_secs: Some(1.0),
+                extension_hint: Some(extension_hint.to_string()),
+                bitrate_kbps: Some(if extension_hint == "wav" { 1411 } else { 320 }),
+                cover_art_url: None,
+                metadata_confidence: 0.95,
+            }],
+            payload,
+            acquire_gate: None,
+            health_status: None,
+            search_error: None,
+            acquire_error: None,
+            search_calls: Some(search_calls),
         })
     }
 
@@ -2444,5 +2718,212 @@ mod tests {
             second.attempts,
             second.provider_searches
         );
+    }
+
+    #[tokio::test]
+    async fn director_skips_provider_with_fresh_persisted_negative_memory() {
+        let root = tempdir().expect("temp dir");
+        let db_path = root.path().join("runtime.db");
+        let db = Db::open(&db_path).expect("runtime db");
+        let request_task = task(AcquisitionStrategy::Standard);
+        db.save_director_task_result(
+            &DirectorTaskResult {
+                task_id: "persisted-failure".to_string(),
+                disposition: FinalizedTrackDisposition::Failed,
+                finalized: None,
+                attempts: Vec::new(),
+                error: Some("no result".to_string()),
+                candidate_records: Vec::new(),
+                provider_searches: vec![ProviderSearchRecord {
+                    provider_id: "dead".to_string(),
+                    provider_display_name: "dead".to_string(),
+                    provider_trust_rank: 1,
+                    provider_order_index: 0,
+                    outcome: "no_candidates".to_string(),
+                    candidate_count: 0,
+                    error: None,
+                    retryable: false,
+                }],
+            },
+            Some(&request_task),
+        )
+        .expect("seed provider memory");
+
+        let dead_search_calls = Arc::new(AtomicUsize::new(0));
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            runtime_db_path: Some(db_path.clone()),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            provider_policies: vec![
+                ProviderPolicy {
+                    provider_id: "dead".to_string(),
+                    max_concurrency: 1,
+                },
+                ProviderPolicy {
+                    provider_id: "fallback".to_string(),
+                    max_concurrency: 1,
+                },
+            ],
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(
+            config,
+            vec![
+                counted_provider(
+                    "dead",
+                    1,
+                    build_wav_bytes(),
+                    "wav",
+                    Arc::clone(&dead_search_calls),
+                ),
+                provider("fallback", 5, build_wav_bytes(), "wav"),
+            ],
+        );
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+
+        handle
+            .submitter
+            .submit(task(AcquisitionStrategy::Standard))
+            .await
+            .expect("submit task");
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = results.recv().await.expect("receive result");
+                if matches!(
+                    result.disposition,
+                    FinalizedTrackDisposition::Finalized | FinalizedTrackDisposition::AlreadyPresent
+                ) {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("result received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        assert_eq!(dead_search_calls.load(Ordering::SeqCst), 0);
+        assert!(result
+            .attempts
+            .iter()
+            .any(|attempt| attempt.provider_id == "dead"
+                && attempt.outcome.contains("persisted provider memory")));
+    }
+
+    #[tokio::test]
+    async fn director_hydrates_search_cache_from_persisted_response_cache() {
+        let root = tempdir().expect("temp dir");
+        let db_path = root.path().join("runtime.db");
+        let db = Db::open(&db_path).expect("runtime db");
+        let base_config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            runtime_db_path: Some(db_path.clone()),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            provider_policies: vec![ProviderPolicy {
+                provider_id: "cached".to_string(),
+                max_concurrency: 1,
+            }],
+            ..DirectorConfig::default()
+        };
+
+        let first_director = Director::new(
+            base_config.clone(),
+            vec![provider("cached", 1, build_wav_bytes(), "wav")],
+        );
+        let first_handle = first_director.start();
+        let mut first_results = first_handle.subscribe_results();
+        let first_task = task(AcquisitionStrategy::Standard);
+        first_handle
+            .submitter
+            .submit(first_task.clone())
+            .await
+            .expect("submit first task");
+        let first_result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = first_results.recv().await.expect("receive first result");
+                if matches!(
+                    result.disposition,
+                    FinalizedTrackDisposition::Finalized | FinalizedTrackDisposition::AlreadyPresent
+                ) {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("first result received");
+        db.save_director_task_result(&first_result, Some(&first_task))
+            .expect("persist first result");
+        first_handle.shutdown().await.expect("shutdown first director");
+
+        let cached_search_calls = Arc::new(AtomicUsize::new(0));
+        let second_director = Director::new(
+            base_config,
+            vec![counted_provider(
+                "cached",
+                1,
+                build_wav_bytes(),
+                "wav",
+                Arc::clone(&cached_search_calls),
+            )],
+        );
+        let second_handle = second_director.start();
+        let mut second_results = second_handle.subscribe_results();
+        let second_task = TrackTask {
+            task_id: "task-2".to_string(),
+            ..task(AcquisitionStrategy::Standard)
+        };
+        second_handle
+            .submitter
+            .submit(second_task)
+            .await
+            .expect("submit second task");
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = second_results.recv().await.expect("receive second result");
+                if matches!(
+                    result.disposition,
+                    FinalizedTrackDisposition::Finalized | FinalizedTrackDisposition::AlreadyPresent
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("second result received");
+
+        second_handle.shutdown().await.expect("shutdown second director");
+
+        assert_eq!(cached_search_calls.load(Ordering::SeqCst), 0);
     }
 }

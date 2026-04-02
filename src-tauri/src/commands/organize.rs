@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use cassette_core::db::TrackPathUpdate;
 use cassette_core::library::organizer::{
     self, DuplicateGroup, FileMove,
 };
@@ -13,6 +14,13 @@ pub struct OrganizeReport {
     pub moved: Vec<FileMove>,
     pub skipped: usize,
     pub errors: Vec<String>,
+}
+
+fn librarian_db_path() -> Result<std::path::PathBuf, String> {
+    let app_data = std::env::var("APPDATA").map_err(|e| e.to_string())?;
+    Ok(std::path::PathBuf::from(app_data)
+        .join("dev.cassette.app")
+        .join("cassette_librarian.db"))
 }
 
 #[tauri::command]
@@ -32,10 +40,18 @@ pub fn organize_library(
     // If not dry run, update DB paths
     if !dry_run.unwrap_or(true) {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        for mv in &result.moved {
-            if let Err(e) = db.update_track_path(mv.track_id, &mv.new_path) {
-                tracing::warn!("[organize] failed to update DB path for track {}: {e}", mv.track_id);
-            }
+        let sidecar_db_path = librarian_db_path()?;
+        let updates = result
+            .moved
+            .iter()
+            .map(|mv| TrackPathUpdate {
+                track_id: mv.track_id,
+                old_path: mv.old_path.clone(),
+                new_path: mv.new_path.clone(),
+            })
+            .collect::<Vec<_>>();
+        if let Err(e) = db.apply_track_path_updates(&sidecar_db_path, &updates) {
+            tracing::warn!("[organize] failed to converge app and sidecar paths: {e}");
         }
     }
 

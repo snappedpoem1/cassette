@@ -8,6 +8,7 @@ use crate::director::types::HashAlgorithm;
 pub struct DirectorConfig {
     pub library_root: PathBuf,
     pub temp_root: PathBuf,
+    pub runtime_db_path: Option<PathBuf>,
     pub local_search_roots: Vec<PathBuf>,
     pub worker_concurrency: usize,
     pub provider_timeout_secs: u64,
@@ -39,6 +40,8 @@ pub struct DirectorConfig {
     pub validation_failure_bail_threshold: usize,
     pub search_cache_ttl_secs: u64,
     pub search_cache_capacity: u64,
+    pub provider_memory_max_age_secs: i64,
+    pub provider_response_cache_max_age_secs: i64,
 }
 
 impl DirectorConfig {
@@ -62,6 +65,7 @@ impl Default for DirectorConfig {
         Self {
             library_root: PathBuf::from("Library"),
             temp_root: PathBuf::from("staging/director"),
+            runtime_db_path: None,
             local_search_roots: Vec::new(),
             worker_concurrency: 12,
             provider_timeout_secs: 45,
@@ -93,6 +97,8 @@ impl Default for DirectorConfig {
             validation_failure_bail_threshold: 3,
             search_cache_ttl_secs: 30 * 60,
             search_cache_capacity: 5_000,
+            provider_memory_max_age_secs: 6 * 60 * 60,
+            provider_response_cache_max_age_secs: 2 * 60 * 60,
         }
     }
 }

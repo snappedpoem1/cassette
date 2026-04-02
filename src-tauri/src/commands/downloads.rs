@@ -1,17 +1,41 @@
 use crate::state::{AppState, BacklogRunStatus};
+use cassette_core::acquisition::{
+    AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
+};
 use cassette_core::director::{
-    AcquisitionStrategy, DirectorProgress, NormalizedTrack, TrackTask,
+    AcquisitionStrategy, NormalizedTrack, TrackTask,
     TrackTaskSource,
 };
+use cassette_core::librarian::models::{AcquisitionRequestEvent, AcquisitionRequestRow};
 use cassette_core::metadata::MetadataService;
 use cassette_core::models::{
     AcquisitionQueueReport, DownloadArtistDiscography, DownloadJob, DownloadMetadataSearchResult,
     DownloadStatus,
 };
 use cassette_core::sources::{fetch_slskd_transfers, get_artist_discography as fetch_artist_discography, search_metadata as search_catalog_metadata, RemoteProviderConfig, SlskdConnectionConfig};
+use serde::Serialize;
 use serde_json::Value;
 use tauri::{Emitter, State};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AcquisitionRequestListItem {
+    pub id: i64,
+    pub scope: String,
+    pub artist: String,
+    pub album: Option<String>,
+    pub title: String,
+    pub status: String,
+    pub strategy: String,
+    pub task_id: Option<String>,
+    pub request_signature: String,
+    pub selected_provider: Option<String>,
+    pub failure_class: Option<String>,
+    pub final_path: Option<String>,
+    pub execution_disposition: Option<String>,
+    pub updated_at: String,
+    pub created_at: String,
+}
 
 #[tauri::command]
 pub async fn start_download(
@@ -22,55 +46,8 @@ pub async fn start_download(
 ) -> Result<String, String> {
     let id = format!("job-{}", Uuid::new_v4());
     let task = build_track_task(&id, &artist, &title, album.clone(), AcquisitionStrategy::Standard);
-    let job = DownloadJob {
-        id: id.clone(),
-        query: format!(
-            "{} {}{}",
-            artist,
-            title,
-            album
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!(" {value}"))
-                .unwrap_or_default()
-        )
-        .trim()
-        .to_string(),
-        artist: artist.clone(),
-        title: title.clone(),
-        album: album.clone(),
-        status: DownloadStatus::Queued,
-        provider: None,
-        progress: 0.0,
-        error: None,
-    };
-
-    state
-        .download_jobs
-        .lock()
-        .map_err(|error| error.to_string())?
-        .insert(id.clone(), job);
-
-    if let Err(error) = state.persist_pending_task(&task, DirectorProgress::Queued) {
-        if let Ok(mut jobs) = state.download_jobs.lock() {
-            jobs.remove(&id);
-        }
-        return Err(error.to_string());
-    }
-
-    state
-        .director_submitter
-        .submit(task)
-        .await
-        .map_err(|error| {
-            let _ = state.delete_pending_task(&id);
-            if let Ok(mut jobs) = state.download_jobs.lock() {
-                jobs.remove(&id);
-            }
-            error.to_string()
-        })?;
-
-    Ok(id)
+    let request = request_from_track_task(&task, "manual");
+    queue_track_request(state, request).await
 }
 
 #[tauri::command]
@@ -472,8 +449,95 @@ fn build_track_task(
             year: None,
             duration_secs: None,
             isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
         },
         strategy,
+    }
+}
+
+fn request_source_name(source: &TrackTaskSource) -> &'static str {
+    match source {
+        TrackTaskSource::SpotifyLibrary => "spotify_library",
+        TrackTaskSource::SpotifyHistory => "spotify_history",
+        TrackTaskSource::SpotifyPlaylist { .. } => "spotify_playlist",
+        TrackTaskSource::Manual => "manual",
+    }
+}
+
+fn request_from_track_task(task: &TrackTask, source_name: &str) -> AcquisitionRequest {
+    AcquisitionRequest {
+        id: None,
+        scope: AcquisitionScope::Track,
+        source: task.source.clone(),
+        source_name: source_name.to_string(),
+        source_track_id: task.target.spotify_track_id.clone(),
+        source_album_id: None,
+        source_artist_id: None,
+        artist: task.target.artist.clone(),
+        album: task.target.album.clone(),
+        title: task.target.title.clone(),
+        track_number: task.target.track_number,
+        disc_number: task.target.disc_number,
+        year: task.target.year,
+        duration_secs: task.target.duration_secs,
+        isrc: task.target.isrc.clone(),
+        musicbrainz_recording_id: task.target.musicbrainz_recording_id.clone(),
+        musicbrainz_release_id: task.target.musicbrainz_release_id.clone(),
+        canonical_artist_id: task.target.canonical_artist_id,
+        canonical_release_id: task.target.canonical_release_id,
+        strategy: task.strategy,
+        quality_policy: None,
+        excluded_providers: Vec::new(),
+        edition_policy: None,
+        confirmation_policy: ConfirmationPolicy::Automatic,
+        desired_track_id: task.desired_track_id,
+        source_operation_id: task.source_operation_id.clone(),
+        task_id: Some(task.task_id.clone()),
+        request_signature: Some(cassette_core::db::director_request_signature(task)),
+        status: AcquisitionRequestStatus::Pending,
+        raw_payload_json: serde_json::to_string(task).ok(),
+    }
+}
+
+async fn queue_track_request(
+    state: State<'_, AppState>,
+    request: AcquisitionRequest,
+) -> Result<String, String> {
+    let task = request.to_track_task();
+    let job = DownloadJob {
+        id: task.task_id.clone(),
+        query: format!(
+            "{} - {} - {}",
+            task.target.artist,
+            task.target.album.clone().unwrap_or_default(),
+            task.target.title
+        ),
+        artist: task.target.artist.clone(),
+        title: task.target.title.clone(),
+        album: task.target.album.clone(),
+        status: DownloadStatus::Queued,
+        provider: None,
+        progress: 0.0,
+        error: None,
+    };
+
+    state
+        .download_jobs
+        .lock()
+        .map_err(|error| error.to_string())?
+        .insert(task.task_id.clone(), job);
+
+    match state.submit_acquisition_request(&request).await {
+        Ok(_) => Ok(task.task_id),
+        Err(error) => {
+            if let Ok(mut jobs) = state.download_jobs.lock() {
+                jobs.remove(&task.task_id);
+            }
+            Err(error.to_string())
+        }
     }
 }
 
@@ -632,43 +696,11 @@ pub(crate) async fn queue_album_tracks(
         if completed_keys.contains(&task.task_id) {
             continue;
         }
-
-        let job = DownloadJob {
-            id: task.task_id.clone(),
-            query: format!("{} - {} - {}", task.target.artist, task.target.album.clone().unwrap_or_default(), task.target.title),
-            artist: task.target.artist.clone(),
-            title: task.target.title.clone(),
-            album: task.target.album.clone(),
-            status: DownloadStatus::Queued,
-            provider: None,
-            progress: 0.0,
-            error: None,
-        };
-
-        state
-            .download_jobs
-            .lock()
-            .map_err(|error| error.to_string())?
-            .insert(task.task_id.clone(), job);
-
-        if let Err(error) = state.persist_pending_task(&task, DirectorProgress::Queued) {
-            if let Ok(mut jobs) = state.download_jobs.lock() {
-                jobs.remove(&task.task_id);
-            }
-            return Err(error.to_string());
-        }
-
-        match state.director_submitter.submit(task.clone()).await {
-            Ok(()) => {
-                queued_job_ids.push(task.task_id.clone());
-            }
-            Err(error) => {
-                let _ = state.delete_pending_task(&task.task_id);
-                if let Ok(mut jobs) = state.download_jobs.lock() {
-                    jobs.remove(&task.task_id);
-                }
-                return Err(error.to_string());
-            }
+        let source_name = request_source_name(&task.source);
+        let request = request_from_track_task(&task, source_name);
+        match queue_track_request(state.clone(), request).await {
+            Ok(task_id) => queued_job_ids.push(task_id),
+            Err(error) => return Err(error),
         }
     }
 
@@ -726,6 +758,10 @@ pub(crate) async fn resolve_album_track_tasks(
                     None
                 },
                 isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: Some(release.id.clone()),
+                canonical_artist_id: None,
+                canonical_release_id: None,
             },
             strategy,
         })
@@ -837,6 +873,136 @@ pub async fn get_recent_task_results(
         .collect())
 }
 
+#[tauri::command]
+pub async fn create_acquisition_request(
+    state: State<'_, AppState>,
+    request: AcquisitionRequest,
+) -> Result<AcquisitionRequestRow, String> {
+    state
+        .create_acquisition_request(&request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_acquisition_requests(
+    state: State<'_, AppState>,
+    status: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<AcquisitionRequestListItem>, String> {
+    let rows = state
+        .control_db
+        .list_acquisition_requests(status.as_deref(), limit.unwrap_or(100))
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let execution = row
+            .task_id
+            .as_deref()
+            .map(|task_id| db.get_task_execution_summary(task_id))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .flatten();
+
+        items.push(AcquisitionRequestListItem {
+            id: row.id,
+            scope: row.scope,
+            artist: row.artist,
+            album: row.album,
+            title: row.title,
+            status: row.status,
+            strategy: row.strategy,
+            task_id: row.task_id,
+            request_signature: row.request_signature,
+            selected_provider: execution.as_ref().and_then(|value| value.provider.clone()),
+            failure_class: execution.as_ref().and_then(|value| value.failure_class.clone()),
+            final_path: execution.as_ref().and_then(|value| value.final_path.clone()),
+            execution_disposition: execution.as_ref().map(|value| value.disposition.clone()),
+            updated_at: execution
+                .as_ref()
+                .map(|value| value.updated_at.clone())
+                .unwrap_or(row.updated_at),
+            created_at: row.created_at,
+        });
+    }
+
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn get_acquisition_request_timeline(
+    state: State<'_, AppState>,
+    request_id: i64,
+) -> Result<Vec<AcquisitionRequestEvent>, String> {
+    state
+        .control_db
+        .get_acquisition_request_timeline(request_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_request_candidate_review(
+    state: State<'_, AppState>,
+    request_id: i64,
+) -> Result<Vec<cassette_core::db::CandidateReviewItem>, String> {
+    let request = state
+        .control_db
+        .get_acquisition_request(request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(task_id) = request.and_then(|row| row.task_id) else {
+        return Ok(Vec::new());
+    };
+
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    db.get_candidate_review(&task_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_request_lineage(
+    state: State<'_, AppState>,
+    request_id: i64,
+) -> Result<serde_json::Value, String> {
+    let request = state
+        .control_db
+        .get_acquisition_request(request_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("request {request_id} not found"))?;
+    let timeline = state
+        .control_db
+        .get_acquisition_request_timeline(request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let (execution, provenance, candidate_review) = if let Some(task_id) = request.task_id.as_deref() {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        (
+            db.get_task_execution_summary(task_id)
+                .map_err(|error| error.to_string())?,
+            db.get_task_provenance(task_id)
+                .map_err(|error| error.to_string())?,
+            db.get_candidate_review(task_id)
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        (None, None, Vec::new())
+    };
+
+    Ok(serde_json::json!({
+        "request": request,
+        "timeline": timeline,
+        "execution": execution,
+        "provenance": provenance,
+        "candidate_review": candidate_review,
+    }))
+}
+
 fn normalize_job_text(value: &str) -> String {
     value
         .chars()
@@ -905,6 +1071,7 @@ pub async fn start_backlog_run(
     }
 
     let db = Arc::clone(&state.db);
+    let control_db = Arc::clone(&state.control_db);
     let download_jobs = Arc::clone(&state.download_jobs);
     let submitter = state.director_submitter.clone();
     let backlog_status = Arc::clone(&state.backlog_status);
@@ -1018,9 +1185,51 @@ pub async fn start_backlog_run(
                     if let Ok(mut jobs) = download_jobs.lock() {
                         jobs.insert(task.task_id.clone(), job);
                     }
+                    let request = request_from_track_task(&task, request_source_name(&task.source));
+                    let request_row = match control_db.create_acquisition_request(&request).await {
+                        Ok(row) => row,
+                        Err(error) => {
+                            errors.push(format!("{artist} - {title}: {error}"));
+                            continue;
+                        }
+                    };
+                    if let Ok(db) = db.lock() {
+                        let _ = db.upsert_director_pending_task(&task, "Queued");
+                    }
+                    let _ = control_db
+                        .update_acquisition_request_status_by_task_id(
+                            &task.task_id,
+                            AcquisitionRequestStatus::Queued.as_str(),
+                            "runtime_queued",
+                            Some("queued for director submission"),
+                            None,
+                        )
+                        .await;
                     if submitter.submit(task.clone()).await.is_ok() {
+                        let _ = control_db
+                            .update_acquisition_request_status_by_task_id(
+                                request_row.task_id.as_deref().unwrap_or_default(),
+                                AcquisitionRequestStatus::Submitted.as_str(),
+                                "director_submitted",
+                                Some("submitted to director"),
+                                None,
+                            )
+                            .await;
                         total_tracks += 1;
                         submitted_any = true;
+                    } else {
+                        if let Ok(db) = db.lock() {
+                            let _ = db.delete_director_pending_task(&task.task_id);
+                        }
+                        let _ = control_db
+                            .update_acquisition_request_status_by_task_id(
+                                &task.task_id,
+                                AcquisitionRequestStatus::Failed.as_str(),
+                                "director_submit_failed",
+                                Some("director submission failed"),
+                                None,
+                            )
+                            .await;
                     }
                 }
 

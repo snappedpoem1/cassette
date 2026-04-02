@@ -27,7 +27,13 @@
     slskd_url: null,
     slskd_user: null,
     slskd_pass: null,
+    slskd_downloads_dir: null,
     real_debrid_key: null,
+    jackett_url: null,
+    jackett_api_key: null,
+    nzbgeek_api_key: null,
+    sabnzbd_url: null,
+    sabnzbd_api_key: null,
     qobuz_email: null,
     qobuz_password: null,
     deezer_arl: null,
@@ -35,6 +41,10 @@
     spotify_client_secret: null,
     spotify_access_token: null,
     genius_token: null,
+    discogs_token: null,
+    lastfm_api_key: null,
+    ytdlp_path: null,
+    sevenzip_path: null,
   };
 
   $: if ($downloadConfig) {
@@ -197,8 +207,23 @@
         </div>
 
         <div class="field-group">
+          <label class="field-label" for="slskd-downloads-dir">slskd Downloads Dir</label>
+          <input id="slskd-downloads-dir" class="input" bind:value={cfg.slskd_downloads_dir} placeholder="A:/Staging/slskd" />
+        </div>
+
+        <div class="field-group">
           <label class="field-label" for="rd-key">Real-Debrid Key</label>
           <input id="rd-key" class="input" type="password" bind:value={cfg.real_debrid_key} placeholder="********" />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="jackett-url">Jackett URL</label>
+          <input id="jackett-url" class="input" bind:value={cfg.jackett_url} placeholder="http://localhost:9117" />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="jackett-api-key">Jackett API Key</label>
+          <input id="jackett-api-key" class="input" type="password" bind:value={cfg.jackett_api_key} placeholder="********" />
         </div>
 
         <div class="field-group">
@@ -220,6 +245,27 @@
             bind:value={cfg.qobuz_password}
             placeholder="********"
           />
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3 class="section-title">Usenet</h3>
+
+      <div class="field-grid">
+        <div class="field-group">
+          <label class="field-label" for="nzbgeek-key">NZBGeek API Key</label>
+          <input id="nzbgeek-key" class="input" type="password" bind:value={cfg.nzbgeek_api_key} placeholder="********" />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="sabnzbd-url">SABnzbd URL</label>
+          <input id="sabnzbd-url" class="input" bind:value={cfg.sabnzbd_url} placeholder="http://localhost:8080" />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="sabnzbd-key">SABnzbd API Key</label>
+          <input id="sabnzbd-key" class="input" type="password" bind:value={cfg.sabnzbd_api_key} placeholder="********" />
         </div>
       </div>
     </section>
@@ -272,6 +318,57 @@
             type="password"
             bind:value={cfg.genius_token}
             placeholder="********"
+          />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="discogs-token">Discogs Token</label>
+          <input
+            id="discogs-token"
+            class="input"
+            type="password"
+            bind:value={cfg.discogs_token}
+            placeholder="********"
+          />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="lastfm-key">Last.fm API Key</label>
+          <input
+            id="lastfm-key"
+            class="input"
+            type="password"
+            bind:value={cfg.lastfm_api_key}
+            placeholder="********"
+          />
+        </div>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3 class="section-title">Tools</h3>
+      <p class="section-desc">
+        Paths to local tool binaries. Leave blank to use system PATH or built-in defaults.
+      </p>
+
+      <div class="field-grid">
+        <div class="field-group">
+          <label class="field-label" for="ytdlp-path">yt-dlp Binary Path</label>
+          <input
+            id="ytdlp-path"
+            class="input"
+            bind:value={cfg.ytdlp_path}
+            placeholder="C:/tools/yt-dlp.exe"
+          />
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="sevenzip-path">7-Zip Binary Path</label>
+          <input
+            id="sevenzip-path"
+            class="input"
+            bind:value={cfg.sevenzip_path}
+            placeholder="C:/Program Files/7-Zip/7z.exe"
           />
         </div>
       </div>

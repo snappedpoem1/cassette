@@ -66,6 +66,10 @@ pub const MIGRATIONS: &[&str] = &[
       file_size INTEGER,
       file_mtime_ms INTEGER,
       content_hash TEXT,
+      acoustid_fingerprint TEXT,
+      fingerprint_attempted_at TIMESTAMP,
+      fingerprint_error TEXT,
+      fingerprint_source_mtime_ms INTEGER,
       integrity_status TEXT NOT NULL,
       quality_tier TEXT,
       last_scanned_at TIMESTAMP,
@@ -74,6 +78,7 @@ pub const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_local_files_track_id ON local_files(track_id);
     CREATE INDEX IF NOT EXISTS idx_local_files_content_hash ON local_files(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_local_files_acoustid_fingerprint ON local_files(acoustid_fingerprint);
     CREATE INDEX IF NOT EXISTS idx_local_files_integrity_status ON local_files(integrity_status);
     "#,
     r#"
@@ -161,5 +166,119 @@ pub const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_sync_runs_run_id ON sync_runs(run_id);
     CREATE INDEX IF NOT EXISTS idx_sync_runs_status ON sync_runs(status);
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS canonical_artists (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      normalized_name TEXT NOT NULL,
+      musicbrainz_id TEXT UNIQUE,
+      spotify_id TEXT UNIQUE,
+      discogs_id TEXT UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_canonical_artists_normalized_name
+      ON canonical_artists(normalized_name);
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS canonical_releases (
+      id INTEGER PRIMARY KEY,
+      canonical_artist_id INTEGER NOT NULL REFERENCES canonical_artists(id),
+      title TEXT NOT NULL,
+      normalized_title TEXT NOT NULL,
+      release_group_mbid TEXT,
+      release_mbid TEXT UNIQUE,
+      spotify_id TEXT UNIQUE,
+      discogs_id TEXT UNIQUE,
+      release_type TEXT,
+      year INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_canonical_releases_artist_normalized_title
+      ON canonical_releases(canonical_artist_id, normalized_title);
+    CREATE INDEX IF NOT EXISTS idx_canonical_releases_release_group_mbid
+      ON canonical_releases(release_group_mbid);
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS canonical_recordings (
+      id INTEGER PRIMARY KEY,
+      canonical_artist_id INTEGER REFERENCES canonical_artists(id),
+      canonical_release_id INTEGER REFERENCES canonical_releases(id),
+      title TEXT NOT NULL,
+      normalized_title TEXT NOT NULL,
+      musicbrainz_recording_id TEXT UNIQUE,
+      isrc TEXT,
+      track_number INTEGER,
+      disc_number INTEGER,
+      duration_ms INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_canonical_recordings_release_id
+      ON canonical_recordings(canonical_release_id);
+    CREATE INDEX IF NOT EXISTS idx_canonical_recordings_isrc
+      ON canonical_recordings(isrc);
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS acquisition_requests (
+      id INTEGER PRIMARY KEY,
+      scope TEXT NOT NULL,
+      source_name TEXT NOT NULL,
+      source_track_id TEXT,
+      source_album_id TEXT,
+      source_artist_id TEXT,
+      artist TEXT NOT NULL,
+      album TEXT,
+      title TEXT NOT NULL DEFAULT '',
+      normalized_artist TEXT NOT NULL,
+      normalized_album TEXT,
+      normalized_title TEXT NOT NULL DEFAULT '',
+      track_number INTEGER,
+      disc_number INTEGER,
+      year INTEGER,
+      duration_secs REAL,
+      isrc TEXT,
+      musicbrainz_recording_id TEXT,
+      musicbrainz_release_id TEXT,
+      canonical_artist_id INTEGER REFERENCES canonical_artists(id),
+      canonical_release_id INTEGER REFERENCES canonical_releases(id),
+      strategy TEXT NOT NULL,
+      quality_policy TEXT,
+      excluded_providers_json TEXT,
+      edition_policy TEXT,
+      confirmation_policy TEXT NOT NULL DEFAULT 'automatic',
+      desired_track_id INTEGER,
+      source_operation_id TEXT,
+      task_id TEXT UNIQUE,
+      request_signature TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      raw_payload_json TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_acquisition_requests_status
+      ON acquisition_requests(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_acquisition_requests_desired_track_id
+      ON acquisition_requests(desired_track_id);
+    CREATE INDEX IF NOT EXISTS idx_acquisition_requests_source_operation_id
+      ON acquisition_requests(source_operation_id);
+    "#,
+    r#"
+    CREATE TABLE IF NOT EXISTS acquisition_request_events (
+      id INTEGER PRIMARY KEY,
+      request_id INTEGER NOT NULL REFERENCES acquisition_requests(id) ON DELETE CASCADE,
+      task_id TEXT,
+      event_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      message TEXT,
+      payload_json TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_acquisition_request_events_request_id
+      ON acquisition_request_events(request_id, created_at ASC, id ASC);
+    CREATE INDEX IF NOT EXISTS idx_acquisition_request_events_task_id
+      ON acquisition_request_events(task_id, created_at ASC, id ASC);
     "#,
 ];

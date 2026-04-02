@@ -1,11 +1,14 @@
 pub mod migrations;
 
+use crate::acquisition::AcquisitionRequest;
 use crate::librarian::error::Result;
 use crate::librarian::models::{
-    DesiredTrack, LocalFile, LocalFileScanState, NewDeltaQueueItem, NewLocalFile,
-    NewReconciliationResult, ScanCheckpoint, Track,
+    AcquisitionRequestEvent, AcquisitionRequestRow, DesiredTrack, LocalFile, LocalFileScanState,
+    NewDeltaQueueItem, NewLocalFile, NewReconciliationResult, ScanCheckpoint, Track,
 };
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::Row;
 use std::path::Path;
 
@@ -24,15 +27,16 @@ impl LibrarianDb {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let url = format!("sqlite://{}", path.to_string_lossy());
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true)
+            .synchronous(SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
-            .connect(&url)
+            .connect_with(options)
             .await?;
-
-        sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await?;
-        sqlx::query("PRAGMA foreign_keys=ON;").execute(&pool).await?;
-        sqlx::query("PRAGMA synchronous=NORMAL;").execute(&pool).await?;
 
         let db = Self { pool };
         db.migrate().await?;
@@ -48,6 +52,469 @@ impl LibrarianDb {
             sqlx::query(sql).execute(&self.pool).await?;
         }
         Ok(())
+    }
+
+    pub async fn upsert_canonical_artist(
+        &self,
+        name: &str,
+        musicbrainz_id: Option<&str>,
+        spotify_id: Option<&str>,
+        discogs_id: Option<&str>,
+    ) -> Result<i64> {
+        let normalized_name = normalize_acquisition_text(name);
+        sqlx::query(
+            "INSERT INTO canonical_artists (name, normalized_name, musicbrainz_id, spotify_id, discogs_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(normalized_name) DO UPDATE SET
+                name = excluded.name,
+                musicbrainz_id = COALESCE(excluded.musicbrainz_id, canonical_artists.musicbrainz_id),
+                spotify_id = COALESCE(excluded.spotify_id, canonical_artists.spotify_id),
+                discogs_id = COALESCE(excluded.discogs_id, canonical_artists.discogs_id),
+                updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(name)
+        .bind(&normalized_name)
+        .bind(musicbrainz_id)
+        .bind(spotify_id)
+        .bind(discogs_id)
+        .execute(&self.pool)
+        .await?;
+
+        let id = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM canonical_artists WHERE normalized_name = ?1 LIMIT 1",
+        )
+        .bind(normalized_name)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn upsert_canonical_release(
+        &self,
+        canonical_artist_id: i64,
+        title: &str,
+        release_group_mbid: Option<&str>,
+        release_mbid: Option<&str>,
+        release_type: Option<&str>,
+        year: Option<i64>,
+        spotify_id: Option<&str>,
+        discogs_id: Option<&str>,
+    ) -> Result<i64> {
+        let normalized_title = normalize_acquisition_text(title);
+        sqlx::query(
+            "INSERT INTO canonical_releases (
+                canonical_artist_id, title, normalized_title, release_group_mbid, release_mbid,
+                spotify_id, discogs_id, release_type, year
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(canonical_artist_id, normalized_title) DO UPDATE SET
+                title = excluded.title,
+                release_group_mbid = COALESCE(excluded.release_group_mbid, canonical_releases.release_group_mbid),
+                release_mbid = COALESCE(excluded.release_mbid, canonical_releases.release_mbid),
+                spotify_id = COALESCE(excluded.spotify_id, canonical_releases.spotify_id),
+                discogs_id = COALESCE(excluded.discogs_id, canonical_releases.discogs_id),
+                release_type = COALESCE(excluded.release_type, canonical_releases.release_type),
+                year = COALESCE(excluded.year, canonical_releases.year),
+                updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(canonical_artist_id)
+        .bind(title)
+        .bind(&normalized_title)
+        .bind(release_group_mbid)
+        .bind(release_mbid)
+        .bind(spotify_id)
+        .bind(discogs_id)
+        .bind(release_type)
+        .bind(year)
+        .execute(&self.pool)
+        .await?;
+
+        let id = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM canonical_releases
+             WHERE canonical_artist_id = ?1 AND normalized_title = ?2
+             LIMIT 1",
+        )
+        .bind(canonical_artist_id)
+        .bind(normalized_title)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn upsert_canonical_recording(
+        &self,
+        canonical_artist_id: Option<i64>,
+        canonical_release_id: Option<i64>,
+        title: &str,
+        musicbrainz_recording_id: Option<&str>,
+        isrc: Option<&str>,
+        track_number: Option<i64>,
+        disc_number: Option<i64>,
+        duration_ms: Option<i64>,
+    ) -> Result<i64> {
+        let normalized_title = normalize_acquisition_text(title);
+        if let Some(recording_id) = musicbrainz_recording_id {
+            sqlx::query(
+                "INSERT INTO canonical_recordings (
+                    canonical_artist_id, canonical_release_id, title, normalized_title,
+                    musicbrainz_recording_id, isrc, track_number, disc_number, duration_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(musicbrainz_recording_id) DO UPDATE SET
+                    canonical_artist_id = COALESCE(excluded.canonical_artist_id, canonical_recordings.canonical_artist_id),
+                    canonical_release_id = COALESCE(excluded.canonical_release_id, canonical_recordings.canonical_release_id),
+                    title = excluded.title,
+                    normalized_title = excluded.normalized_title,
+                    isrc = COALESCE(excluded.isrc, canonical_recordings.isrc),
+                    track_number = COALESCE(excluded.track_number, canonical_recordings.track_number),
+                    disc_number = COALESCE(excluded.disc_number, canonical_recordings.disc_number),
+                    duration_ms = COALESCE(excluded.duration_ms, canonical_recordings.duration_ms),
+                    updated_at = CURRENT_TIMESTAMP",
+            )
+            .bind(canonical_artist_id)
+            .bind(canonical_release_id)
+            .bind(title)
+            .bind(&normalized_title)
+            .bind(recording_id)
+            .bind(isrc)
+            .bind(track_number)
+            .bind(disc_number)
+            .bind(duration_ms)
+            .execute(&self.pool)
+            .await?;
+
+            let id = sqlx::query_scalar::<_, i64>(
+                "SELECT id FROM canonical_recordings WHERE musicbrainz_recording_id = ?1 LIMIT 1",
+            )
+            .bind(recording_id)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok(id);
+        }
+
+        sqlx::query(
+            "INSERT INTO canonical_recordings (
+                canonical_artist_id, canonical_release_id, title, normalized_title, isrc,
+                track_number, disc_number, duration_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(canonical_artist_id)
+        .bind(canonical_release_id)
+        .bind(title)
+        .bind(normalized_title)
+        .bind(isrc)
+        .bind(track_number)
+        .bind(disc_number)
+        .bind(duration_ms)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(sqlx::query_scalar::<_, i64>("SELECT last_insert_rowid()")
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
+    pub async fn create_acquisition_request(
+        &self,
+        request: &AcquisitionRequest,
+    ) -> Result<AcquisitionRequestRow> {
+        let artist_id = if request.canonical_artist_id.is_none() {
+            Some(
+                self.upsert_canonical_artist(
+                    &request.artist,
+                    None,
+                    request.source_artist_id.as_deref(),
+                    None,
+                )
+                .await?,
+            )
+        } else {
+            request.canonical_artist_id
+        };
+
+        let release_id = match (request.canonical_release_id, request.album.as_deref()) {
+            (Some(id), _) => Some(id),
+            (None, Some(album)) if !album.trim().is_empty() && artist_id.is_some() => {
+                Some(
+                    self.upsert_canonical_release(
+                        artist_id.expect("checked is_some"),
+                        album,
+                        None,
+                        request.musicbrainz_release_id.as_deref(),
+                        None,
+                        request.year.map(i64::from),
+                        request.source_album_id.as_deref(),
+                        None,
+                    )
+                    .await?,
+                )
+            }
+            _ => None,
+        };
+
+        let request_signature = request
+            .request_signature
+            .clone()
+            .unwrap_or_else(|| request.request_fingerprint());
+        let normalized_artist = normalize_acquisition_text(&request.artist);
+        let normalized_album = request.album.as_deref().map(normalize_acquisition_text);
+        let normalized_title = normalize_acquisition_text(&request.title);
+        let excluded_json = (!request.excluded_providers.is_empty())
+            .then(|| serde_json::to_string(&request.excluded_providers))
+            .transpose()?;
+        let task_id = request.effective_task_id();
+
+        sqlx::query(
+            "INSERT INTO acquisition_requests (
+                scope, source_name, source_track_id, source_album_id, source_artist_id,
+                artist, album, title, normalized_artist, normalized_album, normalized_title,
+                track_number, disc_number, year, duration_secs, isrc,
+                musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
+                desired_track_id, source_operation_id, task_id, request_signature, status, raw_payload_json
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10, ?11,
+                ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18, ?19, ?20,
+                ?21, ?22, ?23, ?24, ?25,
+                ?26, ?27, ?28, ?29, ?30, ?31
+             )",
+        )
+        .bind(request.scope.as_str())
+        .bind(&request.source_name)
+        .bind(request.source_track_id.as_deref())
+        .bind(request.source_album_id.as_deref())
+        .bind(request.source_artist_id.as_deref())
+        .bind(&request.artist)
+        .bind(request.album.as_deref())
+        .bind(&request.title)
+        .bind(&normalized_artist)
+        .bind(normalized_album.as_deref())
+        .bind(&normalized_title)
+        .bind(request.track_number.map(i64::from))
+        .bind(request.disc_number.map(i64::from))
+        .bind(request.year.map(i64::from))
+        .bind(request.duration_secs)
+        .bind(request.isrc.as_deref())
+        .bind(request.musicbrainz_recording_id.as_deref())
+        .bind(request.musicbrainz_release_id.as_deref())
+        .bind(artist_id)
+        .bind(release_id)
+        .bind(request.strategy_name())
+        .bind(request.quality_policy.as_deref())
+        .bind(excluded_json.as_deref())
+        .bind(request.edition_policy.as_deref())
+        .bind(request.confirmation_policy.as_str())
+        .bind(request.desired_track_id)
+        .bind(request.source_operation_id.as_deref())
+        .bind(&task_id)
+        .bind(&request_signature)
+        .bind(request.status.as_str())
+        .bind(request.raw_payload_json.as_deref())
+        .execute(&self.pool)
+        .await?;
+
+        let request_id = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM acquisition_requests WHERE request_signature = ?1 LIMIT 1",
+        )
+        .bind(&request_signature)
+        .fetch_one(&self.pool)
+        .await?;
+
+        self.append_acquisition_request_event(
+            request_id,
+            Some(task_id.as_str()),
+            "request_created",
+            request.status.as_str(),
+            Some("request persisted in control plane"),
+            request.raw_payload_json.as_deref(),
+        )
+        .await?;
+
+        self.get_acquisition_request(request_id)
+            .await?
+            .ok_or_else(|| {
+                crate::librarian::error::LibrarianError::DatabaseError(sqlx::Error::RowNotFound)
+            })
+    }
+
+    pub async fn append_acquisition_request_event(
+        &self,
+        request_id: i64,
+        task_id: Option<&str>,
+        event_type: &str,
+        status: &str,
+        message: Option<&str>,
+        payload_json: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO acquisition_request_events
+                (request_id, task_id, event_type, status, message, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(request_id)
+        .bind(task_id)
+        .bind(event_type)
+        .bind(status)
+        .bind(message)
+        .bind(payload_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_acquisition_request_status_by_task_id(
+        &self,
+        task_id: &str,
+        status: &str,
+        event_type: &str,
+        message: Option<&str>,
+        payload_json: Option<&str>,
+    ) -> Result<Option<AcquisitionRequestRow>> {
+        let row = self.get_acquisition_request_by_task_id(task_id).await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        sqlx::query(
+            "UPDATE acquisition_requests
+             SET status = ?2, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+        )
+        .bind(row.id)
+        .bind(status)
+        .execute(&self.pool)
+        .await?;
+
+        self.append_acquisition_request_event(row.id, Some(task_id), event_type, status, message, payload_json)
+            .await?;
+
+        self.get_acquisition_request(row.id).await
+    }
+
+    pub async fn list_acquisition_requests(
+        &self,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AcquisitionRequestRow>> {
+        let rows = if let Some(status) = status {
+            sqlx::query_as::<_, AcquisitionRequestRow>(
+                "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
+                        artist, album, title, normalized_artist, normalized_album, normalized_title,
+                        track_number, disc_number, year, duration_secs, isrc,
+                        musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                        strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
+                        desired_track_id, source_operation_id, task_id, request_signature, status,
+                        raw_payload_json, created_at, updated_at
+                 FROM acquisition_requests
+                 WHERE status = ?1
+                 ORDER BY updated_at DESC, id DESC
+                 LIMIT ?2",
+            )
+            .bind(status)
+            .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, AcquisitionRequestRow>(
+                "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
+                        artist, album, title, normalized_artist, normalized_album, normalized_title,
+                        track_number, disc_number, year, duration_secs, isrc,
+                        musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                        strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
+                        desired_track_id, source_operation_id, task_id, request_signature, status,
+                        raw_payload_json, created_at, updated_at
+                 FROM acquisition_requests
+                 ORDER BY updated_at DESC, id DESC
+                 LIMIT ?1",
+            )
+            .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows)
+    }
+
+    pub async fn get_acquisition_request(
+        &self,
+        request_id: i64,
+    ) -> Result<Option<AcquisitionRequestRow>> {
+        let row = sqlx::query_as::<_, AcquisitionRequestRow>(
+            "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
+                    artist, album, title, normalized_artist, normalized_album, normalized_title,
+                    track_number, disc_number, year, duration_secs, isrc,
+                    musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
+                    desired_track_id, source_operation_id, task_id, request_signature, status,
+                    raw_payload_json, created_at, updated_at
+             FROM acquisition_requests
+             WHERE id = ?1
+             LIMIT 1",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_acquisition_request_by_task_id(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<AcquisitionRequestRow>> {
+        let row = sqlx::query_as::<_, AcquisitionRequestRow>(
+            "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
+                    artist, album, title, normalized_artist, normalized_album, normalized_title,
+                    track_number, disc_number, year, duration_secs, isrc,
+                    musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
+                    desired_track_id, source_operation_id, task_id, request_signature, status,
+                    raw_payload_json, created_at, updated_at
+             FROM acquisition_requests
+             WHERE task_id = ?1
+             LIMIT 1",
+        )
+        .bind(task_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_acquisition_request_by_signature(
+        &self,
+        request_signature: &str,
+    ) -> Result<Option<AcquisitionRequestRow>> {
+        let row = sqlx::query_as::<_, AcquisitionRequestRow>(
+            "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
+                    artist, album, title, normalized_artist, normalized_album, normalized_title,
+                    track_number, disc_number, year, duration_secs, isrc,
+                    musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
+                    desired_track_id, source_operation_id, task_id, request_signature, status,
+                    raw_payload_json, created_at, updated_at
+             FROM acquisition_requests
+             WHERE request_signature = ?1
+             LIMIT 1",
+        )
+        .bind(request_signature)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn get_acquisition_request_timeline(
+        &self,
+        request_id: i64,
+    ) -> Result<Vec<AcquisitionRequestEvent>> {
+        let rows = sqlx::query_as::<_, AcquisitionRequestEvent>(
+            "SELECT id, request_id, task_id, event_type, status, message, payload_json, created_at
+             FROM acquisition_request_events
+             WHERE request_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )
+        .bind(request_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn upsert_artist(&self, canonical_name: &str, normalized_name: &str) -> Result<i64> {
@@ -211,8 +678,9 @@ impl LibrarianDb {
         sqlx::query(
             "INSERT INTO local_files (
                 track_id, file_path, file_name, extension, codec, bitrate, sample_rate, bit_depth,
-                channels, duration_ms, file_size, file_mtime_ms, content_hash, integrity_status, quality_tier, last_scanned_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CURRENT_TIMESTAMP)
+                channels, duration_ms, file_size, file_mtime_ms, content_hash, acoustid_fingerprint,
+                integrity_status, quality_tier, last_scanned_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, CURRENT_TIMESTAMP)
              ON CONFLICT(file_path) DO UPDATE SET
                 track_id = COALESCE(excluded.track_id, local_files.track_id),
                 file_name = excluded.file_name,
@@ -226,6 +694,28 @@ impl LibrarianDb {
                 file_size = excluded.file_size,
                 file_mtime_ms = excluded.file_mtime_ms,
                 content_hash = COALESCE(excluded.content_hash, local_files.content_hash),
+                acoustid_fingerprint = CASE
+                    WHEN COALESCE(excluded.file_mtime_ms, -1) <> COALESCE(local_files.file_mtime_ms, -1)
+                        THEN excluded.acoustid_fingerprint
+                    ELSE COALESCE(excluded.acoustid_fingerprint, local_files.acoustid_fingerprint)
+                END,
+                fingerprint_attempted_at = CASE
+                    WHEN COALESCE(excluded.file_mtime_ms, -1) <> COALESCE(local_files.file_mtime_ms, -1)
+                        THEN NULL
+                    ELSE local_files.fingerprint_attempted_at
+                END,
+                fingerprint_error = CASE
+                    WHEN COALESCE(excluded.file_mtime_ms, -1) <> COALESCE(local_files.file_mtime_ms, -1)
+                        THEN NULL
+                    ELSE local_files.fingerprint_error
+                END,
+                fingerprint_source_mtime_ms = CASE
+                    WHEN COALESCE(excluded.file_mtime_ms, -1) <> COALESCE(local_files.file_mtime_ms, -1)
+                        THEN NULL
+                    WHEN excluded.acoustid_fingerprint IS NOT NULL AND excluded.acoustid_fingerprint != ''
+                        THEN excluded.file_mtime_ms
+                    ELSE local_files.fingerprint_source_mtime_ms
+                END,
                 integrity_status = excluded.integrity_status,
                 quality_tier = excluded.quality_tier,
                 last_scanned_at = CURRENT_TIMESTAMP,
@@ -244,6 +734,7 @@ impl LibrarianDb {
         .bind(file.file_size)
         .bind(file.file_mtime_ms)
         .bind(&file.content_hash)
+        .bind(&file.acoustid_fingerprint)
         .bind(file.integrity_status.as_str())
         .bind(file.quality_tier.map(|q| q.as_str().to_string()))
         .execute(&self.pool)
@@ -460,6 +951,7 @@ impl LibrarianDb {
         let rows = sqlx::query_as::<_, LocalFile>(
             "SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate,
                     bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash,
+                    acoustid_fingerprint, fingerprint_attempted_at, fingerprint_error, fingerprint_source_mtime_ms,
                     integrity_status, quality_tier, last_scanned_at, created_at, updated_at
              FROM local_files WHERE track_id = ?1 ORDER BY id",
         )
@@ -516,6 +1008,10 @@ impl LibrarianDb {
                 lf.file_size as lf_file_size,
                 lf.file_mtime_ms as lf_file_mtime_ms,
                 lf.content_hash as lf_content_hash,
+                lf.acoustid_fingerprint as lf_acoustid_fingerprint,
+                lf.fingerprint_attempted_at as lf_fingerprint_attempted_at,
+                lf.fingerprint_error as lf_fingerprint_error,
+                lf.fingerprint_source_mtime_ms as lf_fingerprint_source_mtime_ms,
                 lf.integrity_status as lf_integrity_status,
                 lf.quality_tier as lf_quality_tier,
                 lf.last_scanned_at as lf_last_scanned_at,
@@ -567,6 +1063,10 @@ impl LibrarianDb {
                 file_size: row.try_get("lf_file_size")?,
                 file_mtime_ms: row.try_get("lf_file_mtime_ms")?,
                 content_hash: row.try_get("lf_content_hash")?,
+                acoustid_fingerprint: row.try_get("lf_acoustid_fingerprint")?,
+                fingerprint_attempted_at: row.try_get("lf_fingerprint_attempted_at")?,
+                fingerprint_error: row.try_get("lf_fingerprint_error")?,
+                fingerprint_source_mtime_ms: row.try_get("lf_fingerprint_source_mtime_ms")?,
                 integrity_status: row.try_get("lf_integrity_status")?,
                 quality_tier: row.try_get("lf_quality_tier")?,
                 last_scanned_at: row.try_get("lf_last_scanned_at")?,
@@ -608,6 +1108,10 @@ impl LibrarianDb {
                 lf.file_size as lf_file_size,
                 lf.file_mtime_ms as lf_file_mtime_ms,
                 lf.content_hash as lf_content_hash,
+                lf.acoustid_fingerprint as lf_acoustid_fingerprint,
+                lf.fingerprint_attempted_at as lf_fingerprint_attempted_at,
+                lf.fingerprint_error as lf_fingerprint_error,
+                lf.fingerprint_source_mtime_ms as lf_fingerprint_source_mtime_ms,
                 lf.integrity_status as lf_integrity_status,
                 lf.quality_tier as lf_quality_tier,
                 lf.last_scanned_at as lf_last_scanned_at,
@@ -654,6 +1158,10 @@ impl LibrarianDb {
                 file_size: row.try_get("lf_file_size")?,
                 file_mtime_ms: row.try_get("lf_file_mtime_ms")?,
                 content_hash: row.try_get("lf_content_hash")?,
+                acoustid_fingerprint: row.try_get("lf_acoustid_fingerprint")?,
+                fingerprint_attempted_at: row.try_get("lf_fingerprint_attempted_at")?,
+                fingerprint_error: row.try_get("lf_fingerprint_error")?,
+                fingerprint_source_mtime_ms: row.try_get("lf_fingerprint_source_mtime_ms")?,
                 integrity_status: row.try_get("lf_integrity_status")?,
                 quality_tier: row.try_get("lf_quality_tier")?,
                 last_scanned_at: row.try_get("lf_last_scanned_at")?,
@@ -669,6 +1177,7 @@ impl LibrarianDb {
         let rows = sqlx::query_as::<_, LocalFile>(
             "SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate,
                     bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash,
+                    acoustid_fingerprint, fingerprint_attempted_at, fingerprint_error, fingerprint_source_mtime_ms,
                     integrity_status, quality_tier, last_scanned_at, created_at, updated_at
              FROM local_files
              WHERE content_hash = ?1",
@@ -677,6 +1186,74 @@ impl LibrarianDb {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    pub async fn list_local_files_missing_fingerprint(&self, limit: usize) -> Result<Vec<LocalFile>> {
+        let rows = sqlx::query_as::<_, LocalFile>(
+            "SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate,
+                    bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash,
+                    acoustid_fingerprint, fingerprint_attempted_at, fingerprint_error, fingerprint_source_mtime_ms,
+                    integrity_status, quality_tier, last_scanned_at, created_at, updated_at
+             FROM local_files
+             WHERE COALESCE(acoustid_fingerprint, '') = ''
+               AND integrity_status IN ('readable', 'partial_metadata', 'suspicious')
+               AND (
+                    fingerprint_source_mtime_ms IS NULL
+                    OR COALESCE(file_mtime_ms, -1) <> COALESCE(fingerprint_source_mtime_ms, -1)
+               )
+             ORDER BY file_size ASC, COALESCE(last_scanned_at, created_at) DESC, file_path ASC
+             LIMIT ?1",
+        )
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn set_local_file_fingerprint(
+        &self,
+        local_file_id: i64,
+        acoustid_fingerprint: &str,
+        fingerprint_source_mtime_ms: Option<i64>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE local_files
+             SET acoustid_fingerprint = ?1,
+                 fingerprint_attempted_at = CURRENT_TIMESTAMP,
+                 fingerprint_error = NULL,
+                 fingerprint_source_mtime_ms = ?2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?3",
+        )
+        .bind(acoustid_fingerprint)
+        .bind(fingerprint_source_mtime_ms)
+        .bind(local_file_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_local_file_fingerprint_failure(
+        &self,
+        local_file_id: i64,
+        fingerprint_source_mtime_ms: Option<i64>,
+        fingerprint_error: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE local_files
+             SET acoustid_fingerprint = NULL,
+                 fingerprint_attempted_at = CURRENT_TIMESTAMP,
+                 fingerprint_error = ?1,
+                 fingerprint_source_mtime_ms = ?2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?3",
+        )
+        .bind(fingerprint_error)
+        .bind(fingerprint_source_mtime_ms)
+        .bind(local_file_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn audit_counts(&self) -> Result<(i64, i64, i64, i64)> {
@@ -693,5 +1270,119 @@ impl LibrarianDb {
             .fetch_one(&self.pool)
             .await?;
         Ok((artists, albums, tracks, local_files))
+    }
+}
+
+fn normalize_acquisition_text(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acquisition::{
+        AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
+    };
+    use crate::director::models::{AcquisitionStrategy, TrackTaskSource};
+    async fn test_db() -> LibrarianDb {
+        let dir = std::path::PathBuf::from("target")
+            .join(format!("cassette-librarian-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("librarian-test.db");
+        LibrarianDb::connect(&path).await.expect("connect")
+    }
+
+    fn sample_request() -> AcquisitionRequest {
+        AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::Track,
+            source: TrackTaskSource::Manual,
+            source_name: "manual".to_string(),
+            source_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
+            artist: "Artist".to_string(),
+            album: Some("Album".to_string()),
+            title: "Song".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2024),
+            duration_secs: Some(42.0),
+            isrc: Some("US1234567890".to_string()),
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: Some("mb-release-1".to_string()),
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            strategy: AcquisitionStrategy::Standard,
+            quality_policy: Some("lossless_preferred".to_string()),
+            excluded_providers: vec!["yt_dlp".to_string()],
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::Automatic,
+            desired_track_id: Some(7),
+            source_operation_id: Some("op-1".to_string()),
+            task_id: Some("task-1".to_string()),
+            request_signature: Some("sig-1".to_string()),
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: Some("{\"kind\":\"test\"}".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn acquisition_request_persists_and_records_timeline() {
+        let db = test_db().await;
+        let row = db
+            .create_acquisition_request(&sample_request())
+            .await
+            .expect("request should persist");
+
+        assert_eq!(row.artist, "Artist");
+        assert_eq!(row.task_id.as_deref(), Some("task-1"));
+        assert_eq!(row.request_signature, "sig-1");
+
+        let timeline = db
+            .get_acquisition_request_timeline(row.id)
+            .await
+            .expect("timeline should load");
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].event_type, "request_created");
+        assert_eq!(timeline[0].status, "pending");
+    }
+
+    #[tokio::test]
+    async fn acquisition_request_status_updates_by_task_id() {
+        let db = test_db().await;
+        let row = db
+            .create_acquisition_request(&sample_request())
+            .await
+            .expect("request should persist");
+
+        let updated = db
+            .update_acquisition_request_status_by_task_id(
+                "task-1",
+                "submitted",
+                "director_submitted",
+                Some("submitted to director"),
+                None,
+            )
+            .await
+            .expect("status update should succeed")
+            .expect("request should exist");
+
+        assert_eq!(updated.status, "submitted");
+
+        let requests = db
+            .list_acquisition_requests(Some("submitted"), 10)
+            .await
+            .expect("requests should load");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].id, row.id);
     }
 }
