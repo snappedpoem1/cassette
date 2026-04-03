@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.  
 **Rule**: If a task is not in this file, it is not committed project scope yet.  
-**Last Updated**: 2026-04-02
+**Last Updated**: 2026-04-03
 
 Short execution board: see `HIT_LIST.md`.
 
@@ -29,17 +29,17 @@ Status:
 
 ## Current Audited Sequence
 
-These are the next highest-value tasks after the 2026-03-30 runtime-shape pass.
+These are the next highest-value tasks after the tool-convergence and scope-reset pass.
 Do them in this order unless a higher-priority production issue interrupts:
 
-1. Capture the first bounded end-to-end `engine_pipeline_cli` live proof.
-2. Capture the interrupted-run `--resume` coordinator recovery proof.
-3. Capture the bounded safe organizer live proof after DB repair.
-4. Prove audit completeness across organization and admission flows.
-5. Raise packaging and clean-machine confidence.
-6. Formalize performance baselines and regression budgets.
-7. Review the live behavior of persisted provenance and candidate-memory reuse.
-8. Add canonical release identity persistence and a stronger acquisition request contract.
+1. Audit and correct tool-role documentation drift.
+2. Unify Spotify ingest lanes into one identity-first path.
+3. Route all album expansion through the resilient shared resolver.
+4. Separate search owners from execution owners across torrent and Usenet lanes.
+5. Promote canonical identity and source-alias persistence to the active path.
+6. Introduce a planner stage before byte acquisition.
+7. Prove audit completeness across organization and admission flows.
+8. Formalize performance baselines and regression budgets.
 
 ---
 
@@ -210,7 +210,7 @@ Acceptance:
 - [x] Recovery behavior is explicit in queue claims, staged-download resume checks, and startup recovery filtering
 - [x] Capture one fresh live recovery/resume proof with the coordinator path
 
-### [P1] [todo] Raise packaging and clean-machine confidence
+### [P1] [review] Raise packaging and clean-machine confidence
 
 Why:
 
@@ -218,10 +218,11 @@ Why:
 
 Acceptance:
 
-- [ ] Install/build steps documented for a clean environment
-- [ ] Gaps and assumptions recorded
-- [ ] Release checklist updated
+- [x] Install/build steps documented for a clean environment (`docs/CLEAN_MACHINE_CHECKLIST.md`, `docs/RELEASE_CHECKLIST.md`)
+- [x] Gaps and assumptions recorded (`docs/CLEAN_MACHINE_CHECKLIST.md` Known Gap + `docs/RELEASE_CHECKLIST.md` Known Gaps)
+- [x] Release checklist updated (`docs/RELEASE_CHECKLIST.md`)
 - [x] Trust-spine verification script exists (`scripts/verify_trust_spine.ps1`)
+- [x] `cargo tauri build` produces `.msi` and `.exe` installers — `default-run = "cassette"` added to `src-tauri/Cargo.toml` (2026-04-03)
 
 ### [P1] [todo] Formalize performance baseline and regression budget
 
@@ -234,6 +235,96 @@ Acceptance:
 - [ ] Core commands benchmarked or timed (scan, organize, validation, bounded coordinator run)
 - [ ] Baselines recorded in `TELEMETRY.md`
 - [ ] Regression thresholds documented
+
+### [P1] [done] Audit and correct tool-role documentation drift
+
+Why:
+
+- Tool roles were drifting between docs, settings labels, and runtime behavior.
+- Planning against stale tool ownership is now a bigger risk than adding one more provider.
+
+Acceptance:
+
+- [x] `TOOL_AND_SERVICE_REGISTRY.md` matches current runtime truth
+- [x] Canonical docs explicitly mark MusicBrainz as identity spine and Spotify as intent seed
+- [x] Research/reference docs that diverge are marked non-canonical
+
+### [P1] [in_progress] Unify Spotify ingest lanes into one identity-first import path
+
+Why:
+
+- Spotify history summary import and direct desired-track import previously had different identity fidelity.
+- ISRC-first reconciliation only works if ingest actually feeds the schema.
+
+Acceptance:
+
+- [x] Shared Spotify payload parser handles direct desired-track import shapes
+- [x] Direct import now persists `source_track_id`, `source_album_id`, `source_artist_id`, `duration_ms`, best-effort `isrc`, and raw payload JSON
+- [ ] Album-summary queueing and direct desired-track intake share one canonical operator story
+- [ ] Replay proof shows improved reconciliation hit-rate on a fixed sample
+
+### [P1] [review] Route all album expansion through the resilient resolver
+
+Why:
+
+- Album queueing had split logic and a MusicBrainz-only bias even though the fallback resolver already existed.
+
+Acceptance:
+
+- [x] Tauri album queueing uses the shared resolver (`MusicBrainz -> iTunes -> Spotify`)
+- [x] `engine_pipeline_cli --import-spotify-missing` uses the shared resolver
+- [x] `batch_download_cli` uses the shared resolver
+- [ ] Regression tests prove the shared resolver is the only album expansion path
+
+### [P1] [review] Separate search owners from execution owners
+
+Why:
+
+- Torrent and Usenet lanes were blurring search and execution responsibilities.
+- Clean ownership is required before a real planner stage is worth building.
+
+Acceptance:
+
+- [x] Jackett is the canonical torrent search owner in the Director
+- [x] Real-Debrid direct search is disabled by default in the Director
+- [x] `torrent_album_cli` only uses apibay behind an explicit fallback flag
+- [x] SABnzbd completion now consults queue/history APIs before filesystem fallback
+
+### [P1] [in_progress] Promote canonical identity and source-alias persistence to the active path
+
+Why:
+
+- The control-plane schema can already carry much richer identity than some active intake/queue boundaries provide.
+
+Acceptance:
+
+- [x] Runtime and sidecar persist canonical artist/release/recording and alias-evidence surfaces
+- [x] Shared Spotify import now carries richer source IDs and best-effort ISRC
+- [x] Active queue/request boundaries now preserve richer source-track/source-album/source-artist identity when available
+- [ ] Release-group identity plan is documented and scoped
+
+### [P1] [in_progress] Introduce a planner stage before byte acquisition
+
+Why:
+
+- Candidate search, memory reuse, review, and policy still sit too close to direct acquisition.
+
+Acceptance:
+
+- [x] Search/planning and byte acquisition are now distinct stages in the command surface
+- [x] Candidate sets are persisted before acquire starts
+- [ ] Review/policy APIs exist for approval, rejection, and rationale
+
+### [P1] [todo] Retire acquisition bypass lanes after planner cutover
+
+Why:
+
+- `batch_download_cli` and direct backlog submission paths still bypass the future planner surface.
+
+Acceptance:
+
+- [ ] Bypass lanes are demoted, removed, or explicitly marked as operator-only debt
+- [ ] Canonical planner path is the default for UI/runtime queue submission
 
 ### [P1] [review] Reuse persisted provenance and candidate memory in runtime behavior
 
@@ -318,7 +409,7 @@ Acceptance:
 
 ## P2
 
-### [P2] [todo] Add canonical release identity persistence and a stronger request contract
+### [P1] [in_progress] Add canonical release identity persistence and a stronger request contract
 
 Why:
 
@@ -350,6 +441,7 @@ Acceptance:
 Why:
 
 - `MetadataRepairOnly` is still explicitly stubbed in `director/engine.rs`.
+- This stays behind planner/identity work; it is not the next architectural step.
 
 Acceptance:
 
@@ -366,7 +458,28 @@ Acceptance:
 - [ ] Soak-test procedure documented
 - [ ] Known leaks, stalls, or recovery pain points recorded if found
 
-### [P2] [todo] Tighten metadata and enrichment operating story
+### [P2] [todo] Integrate Cover Art Archive after canonical release selection
+
+Acceptance:
+
+- [ ] Artwork fetch is tied to canonical release choice, not ad hoc provider metadata
+- [ ] Tag/embed flow documents when Cover Art Archive is used
+
+### [P2] [todo] Either implement Discogs and Last.fm enrichers for real or remove them from active config and UI
+
+Acceptance:
+
+- [ ] Stub enrichers are either promoted to real runtime behavior or demoted from active surfaces
+- [ ] Canonical docs do not imply enrichment readiness that runtime does not have
+
+### [P2] [todo] Reframe Bandcamp as purchase-provenance research or remove the placeholder surface
+
+Acceptance:
+
+- [ ] Placeholder ownership is explicit in docs and config surfaces
+- [ ] No active runtime path implies Bandcamp acquisition support today
+
+### [P2] [done] Tighten metadata and enrichment operating story
 
 Why:
 
@@ -375,8 +488,8 @@ Why:
 
 Acceptance:
 
-- [ ] Current enrichment behavior documented
-- [ ] Future integration plan recorded without overstating readiness
+- [x] Current enrichment behavior documented
+- [x] Future integration plan recorded without overstating readiness
 
 ---
 

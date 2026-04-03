@@ -1,3 +1,7 @@
+use cassette_lib::album_resolver::{
+    metadata_service_from_remote_config,
+    resolve_album_track_tasks as resolve_album_track_tasks_with_metadata,
+};
 use cassette_core::db::{Db, TrackPathUpdate};
 use cassette_core::director::models::FinalizedTrackDisposition;
 use cassette_core::director::providers::{
@@ -191,6 +195,7 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
             ProviderPolicy { provider_id: "usenet".to_string(), max_concurrency: 1 },
             ProviderPolicy { provider_id: "local_archive".to_string(), max_concurrency: 2 },
             ProviderPolicy { provider_id: "yt_dlp".to_string(), max_concurrency: 2 },
+            ProviderPolicy { provider_id: "jackett".to_string(), max_concurrency: 3 },
             ProviderPolicy { provider_id: "real_debrid".to_string(), max_concurrency: 3 },
         ],
         staging_root: PathBuf::from(&staging_root),
@@ -214,8 +219,19 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
         Arc::new(YtDlpProvider::new("yt-dlp")),
     ];
 
-    if let Some(key) = read_setting(db, "real_debrid_key") {
-        providers.push(Arc::new(RealDebridProvider::new(key)));
+    let rd_key = read_setting(db, "real_debrid_key");
+    if let Some(ref key) = rd_key {
+        providers.push(Arc::new(RealDebridProvider::with_direct_search(
+            key.clone(),
+            false,
+        )));
+    }
+
+    // Jackett: multi-indexer torrent search via Torznab, resolved through Real-Debrid
+    let jackett_url = read_setting(db, "jackett_url").filter(|u| !u.trim().is_empty());
+    let jackett_api_key = read_setting(db, "jackett_api_key").filter(|k| !k.trim().is_empty());
+    if let (Some(jurl), Some(jkey), Some(ref rdkey)) = (jackett_url, jackett_api_key, &rd_key) {
+        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(jurl, jkey, rdkey.clone())));
     }
 
     Director::new(config, providers).start()
@@ -262,6 +278,8 @@ fn task_from_claim(
         }),
         target: NormalizedTrack {
             spotify_track_id: claim.desired.source_track_id.clone(),
+            source_album_id: claim.desired.source_album_id.clone(),
+            source_artist_id: claim.desired.source_artist_id.clone(),
             source_playlist: None,
             artist: claim.desired.artist_name.clone(),
             album_artist: Some(claim.desired.artist_name.clone()),
@@ -379,11 +397,11 @@ fn is_unfetchable_track(title: &str) -> bool {
 async fn run_spotify_backlog(
     db: &Db,
     handle_director: &DirectorHandle,
+    metadata: &cassette_core::metadata::MetadataService,
     min_plays: i64,
     limit: usize,
 ) -> Result<(usize, usize, Vec<String>), Box<dyn std::error::Error>> {
-    use cassette_core::metadata::MetadataService;
-    use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+    use cassette_core::director::{AcquisitionStrategy, TrackTaskSource};
 
     let missing = db.get_missing_spotify_albums_with_min_plays(min_plays)?;
     let completed_keys = db.get_completed_task_keys()?;
@@ -391,8 +409,6 @@ async fn run_spotify_backlog(
     let mut albums_attempted = 0usize;
     let mut tracks_submitted = 0usize;
     let mut errors: Vec<String> = Vec::new();
-    let metadata = MetadataService::new()?;
-
     for album in &missing {
         if tracks_submitted >= limit {
             break;
@@ -404,114 +420,44 @@ async fn run_spotify_backlog(
         }
         albums_attempted += 1;
 
-        // Resolve tracklist via MusicBrainz
-        let releases = match metadata.search_release(artist, title).await {
-            Ok(r) => r,
+        let resolved = match resolve_album_track_tasks_with_metadata(
+            metadata,
+            artist,
+            title,
+            TrackTaskSource::SpotifyHistory,
+            AcquisitionStrategy::DiscographyBatch,
+        )
+        .await
+        {
+            Ok(tasks) => tasks,
             Err(e) => {
-                errors.push(format!("{artist} - {title}: search failed: {e}"));
+                errors.push(format!("{artist} - {title}: {e}"));
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 continue;
             }
         };
-        // Prefer standard editions: pick the release with track count in 6..=20 range,
-        // smallest count first (avoids deluxe/bonus-disc editions). Fall back to any
-        // release with tracks if nothing fits the range.
-        let release = {
-            let mut candidates: Vec<_> = releases.into_iter()
-                .filter(|r| r.track_count.unwrap_or(0) > 0)
-                .collect();
-            candidates.sort_by_key(|r| r.track_count.unwrap_or(999));
-            let preferred = candidates.iter()
-                .find(|r| {
-                    let n = r.track_count.unwrap_or(0);
-                    n >= 6 && n <= 20
-                })
-                .or_else(|| candidates.first())
-                .cloned();
-            match preferred {
-                Some(r) => r,
-                None => {
-                    errors.push(format!("{artist} - {title}: no MusicBrainz release found"));
-                    continue;
-                }
-            }
-        };
-        let release_with_tracks = match metadata.get_release_tracks(&release.id).await {
-            Ok(r) => r,
-            Err(e) => {
-                errors.push(format!("{artist} - {title}: tracklist fetch failed: {e}"));
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                continue;
-            }
-        };
-        if release_with_tracks.tracks.is_empty() {
-            errors.push(format!("{artist} - {title}: empty tracklist"));
-            continue;
-        }
 
-        let bundle_size = release_with_tracks.tracks.len();
-        let strategy = if bundle_size > 1 {
-            AcquisitionStrategy::DiscographyBatch
-        } else {
-            AcquisitionStrategy::Standard
-        };
-
-        // Skip bonus discs entirely — providers don't carry deluxe-only content
-        let has_bonus_disc = release_with_tracks.tracks.iter().any(|t| t.disc_number > 1);
-        for track in &release_with_tracks.tracks {
+        let has_bonus_disc = resolved
+            .tasks
+            .iter()
+            .any(|task| task.target.disc_number.unwrap_or(1) > 1);
+        for task in &resolved.tasks {
             if tracks_submitted >= limit {
                 break;
             }
-            // Skip bonus disc tracks
-            if has_bonus_disc && track.disc_number > 1 {
+            if has_bonus_disc && task.target.disc_number.unwrap_or(1) > 1 {
                 continue;
             }
-            // Skip skits, intros, interludes, and other unfetchable track types
-            if is_unfetchable_track(&track.title) {
+            if is_unfetchable_track(&task.target.title) {
                 continue;
             }
-            let task_id = format!(
-                "spotify-album-track::{}::{}::{}::{:02}::{}",
-                artist.to_ascii_lowercase(),
-                title.to_ascii_lowercase(),
-                track.disc_number,
-                track.track_number,
-                track.title.trim().to_ascii_lowercase()
-                    .chars().map(|c| if c.is_alphanumeric() { c } else { ' ' })
-                    .collect::<String>().split_whitespace().collect::<Vec<_>>().join(" "),
-            );
-            if completed_keys.contains(&task_id) {
+            if completed_keys.contains(&task.task_id) {
                 continue;
             }
-            let task = TrackTask {
-                task_id: task_id.clone(),
-                source: TrackTaskSource::SpotifyHistory,
-                desired_track_id: None,
-                source_operation_id: None,
-                target: NormalizedTrack {
-                    spotify_track_id: None,
-                    source_playlist: None,
-                    artist: if track.artist.trim().is_empty() { artist.to_string() } else { track.artist.clone() },
-                    album_artist: Some(artist.to_string()),
-                    title: track.title.clone(),
-                    album: Some(release.title.clone()),
-                    track_number: Some(track.track_number),
-                    disc_number: Some(track.disc_number),
-                    year: release.year,
-                    duration_secs: if track.duration_ms > 0 { Some(track.duration_ms as f64 / 1000.0) } else { None },
-                    isrc: None,
-                    musicbrainz_recording_id: None,
-                    musicbrainz_release_id: None,
-                    canonical_artist_id: None,
-                    canonical_release_id: None,
-                },
-                strategy,
-            };
-            handle_director.submitter.submit(task).await?;
+            handle_director.submitter.submit(task.clone()).await?;
             tracks_submitted += 1;
         }
 
-        // Rate-limit MusicBrainz
         tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     }
 
@@ -608,8 +554,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let handle_director = build_director(&db, db_path.clone());
         let mut results = handle_director.subscribe_results();
 
+        let remote_provider_config = load_remote_provider_config(&db);
+        let metadata = metadata_service_from_remote_config(&remote_provider_config)?;
         let (albums_attempted, tracks_submitted, errors) =
-            run_spotify_backlog(&db, &handle_director, spotify_min_plays, limit).await?;
+            run_spotify_backlog(&db, &handle_director, &metadata, spotify_min_plays, limit)
+                .await?;
 
         println!(
             "spotify-backlog: albums_attempted={} tracks_submitted={} errors={}",

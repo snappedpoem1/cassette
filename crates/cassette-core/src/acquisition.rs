@@ -124,8 +124,11 @@ impl AcquisitionRequest {
             .join(",");
 
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.scope.as_str(),
+            normalize_component(self.source_track_id.as_deref().unwrap_or_default()),
+            normalize_component(self.source_album_id.as_deref().unwrap_or_default()),
+            normalize_component(self.source_artist_id.as_deref().unwrap_or_default()),
             normalize_component(&self.artist),
             normalize_component(self.album.as_deref().unwrap_or_default()),
             normalize_component(&self.title),
@@ -134,6 +137,18 @@ impl AcquisitionRequest {
             self.year.unwrap_or_default(),
             self.duration_secs.unwrap_or_default(),
             normalize_component(self.isrc.as_deref().unwrap_or_default()),
+            normalize_component(
+                self.musicbrainz_recording_id
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
+            normalize_component(
+                self.musicbrainz_release_id
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
+            self.canonical_artist_id.unwrap_or_default(),
+            self.canonical_release_id.unwrap_or_default(),
             self.strategy_name(),
             normalize_component(self.quality_policy.as_deref().unwrap_or_default()),
             excluded,
@@ -162,6 +177,8 @@ impl AcquisitionRequest {
             source_operation_id: self.source_operation_id.clone(),
             target: NormalizedTrack {
                 spotify_track_id: self.source_track_id.clone(),
+                source_album_id: self.source_album_id.clone(),
+                source_artist_id: self.source_artist_id.clone(),
                 source_playlist: None,
                 artist: self.artist.clone(),
                 album_artist: Some(self.artist.clone()),
@@ -245,6 +262,7 @@ mod tests {
         let task = request.to_track_task();
         assert_eq!(task.task_id, "task-1");
         assert_eq!(task.target.artist, "Artist");
+        assert!(task.target.source_album_id.is_none());
         assert_eq!(task.target.musicbrainz_release_id.as_deref(), Some("mb-release"));
         assert_eq!(task.desired_track_id, Some(11));
         assert_eq!(task.source_operation_id.as_deref(), Some("op-1"));

@@ -132,6 +132,8 @@ fn parse_args() -> Result<(Vec<String>, TrackTask), String> {
         source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
             source_playlist: None,
             artist,
             album_artist: None,

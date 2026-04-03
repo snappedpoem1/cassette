@@ -47,6 +47,8 @@ fn make_task(task_id: &str, artist: &str, title: &str, album: &str) -> TrackTask
         source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
             source_playlist: None,
             artist: artist.to_string(),
             album_artist: Some(artist.to_string()),

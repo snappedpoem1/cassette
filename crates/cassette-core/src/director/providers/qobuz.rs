@@ -340,6 +340,8 @@ impl Provider for QobuzProvider {
 
         let resolved_metadata = NormalizedTrack {
             spotify_track_id: task.target.spotify_track_id.clone(),
+            source_album_id: task.target.source_album_id.clone(),
+            source_artist_id: task.target.source_artist_id.clone(),
             source_playlist: task.target.source_playlist.clone(),
             artist: track_item
                 .pointer("/performer/name")

@@ -3,7 +3,7 @@ use crate::director::error::{DirectorError, ProviderError};
 use crate::director::finalize::{finalize_selected_candidate, merge_normalized_track};
 use crate::director::metadata::apply_metadata;
 use crate::director::models::{
-    CandidateDisposition, CandidateRecord, CandidateSelection, CandidateSelectionMode,
+    CandidateDisposition, CandidateQuality, CandidateRecord, CandidateSelection, CandidateSelectionMode,
     DirectorEvent, DirectorProgress, DirectorTaskResult, FinalizedTrack,
     FinalizedTrackDisposition, ProviderAttemptRecord, ProviderDescriptor, ProviderHealthState,
     ProviderHealthStatus, ProviderSearchCandidate, ProviderSearchRecord, ProvenanceRecord,
@@ -768,39 +768,6 @@ async fn try_provider(
                 .await
                 {
                     Ok(validation) => {
-                        if plan.require_lossless
-                            && !matches!(
-                                validation.quality,
-                                crate::director::models::CandidateQuality::Lossless
-                            )
-                        {
-                            let _ = temp_manager
-                                .quarantine_file(temp_context, &acquisition.temp_path)
-                                .await;
-                            attempts.push(ProviderAttemptRecord {
-                                provider_id: provider_id.to_string(),
-                                attempt: 1,
-                                outcome: "rejected non-lossless candidate".to_string(),
-                            });
-                            candidate_records.push(CandidateRecord {
-                                provider_id: provider_id.to_string(),
-                                provider_display_name: descriptor.display_name.clone(),
-                                provider_trust_rank: descriptor.trust_rank,
-                                provider_order_index,
-                                search_rank,
-                                candidate,
-                                acquisition_temp_path: Some(acquisition.temp_path.clone()),
-                                validation: Some(validation),
-                                score: None,
-                                score_reason: None,
-                                outcome: "rejected_non_lossless".to_string(),
-                                rejection_reason: Some(
-                                    "strategy required lossless validation quality".to_string(),
-                                ),
-                            });
-                            continue;
-                        }
-
                         let (score, score_reason) = score_candidate(
                             &task.target,
                             &descriptor,
@@ -852,6 +819,26 @@ async fn try_provider(
                             clear_provider_runtime_cooldown(provider_runtime_state, provider_id).await;
                             return Ok(ProviderAttemptOutcome::Finalized(result));
                         }
+
+                        // Quality-gated compare mode: if the first provider already
+                        // delivered a lossless validated candidate, finalize immediately.
+                        if plan.compare_after_first_quality_gate
+                            && provider_order_index == 0
+                            && matches!(disposition.validation.quality, CandidateQuality::Lossless)
+                        {
+                            let result = finalize_candidate(
+                                config,
+                                events,
+                                task,
+                                descriptor,
+                                disposition,
+                                attempts.len(),
+                            )
+                            .await?;
+                            clear_provider_runtime_cooldown(provider_runtime_state, provider_id).await;
+                            return Ok(ProviderAttemptOutcome::Finalized(result));
+                        }
+
                         valid_candidates.push((disposition, descriptor.clone()));
                         clear_provider_runtime_cooldown(provider_runtime_state, provider_id).await;
                     }
@@ -995,6 +982,10 @@ async fn execute_waterfall(
     // concurrently. Results are cached by moka so the sequential waterfall below
     // will hit cache and skip the network call entirely.
     if let CandidateSelectionMode::CompareTopN(n) = plan.selection_mode {
+        if plan.compare_after_first_quality_gate {
+            // Quality-gated compare mode intentionally evaluates the first provider
+            // before deciding whether to compare, so prefetch is skipped.
+        } else {
         let prefetch_count = n.min(plan.provider_order.len());
         let mut prefetch_set = tokio::task::JoinSet::new();
 
@@ -1064,6 +1055,7 @@ async fn execute_waterfall(
             _ = async {
                 while prefetch_set.join_next().await.is_some() {}
             } => {}
+        }
         }
     }
 
@@ -1974,6 +1966,8 @@ mod tests {
             source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
+                source_album_id: None,
+                source_artist_id: None,
                 source_playlist: None,
                 artist: "Artist".to_string(),
                 album_artist: None,

@@ -1,3 +1,7 @@
+use cassette_lib::album_resolver::{
+    metadata_service_from_spotify_credentials,
+    resolve_album_track_tasks as resolve_album_track_tasks_with_metadata,
+};
 use cassette_core::db::Db;
 use cassette_core::director::providers::{
     DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
@@ -5,8 +9,8 @@ use cassette_core::director::providers::{
 };
 use cassette_core::director::{
     AcquisitionStrategy, Director, DirectorConfig, DirectorTaskResult, DuplicatePolicy,
-    NormalizedTrack, Provider, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
-    TrackTask, TrackTaskSource,
+    Provider, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask,
+    TrackTaskSource,
 };
 use cassette_core::director::ProviderError;
 use cassette_core::director::models::{ProviderHealthStatus, ProviderSearchRecord};
@@ -143,99 +147,6 @@ fn read_setting(db: &Db, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn normalize_task_component(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn album_track_task_key(
-    artist: &str,
-    album: &str,
-    disc_number: u32,
-    track_number: u32,
-    title: &str,
-) -> String {
-    format!(
-        "spotify-album-track::{}::{}::{}::{:02}::{}",
-        artist.to_ascii_lowercase(),
-        album.to_ascii_lowercase(),
-        disc_number,
-        track_number,
-        normalize_task_component(title),
-    )
-}
-
-async fn resolve_album_track_tasks(
-    metadata: &MetadataService,
-    artist: &str,
-    album: &str,
-) -> Result<Vec<TrackTask>, Box<dyn std::error::Error>> {
-    let release_with_tracks = metadata.resolve_release_with_tracks(artist, album).await?;
-    if release_with_tracks.tracks.is_empty() {
-        return Err(format!("No tracks found for {artist} - {album}").into());
-    }
-    let release_title = release_with_tracks.release.title.clone();
-    let release_year = release_with_tracks.release.year;
-
-    let mut tasks = release_with_tracks
-        .tracks
-        .into_iter()
-        .map(|track| TrackTask {
-            task_id: album_track_task_key(
-                artist,
-                album,
-                track.disc_number,
-                track.track_number,
-                &track.title,
-            ),
-            source: TrackTaskSource::SpotifyHistory,
-            desired_track_id: None,
-            source_operation_id: None,
-            target: NormalizedTrack {
-                spotify_track_id: None,
-                source_playlist: None,
-                artist: if track.artist.trim().is_empty() {
-                    artist.to_string()
-                } else {
-                    track.artist
-                },
-                album_artist: Some(artist.to_string()),
-                title: track.title,
-                album: Some(release_title.clone()),
-                track_number: Some(track.track_number),
-                disc_number: Some(track.disc_number),
-                year: release_year,
-                duration_secs: if track.duration_ms > 0 {
-                    Some(track.duration_ms as f64 / 1000.0)
-                } else {
-                    None
-                },
-                isrc: None,
-                musicbrainz_recording_id: None,
-                musicbrainz_release_id: None,
-                canonical_artist_id: None,
-                canonical_release_id: None,
-            },
-            strategy: AcquisitionStrategy::DiscographyBatch,
-        })
-        .collect::<Vec<_>>();
-    tasks.sort_by_key(|task| {
-        (
-            task.target.disc_number.unwrap_or(0),
-            task.target.track_number.unwrap_or(0),
-            task.target.title.to_ascii_lowercase(),
-        )
-    });
-    Ok(tasks)
-}
-
 /// For each Failed task where album == title (likely a single), query MusicBrainz for the
 /// parent album and insert it into spotify_album_history so the next batch run downloads it.
 async fn resolve_failed_singles(db: &Db) -> Result<(), Box<dyn std::error::Error>> {
@@ -332,9 +243,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tasks = Vec::<TrackTask>::new();
     let spotify_id = read_setting(&db, "spotify_client_id");
     let spotify_secret = read_setting(&db, "spotify_client_secret");
-    let metadata = Arc::new(
-        MetadataService::with_spotify(spotify_id, spotify_secret).map_err(|e| e.to_string())?,
-    );
+    let metadata = Arc::new(metadata_service_from_spotify_credentials(
+        spotify_id,
+        spotify_secret,
+    )?);
 
     let albums_to_resolve: Vec<_> = missing_albums
         .iter()
@@ -349,9 +261,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if tasks.len() >= limit {
             break;
         }
-        let result = resolve_album_track_tasks(&metadata, artist, title)
-            .await
-            .map_err(|e| e.to_string());
+        let result = resolve_album_track_tasks_with_metadata(
+            &metadata,
+            artist,
+            title,
+            TrackTaskSource::SpotifyHistory,
+            AcquisitionStrategy::DiscographyBatch,
+        )
+        .await
+        .map(|resolved| resolved.tasks)
+        .map_err(|e| e.to_string());
         match result {
             Ok(resolved_tasks) => {
                 let new_count = resolved_tasks.iter()
@@ -520,7 +439,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     if let Some(key) = rd_key {
-        providers.push(Arc::new(RealDebridProvider::new(key)));
+        providers.push(Arc::new(RealDebridProvider::with_direct_search(
+            key,
+            false,
+        )));
     } else {
         readiness.push(ProviderReadiness {
             provider_id: "real_debrid".to_string(),

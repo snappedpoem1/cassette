@@ -239,6 +239,8 @@ mod tests {
     fn target() -> NormalizedTrack {
         NormalizedTrack {
             spotify_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
             source_playlist: None,
             artist: "Artist".to_string(),
             album_artist: None,

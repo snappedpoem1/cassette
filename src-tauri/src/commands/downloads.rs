@@ -1,3 +1,7 @@
+use crate::album_resolver::{
+    metadata_service_from_remote_config,
+    resolve_album_track_tasks as resolve_album_track_tasks_with_metadata,
+};
 use crate::state::{AppState, BacklogRunStatus};
 use cassette_core::acquisition::{
     AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
@@ -7,7 +11,6 @@ use cassette_core::director::{
     TrackTaskSource,
 };
 use cassette_core::librarian::models::{AcquisitionRequestEvent, AcquisitionRequestRow};
-use cassette_core::metadata::MetadataService;
 use cassette_core::models::{
     AcquisitionQueueReport, DownloadArtistDiscography, DownloadJob, DownloadMetadataSearchResult,
     DownloadStatus,
@@ -38,6 +41,16 @@ pub struct AcquisitionRequestListItem {
 }
 
 #[tauri::command]
+pub async fn start_song_download(
+    state: State<'_, AppState>,
+    artist: String,
+    title: String,
+    album: Option<String>,
+) -> Result<String, String> {
+    start_download(state, artist, title, album).await
+}
+
+#[tauri::command]
 pub async fn start_download(
     state: State<'_, AppState>,
     artist: String,
@@ -46,7 +59,7 @@ pub async fn start_download(
 ) -> Result<String, String> {
     let id = format!("job-{}", Uuid::new_v4());
     let task = build_track_task(&id, &artist, &title, album.clone(), AcquisitionStrategy::Standard);
-    let request = request_from_track_task(&task, "manual");
+    let request = request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
     queue_track_request(state, request).await
 }
 
@@ -439,6 +452,8 @@ fn build_track_task(
         source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
             source_playlist: None,
             artist: artist.to_string(),
             album_artist: Some(artist.to_string()),
@@ -467,15 +482,23 @@ fn request_source_name(source: &TrackTaskSource) -> &'static str {
     }
 }
 
-fn request_from_track_task(task: &TrackTask, source_name: &str) -> AcquisitionRequest {
+fn request_from_track_task(
+    task: &TrackTask,
+    source_name: &str,
+    scope: AcquisitionScope,
+    source_album_id: Option<String>,
+    source_artist_id: Option<String>,
+) -> AcquisitionRequest {
     AcquisitionRequest {
         id: None,
-        scope: AcquisitionScope::Track,
+        scope,
         source: task.source.clone(),
         source_name: source_name.to_string(),
         source_track_id: task.target.spotify_track_id.clone(),
-        source_album_id: None,
-        source_artist_id: None,
+        source_album_id: source_album_id
+            .or_else(|| task.target.source_album_id.clone())
+            .or_else(|| task.target.musicbrainz_release_id.clone()),
+        source_artist_id: source_artist_id.or_else(|| task.target.source_artist_id.clone()),
         artist: task.target.artist.clone(),
         album: task.target.album.clone(),
         title: task.target.title.clone(),
@@ -689,15 +712,41 @@ pub(crate) async fn queue_album_tracks(
     strategy: AcquisitionStrategy,
     completed_keys: &std::collections::HashSet<String>,
 ) -> Result<Vec<String>, String> {
-    let track_tasks = resolve_album_track_tasks(artist, album, source, strategy).await?;
+    let remote_provider_config = load_remote_provider_config(&state)?;
+    let metadata = metadata_service_from_remote_config(&remote_provider_config)?;
+    let resolved =
+        resolve_album_track_tasks_with_metadata(&metadata, artist, album, source, strategy).await?;
+    let crate::album_resolver::ResolvedAlbumTrackTasks {
+        resolver_source,
+        resolver_release_id,
+        source_album_id,
+        tasks,
+    } = resolved;
     let mut queued_job_ids = Vec::new();
 
-    for task in track_tasks {
+    for task in tasks {
         if completed_keys.contains(&task.task_id) {
             continue;
         }
         let source_name = request_source_name(&task.source);
-        let request = request_from_track_task(&task, source_name);
+        let mut request = request_from_track_task(
+            &task,
+            source_name,
+            AcquisitionScope::Album,
+            source_album_id
+                .clone()
+                .or_else(|| task.target.musicbrainz_release_id.clone()),
+            None,
+        );
+        request.raw_payload_json = Some(
+            serde_json::json!({
+                "task": &task,
+                "resolver_source": &resolver_source,
+                "resolver_release_id": &resolver_release_id,
+                "source_album_id": source_album_id.clone(),
+            })
+            .to_string(),
+        );
         match queue_track_request(state.clone(), request).await {
             Ok(task_id) => queued_job_ids.push(task_id),
             Err(error) => return Err(error),
@@ -705,104 +754,6 @@ pub(crate) async fn queue_album_tracks(
     }
 
     Ok(queued_job_ids)
-}
-
-pub(crate) async fn resolve_album_track_tasks(
-    artist: &str,
-    album: &str,
-    source: TrackTaskSource,
-    strategy: AcquisitionStrategy,
-) -> Result<Vec<TrackTask>, String> {
-    let metadata = MetadataService::new().map_err(|error| error.to_string())?;
-    let releases = metadata
-        .search_release(artist, album)
-        .await
-        .map_err(|error| error.to_string())?;
-    let release = releases
-        .into_iter()
-        .find(|release| release.track_count.unwrap_or(0) > 0)
-        .ok_or_else(|| format!("MusicBrainz could not resolve album: {artist} - {album}"))?;
-    let release_with_tracks = metadata
-        .get_release_tracks(&release.id)
-        .await
-        .map_err(|error| error.to_string())?;
-    if release_with_tracks.tracks.is_empty() {
-        return Err(format!("MusicBrainz returned no tracks for {artist} - {album}"));
-    }
-
-    let mut tasks = release_with_tracks
-        .tracks
-        .into_iter()
-        .map(|track| TrackTask {
-            task_id: album_track_task_key(artist, album, track.disc_number, track.track_number, &track.title),
-            source: source.clone(),
-            desired_track_id: None,
-            source_operation_id: None,
-            target: NormalizedTrack {
-                spotify_track_id: None,
-                source_playlist: None,
-                artist: if track.artist.trim().is_empty() {
-                    artist.to_string()
-                } else {
-                    track.artist.clone()
-                },
-                album_artist: Some(artist.to_string()),
-                title: track.title,
-                album: Some(release.title.clone()),
-                track_number: Some(track.track_number),
-                disc_number: Some(track.disc_number),
-                year: release.year,
-                duration_secs: if track.duration_ms > 0 {
-                    Some(track.duration_ms as f64 / 1000.0)
-                } else {
-                    None
-                },
-                isrc: None,
-                musicbrainz_recording_id: None,
-                musicbrainz_release_id: Some(release.id.clone()),
-                canonical_artist_id: None,
-                canonical_release_id: None,
-            },
-            strategy,
-        })
-        .collect::<Vec<_>>();
-    tasks.sort_by_key(|task| {
-        (
-            task.target.disc_number.unwrap_or(0),
-            task.target.track_number.unwrap_or(0),
-            task.target.title.to_ascii_lowercase(),
-        )
-    });
-    Ok(tasks)
-}
-
-pub(crate) fn album_track_task_key(
-    artist: &str,
-    album: &str,
-    disc_number: u32,
-    track_number: u32,
-    title: &str,
-) -> String {
-    format!(
-        "spotify-album-track::{}::{}::{}::{:02}::{}",
-        artist.to_ascii_lowercase(),
-        album.to_ascii_lowercase(),
-        disc_number,
-        track_number,
-        normalize_task_component(title),
-    )
-}
-
-pub(crate) fn normalize_task_component(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn release_type_allowed(
@@ -1076,6 +1027,8 @@ pub async fn start_backlog_run(
     let submitter = state.director_submitter.clone();
     let backlog_status = Arc::clone(&state.backlog_status);
     let backlog_cancel = Arc::clone(&state.backlog_cancel);
+    let remote_provider_config = load_remote_provider_config(&state)?;
+    let metadata = std::sync::Arc::new(metadata_service_from_remote_config(&remote_provider_config)?);
     let batch = batch_size.unwrap_or(10);
     let hard_limit = limit.unwrap_or(500);
 
@@ -1138,8 +1091,9 @@ pub async fn start_backlog_run(
                     })
                 });
 
-                // Resolve tracklist via MusicBrainz
-                let track_tasks = match resolve_album_track_tasks(
+                // Resolve tracklist via the shared metadata fallback chain.
+                let resolved_album = match resolve_album_track_tasks_with_metadata(
+                    &metadata,
                     &artist,
                     &title,
                     TrackTaskSource::SpotifyHistory,
@@ -1151,11 +1105,11 @@ pub async fn start_backlog_run(
                     Err(e) => {
                         errors.push(format!("{artist} - {title}: {e}"));
                         albums_skipped += 1;
-                        // Brief pause so we don't hammer MusicBrainz on errors
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         continue;
                     }
                 };
+                let track_tasks = resolved_album.tasks.clone();
 
                 let mut submitted_any = false;
                 for task in &track_tasks {
@@ -1185,7 +1139,25 @@ pub async fn start_backlog_run(
                     if let Ok(mut jobs) = download_jobs.lock() {
                         jobs.insert(task.task_id.clone(), job);
                     }
-                    let request = request_from_track_task(&task, request_source_name(&task.source));
+                    let mut request = request_from_track_task(
+                        &task,
+                        request_source_name(&task.source),
+                        AcquisitionScope::Album,
+                        resolved_album
+                            .source_album_id
+                            .clone()
+                            .or_else(|| task.target.musicbrainz_release_id.clone()),
+                        None,
+                    );
+                    request.raw_payload_json = Some(
+                        serde_json::json!({
+                            "task": task,
+                            "resolver_source": resolved_album.resolver_source.clone(),
+                            "resolver_release_id": resolved_album.resolver_release_id.clone(),
+                            "source_album_id": resolved_album.source_album_id.clone(),
+                        })
+                        .to_string(),
+                    );
                     let request_row = match control_db.create_acquisition_request(&request).await {
                         Ok(row) => row,
                         Err(error) => {
@@ -1271,6 +1243,68 @@ pub async fn start_backlog_run(
 
     let status = state.backlog_status.lock().map_err(|e| e.to_string())?.clone();
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_task() -> TrackTask {
+        TrackTask {
+            task_id: "task-1".to_string(),
+            source: TrackTaskSource::Manual,
+            desired_track_id: None,
+            source_operation_id: None,
+            target: NormalizedTrack {
+                spotify_track_id: Some("spotify:track:123".to_string()),
+                source_album_id: Some("spotify:album:456".to_string()),
+                source_artist_id: Some("spotify:artist:789".to_string()),
+                source_playlist: None,
+                artist: "Artist".to_string(),
+                album_artist: Some("Artist".to_string()),
+                title: "Song".to_string(),
+                album: Some("Album".to_string()),
+                track_number: Some(1),
+                disc_number: Some(1),
+                year: Some(2024),
+                duration_secs: Some(180.0),
+                isrc: Some("US1234567890".to_string()),
+                musicbrainz_recording_id: Some("recording-1".to_string()),
+                musicbrainz_release_id: Some("release-1".to_string()),
+                canonical_artist_id: Some(3),
+                canonical_release_id: Some(7),
+            },
+            strategy: AcquisitionStrategy::Standard,
+        }
+    }
+
+    #[test]
+    fn song_requests_keep_track_scope() {
+        let task = sample_task();
+        let request = request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
+
+        assert_eq!(request.scope, AcquisitionScope::Track);
+        assert_eq!(request.source_track_id.as_deref(), Some("spotify:track:123"));
+        assert_eq!(request.source_album_id.as_deref(), Some("spotify:album:456"));
+        assert_eq!(request.source_artist_id.as_deref(), Some("spotify:artist:789"));
+    }
+
+    #[test]
+    fn album_requests_keep_album_scope_and_release_identity() {
+        let task = sample_task();
+        let request = request_from_track_task(
+            &task,
+            "manual",
+            AcquisitionScope::Album,
+            task.target.musicbrainz_release_id.clone(),
+            task.target.source_artist_id.clone(),
+        );
+
+        assert_eq!(request.scope, AcquisitionScope::Album);
+        assert_eq!(request.source_album_id.as_deref(), Some("release-1"));
+        assert_eq!(request.source_artist_id.as_deref(), Some("spotify:artist:789"));
+        assert!(request.request_signature.is_some());
+    }
 }
 
 #[tauri::command]

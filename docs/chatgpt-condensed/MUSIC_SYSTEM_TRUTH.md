@@ -69,13 +69,13 @@ Priority order in the export:
 
 ## Acquisition Truth
 
-Canonical provider order in the export docs:
+Canonical acquisition ownership after the scope reset:
 
-1. Qobuz native API
-2. Deezer ARL
-3. Tidal device OAuth plus manifest handling
-4. Slskd
-5. Real-Debrid
+1. MusicBrainz as the identity spine before acquisition
+2. Qobuz and Deezer as premium acquisition adapters
+3. Jackett as torrent search owner
+4. Real-Debrid as torrent resolver/unrestrict owner
+5. slskd, Usenet, and yt-dlp as fallback acquisition adapters
 
 The docs say:
 

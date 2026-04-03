@@ -1,6 +1,6 @@
 # Cassette Capability Audit
 
-Last audited: 2026-03-27
+Last audited: 2026-04-03
 
 Historical snapshot: parts of this audit were superseded by the 2026-03-30 documentation and runtime hardening pass. For current truth, prefer `PROJECT_STATE.md`, `TODO.md`, and `DECISIONS.md`.
 
@@ -71,7 +71,6 @@ This document is intentionally not a feature wish list. It is a system truth map
 | `director/sources/provider_bridge.rs` and `director/sources/*` | Compatibility bridge from older source-provider abstraction to current providers | `Legacy/Compatibility Only` | `crates/cassette-core/src/director/sources/*`, validation path references |
 | `downloader/mod.rs` | Provider-settings compatibility surface | `Legacy/Compatibility Only` | no longer an active acquisition owner |
 | `BandcampSource` | Bandcamp resolver | `Stub/Placeholder` | explicit placeholder error in `crates/cassette-core/src/director/sources/bandcamp.rs` |
-| Tidal | Mentioned in docs only | `Doc-Only Idea` | `docs/PROJECT_STATE.md`, `docs/TELEMETRY.md`, no provider implementation |
 
 ## Phase 2: External Capability Research
 
@@ -99,8 +98,8 @@ This document is intentionally not a feature wish list. It is a system truth map
 | --- | --- | --- | --- |
 | slskd | Soulseek daemon with web/API surface for searches, browse/downloads, queueing, transfers, and automation. Primary source: [slskd README](https://github.com/slskd/slskd/blob/master/README.md). | Repo uses `/api/v0/searches`, `/responses`, `/server`, transfer download APIs, and transfer polling. | Good for candidate retrieval and transfer execution, but current app does not persist search result history in a reusable canonical way. |
 | SABnzbd | API-driven NZB queueing/management. Primary source: [SABnzbd API docs](https://sabnzbd.org/wiki/api). | Repo submits NZBs to `/api` with `mode=addfile`. | Current code does not use SAB queue/history APIs to prove completion; it just polls watched roots. |
-| Jackett | Torznab/API broker over many torrent indexers. Primary source: [Jackett README](https://github.com/Jackett/Jackett). | Config fields exist, but active provider code does not use it. | This is a major underused building block if torrent acquisition remains in scope. |
-| Real-Debrid | Torrent and link resolver APIs include `torrents/addMagnet`, `torrents/selectFiles/{id}`, `torrents/info/{id}`, `torrents/instantAvailability/{hashes}`, and `unrestrict/link`. Source: [Real-Debrid API docs](https://api.real-debrid.com/). | Repo uses instant availability, torrent add/select/poll, and link unrestrict. | Repo does not use RD for search. Search owner is currently TPB, which is a separate and weaker concern. |
+| Jackett | Torznab/API broker over many torrent indexers. Primary source: [Jackett README](https://github.com/Jackett/Jackett). | Active Director provider plus `torrent_album_cli` search owner. | Canonical torrent search owner while torrent acquisition remains in scope. |
+| Real-Debrid | Torrent and link resolver APIs include `torrents/addMagnet`, `torrents/selectFiles/{id}`, `torrents/info/{id}`, `torrents/instantAvailability/{hashes}`, and `unrestrict/link`. Source: [Real-Debrid API docs](https://api.real-debrid.com/). | Repo uses instant availability, torrent add/select/poll, and link unrestrict. | Repo uses RD as resolver/unrestrict owner, not as the canonical torrent search owner. |
 | yt-dlp | Search extractors and audio extraction/postprocessing. Primary source: [yt-dlp README](https://github.com/yt-dlp/yt-dlp). | Repo creates `ytsearch1:` and `scsearch1:` candidates and runs `--extract-audio --audio-format best`. | Good as low-trust fallback; not suitable for canonical metadata identity. |
 
 ### Local Media and App Platform

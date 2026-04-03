@@ -1,6 +1,6 @@
 # Request Capability Matrix
 
-Last audited: 2026-03-27
+Last audited: 2026-04-03
 
 Status values:
 
@@ -25,8 +25,8 @@ Status values:
 | Compare multiple candidate releases before choosing | Blocked by Missing Integration | Internal candidate collection exists conceptually, but candidate persistence/review UX is absent. |
 | Show me candidates before acquisition | Blocked by Missing UX Contract | No command/UI contract for candidate review. |
 | Validate candidate before final download decision | Blocked by Missing Integration | Validation exists after acquire, but not as a user-facing preflight decision stage. |
-| Reuse earlier search results for the same artist/album | Blocked by Missing Data Model | No durable search-result cache keyed by normalized request signature. |
-| Avoid re-querying providers already checked recently | Blocked by Missing Data Model | No provider freshness TTL or negative-result cache in active runtime DB. |
+| Reuse earlier search results for the same artist/album | Could Support with Existing Building Blocks | Provider response cache and candidate persistence exist, but planner-stage read APIs are still being surfaced. |
+| Avoid re-querying providers already checked recently | Could Support with Existing Building Blocks | Runtime provider memory and response cache exist; planner-stage reuse is the active wiring task. |
 | Detect already owned before download | Could Support with Existing Building Blocks | Duplicate/owned checks exist partially, but canonical identity mapping is missing. |
 | Detect attempted before and failed | Could Support with Existing Building Blocks | `director_task_history` stores final results, but not normalized request signatures and provider-failure memory broadly enough. |
 | Explain why this provider/result was chosen | Could Support with Existing Building Blocks | Score reason and attempt records exist in final result JSON, but are not surfaced well and candidate-set context is missing. |
@@ -40,4 +40,3 @@ Status values:
 | Ask for manual confirmation before using yt-dlp or TPB/Real-Debrid fallback | Blocked by Missing UX Contract | Current waterfall is internal. |
 | Download only after candidate review and approval | Blocked by Missing Integration | Needs staged candidate set + approval command. |
 | Support "metadata repair only" as a real operation | Blocked by Missing Integration | Strategy exists but is explicitly stubbed. |
-| Support Tidal acquisition | Not Realistic / Wrong Tool today | No implementation exists. |

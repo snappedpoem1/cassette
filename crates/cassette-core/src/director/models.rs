@@ -6,6 +6,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedTrack {
     pub spotify_track_id: Option<String>,
+    #[serde(default)]
+    pub source_album_id: Option<String>,
+    #[serde(default)]
+    pub source_artist_id: Option<String>,
     pub source_playlist: Option<String>,
     pub artist: String,
     pub album_artist: Option<String>,

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashSet;
 use std::path::Path;
+use crate::librarian::import::spotify::parse_spotify_payload;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportSummary {
@@ -14,16 +15,6 @@ pub struct ImportSummary {
     pub timestamp: chrono::DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpotifyTrack {
-    pub artist: String,
-    pub name: String,
-    pub album: Option<String>,
-    pub duration_ms: Option<i64>,
-    pub uri: Option<String>,
-    pub raw_payload: serde_json::Value,
-}
-
 pub async fn import_spotify_export(
     db_pool: &sqlx::SqlitePool,
     spotify_json_path: &Path,
@@ -31,17 +22,23 @@ pub async fn import_spotify_export(
     ensure_desired_tracks_table(db_pool).await?;
 
     let json_text = tokio::fs::read_to_string(spotify_json_path).await?;
-    let tracks = parse_spotify_tracks(&json_text)?;
+    let payload = parse_spotify_payload(&json_text)?;
+    let source_name = payload
+        .source_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("spotify");
+    let tracks = payload.tracks;
 
     let mut imported = 0usize;
     let mut duplicates = 0usize;
     let mut seen_in_file: HashSet<String> = HashSet::new();
 
     for track in &tracks {
-        let source_track_id = track.uri.clone();
+        let source_track_id = track.track_id.clone();
         let unique_key = source_track_id
             .clone()
-            .unwrap_or_else(|| format!("{}::{}", track.artist, track.name));
+            .unwrap_or_else(|| format!("{}::{}", track.artist_name, track.track_title));
 
         if !seen_in_file.insert(unique_key) {
             duplicates += 1;
@@ -50,9 +47,10 @@ pub async fn import_spotify_export(
 
         if let Some(uri) = source_track_id.as_deref() {
             let existing = sqlx::query_scalar::<_, i64>(
-                "SELECT id FROM desired_tracks WHERE source_track_id = ?1 AND source_name = 'spotify' LIMIT 1",
+                "SELECT id FROM desired_tracks WHERE source_track_id = ?1 AND source_name = ?2 LIMIT 1",
             )
             .bind(uri)
+            .bind(source_name)
             .fetch_optional(db_pool)
             .await?;
 
@@ -65,14 +63,15 @@ pub async fn import_spotify_export(
                 r#"
                 SELECT id
                 FROM desired_tracks
-                WHERE source_name = 'spotify'
-                  AND lower(artist_name) = lower(?1)
-                  AND lower(track_title) = lower(?2)
+                WHERE source_name = ?1
+                  AND lower(artist_name) = lower(?2)
+                  AND lower(track_title) = lower(?3)
                 LIMIT 1
                 "#,
             )
-            .bind(&track.artist)
-            .bind(&track.name)
+            .bind(source_name)
+            .bind(&track.artist_name)
+            .bind(&track.track_title)
             .fetch_optional(db_pool)
             .await?;
 
@@ -85,17 +84,28 @@ pub async fn import_spotify_export(
         sqlx::query(
             r#"
             INSERT INTO desired_tracks
-                            (source_name, source_track_id, artist_name, album_title, track_title, duration_ms, raw_payload_json)
-                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                            (source_name, source_track_id, source_album_id, source_artist_id, artist_name, album_title, track_title, track_number, disc_number, duration_ms, isrc, raw_payload_json)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             "#,
         )
-        .bind("spotify")
+        .bind(source_name)
         .bind(source_track_id)
-        .bind(&track.artist)
-        .bind(track.album.clone())
-        .bind(&track.name)
+        .bind(track.album_id.as_deref())
+        .bind(track.artist_id.as_deref())
+        .bind(&track.artist_name)
+        .bind(track.album_title.clone())
+        .bind(&track.track_title)
+        .bind(track.track_number)
+        .bind(track.disc_number)
         .bind(track.duration_ms)
-        .bind(track.raw_payload.to_string())
+        .bind(track.isrc.as_deref())
+        .bind(
+            track
+                .raw_payload
+                .as_ref()
+                .map(serde_json::Value::to_string)
+                .or_else(|| serde_json::to_string(track).ok()),
+        )
         .execute(db_pool)
         .await?;
 
@@ -103,8 +113,9 @@ pub async fn import_spotify_export(
     }
 
     let db_total_spotify_tracks = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM desired_tracks WHERE source_name = 'spotify'",
+        "SELECT COUNT(*) FROM desired_tracks WHERE source_name = ?1",
     )
+    .bind(source_name)
     .fetch_one(db_pool)
     .await? as usize;
 
@@ -134,99 +145,6 @@ pub async fn verify_spotify_import(
     }
 
     Ok(())
-}
-
-fn parse_spotify_tracks(input: &str) -> Result<Vec<SpotifyTrack>> {
-    let value: serde_json::Value = serde_json::from_str(input)?;
-
-    if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
-        let mut tracks = Vec::new();
-        for item in items {
-            let track_obj = item.get("track").unwrap_or(item);
-            if let Some(track) = spotify_track_from_value(track_obj.clone()) {
-                tracks.push(track);
-            }
-        }
-        return Ok(tracks);
-    }
-
-    if let Some(array) = value.as_array() {
-        let mut tracks = Vec::new();
-        for item in array {
-            if let Some(track) = spotify_track_from_value(item.clone()) {
-                tracks.push(track);
-            }
-        }
-        return Ok(tracks);
-    }
-
-    Err(ValidationError::InvalidConfig(
-        "Unsupported Spotify export JSON format".to_string(),
-    ))
-}
-
-fn spotify_track_from_value(value: serde_json::Value) -> Option<SpotifyTrack> {
-    let artist = value
-        .get("artist")
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string)
-        .or_else(|| {
-            value
-                .get("artists")
-                .and_then(|v| v.as_array())
-                .and_then(|artists| artists.first())
-                .and_then(|first| first.get("name"))
-                .and_then(|name| name.as_str())
-                .map(ToString::to_string)
-        })?;
-
-    let name = value
-        .get("title")
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string)
-        .or_else(|| {
-            value
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string)
-        })?;
-
-    let album = value
-        .get("album")
-        .and_then(|v| {
-            if let Some(s) = v.as_str() {
-                Some(s.to_string())
-            } else {
-                v.get("name")
-                    .and_then(|n| n.as_str())
-                    .map(ToString::to_string)
-            }
-        });
-
-    let duration_ms = value
-        .get("duration_ms")
-        .and_then(|v| v.as_i64())
-        .or_else(|| value.get("duration").and_then(|v| v.as_i64()));
-
-    let uri = value
-        .get("uri")
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string)
-        .or_else(|| {
-            value
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|id| format!("spotify:track:{id}"))
-        });
-
-    Some(SpotifyTrack {
-        artist,
-        name,
-        album,
-        duration_ms,
-        uri,
-        raw_payload: value,
-    })
 }
 
 async fn ensure_desired_tracks_table(db_pool: &sqlx::SqlitePool) -> Result<()> {

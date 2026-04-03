@@ -16,6 +16,14 @@ pub fn merge_normalized_track(
             .spotify_track_id
             .clone()
             .or_else(|| resolved.spotify_track_id.clone()),
+        source_album_id: requested
+            .source_album_id
+            .clone()
+            .or_else(|| resolved.source_album_id.clone()),
+        source_artist_id: requested
+            .source_artist_id
+            .clone()
+            .or_else(|| resolved.source_artist_id.clone()),
         source_playlist: requested.source_playlist.clone(),
         artist: if requested.artist.trim().is_empty() {
             resolved.artist.clone()
@@ -56,6 +64,8 @@ fn merge_embedded_metadata(requested: &NormalizedTrack, staged_path: &Path) -> N
             requested,
             Some(&NormalizedTrack {
                 spotify_track_id: None,
+                source_album_id: None,
+                source_artist_id: None,
                 source_playlist: None,
                 artist: track.artist,
                 album_artist: if track.album_artist.trim().is_empty() {
@@ -285,6 +295,8 @@ mod tests {
     fn target() -> NormalizedTrack {
         NormalizedTrack {
             spotify_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
             source_playlist: None,
             artist: "AC/DC".to_string(),
             album_artist: None,

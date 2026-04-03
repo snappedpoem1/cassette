@@ -5,6 +5,7 @@ use crate::spotify_history::{
 };
 use crate::state::AppState;
 use cassette_core::director::{AcquisitionStrategy, TrackTaskSource};
+use cassette_core::librarian::import::import_desired_spotify_json;
 use cassette_core::models::SpotifyAlbumHistory;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -56,6 +57,19 @@ pub fn parse_spotify_history(
         unique_albums,
         already_in_library,
     })
+}
+
+#[tauri::command]
+pub async fn import_spotify_desired_tracks(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<usize, String> {
+    let json = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|error| format!("Cannot read Spotify import JSON: {error}"))?;
+    import_desired_spotify_json(&state.control_db, &json)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Queue download jobs for Spotify albums not already in the library.

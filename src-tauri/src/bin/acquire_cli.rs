@@ -2,6 +2,7 @@ use cassette_lib::state::AppState;
 use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use cassette_core::models::{DownloadJob, DownloadStatus};
 use std::path::PathBuf;
+use tokio::runtime::Builder;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -44,10 +45,15 @@ fn status_label(status: &DownloadStatus) -> &'static str {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), String> {
+fn main() -> Result<(), String> {
     let (artist, title, album) = parse_args()?;
     let db_path = app_db_path()?;
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let _runtime_guard = runtime.enter();
+
     let app_state = AppState::new(&db_path, None).map_err(|error| error.to_string())?;
 
     let id = format!("job-{}", Uuid::new_v4());
@@ -77,94 +83,98 @@ async fn main() -> Result<(), String> {
         );
     }
 
-    app_state
-        .director_submitter
-        .submit(TrackTask {
-            task_id: id.clone(),
-            source: TrackTaskSource::Manual,
-            desired_track_id: None,
-            source_operation_id: None,
-            target: NormalizedTrack {
-                spotify_track_id: None,
-                source_playlist: None,
-                artist: artist.clone(),
-                album_artist: Some(artist.clone()),
-                title: title.clone(),
-                album: album.clone(),
-                track_number: None,
-                disc_number: None,
-                year: None,
-                duration_secs: None,
-                isrc: None,
-                musicbrainz_recording_id: None,
-                musicbrainz_release_id: None,
-                canonical_artist_id: None,
-                canonical_release_id: None,
-            },
-            strategy: AcquisitionStrategy::Standard,
-        })
-        .await
-        .map_err(|error| error.to_string())?;
+    runtime.block_on(async {
+        app_state
+            .director_submitter
+            .submit(TrackTask {
+                task_id: id.clone(),
+                source: TrackTaskSource::Manual,
+                desired_track_id: None,
+                source_operation_id: None,
+                target: NormalizedTrack {
+                    spotify_track_id: None,
+                    source_album_id: None,
+                    source_artist_id: None,
+                    source_playlist: None,
+                    artist: artist.clone(),
+                    album_artist: Some(artist.clone()),
+                    title: title.clone(),
+                    album: album.clone(),
+                    track_number: None,
+                    disc_number: None,
+                    year: None,
+                    duration_secs: None,
+                    isrc: None,
+                    musicbrainz_recording_id: None,
+                    musicbrainz_release_id: None,
+                    canonical_artist_id: None,
+                    canonical_release_id: None,
+                },
+                strategy: AcquisitionStrategy::Standard,
+            })
+            .await
+            .map_err(|error| error.to_string())?;
 
-    println!("Queued job {id} for {artist} - {title}");
+        println!("Queued job {id} for {artist} - {title}");
 
-    let mut elapsed = 0u64;
-    let mut last_report = String::new();
-    let timeout_secs = 180u64;
-    while elapsed <= timeout_secs {
-        let snapshot = {
+        let mut elapsed = 0u64;
+        let mut last_report = String::new();
+        let timeout_secs = 180u64;
+        while elapsed <= timeout_secs {
+            let snapshot = {
+                let jobs = app_state
+                    .download_jobs
+                    .lock()
+                    .map_err(|error| error.to_string())?;
+                jobs.get(&id).cloned()
+            };
+
+            let Some(job) = snapshot else {
+                return Err("Job disappeared from in-memory queue.".to_string());
+            };
+
+            let provider = job.provider.clone().unwrap_or_else(|| "-".to_string());
+            let error_note = job.error.clone().unwrap_or_default();
+            let report_line = format!(
+                "t={elapsed:>3}s status={} provider={} progress={:.0}% {}",
+                status_label(&job.status),
+                provider,
+                job.progress * 100.0,
+                error_note
+            );
+            if report_line != last_report {
+                println!("{report_line}");
+                last_report = report_line;
+            }
+
+            if matches!(
+                job.status,
+                DownloadStatus::Done | DownloadStatus::Cancelled | DownloadStatus::Failed
+            ) {
+                break;
+            }
+
+            sleep(Duration::from_secs(5)).await;
+            elapsed += 5;
+        }
+
+        let final_job = {
             let jobs = app_state
                 .download_jobs
                 .lock()
                 .map_err(|error| error.to_string())?;
             jobs.get(&id).cloned()
         };
-
-        let Some(job) = snapshot else {
-            return Err("Job disappeared from in-memory queue.".to_string());
-        };
-
-        let provider = job.provider.clone().unwrap_or_else(|| "-".to_string());
-        let error_note = job.error.clone().unwrap_or_default();
-        let report_line = format!(
-            "t={elapsed:>3}s status={} provider={} progress={:.0}% {}",
-            status_label(&job.status),
-            provider,
-            job.progress * 100.0,
-            error_note
-        );
-        if report_line != last_report {
-            println!("{report_line}");
-            last_report = report_line;
+        if let Some(job) = final_job {
+            println!(
+                "Final: status={} provider={} progress={:.0}% error={}",
+                status_label(&job.status),
+                job.provider.unwrap_or_else(|| "-".to_string()),
+                job.progress * 100.0,
+                job.error.unwrap_or_default()
+            );
         }
 
-        if matches!(
-            job.status,
-            DownloadStatus::Done | DownloadStatus::Cancelled | DownloadStatus::Failed
-        ) {
-            break;
-        }
-
-        sleep(Duration::from_secs(5)).await;
-        elapsed += 5;
-    }
-
-    let final_job = {
-        let jobs = app_state
-            .download_jobs
-            .lock()
-            .map_err(|error| error.to_string())?;
-        jobs.get(&id).cloned()
-    };
-    if let Some(job) = final_job {
-        println!(
-            "Final: status={} provider={} progress={:.0}% error={}",
-            status_label(&job.status),
-            job.provider.unwrap_or_else(|| "-".to_string()),
-            job.progress * 100.0,
-            job.error.unwrap_or_default()
-        );
-    }
-
-    Ok(())
+        Ok(())
+    })
 }

@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod deezer;
+pub mod jackett;
 pub mod local_archive;
 pub mod qobuz;
 pub mod real_debrid;
@@ -8,6 +9,7 @@ pub mod usenet;
 pub mod ytdlp;
 
 pub use deezer::DeezerProvider;
+pub use jackett::JackettProvider;
 pub use local_archive::LocalArchiveProvider;
 pub use qobuz::QobuzProvider;
 pub use real_debrid::RealDebridProvider;

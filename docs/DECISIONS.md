@@ -498,6 +498,128 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
+## Decision 25: Jackett Is The Torrent Search Owner; Real-Debrid Is The Resolver
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- The old Real-Debrid provider searched TPB/apibay directly. That confounded search ownership with resolve ownership and limited torrent coverage to a single indexer.
+- `JackettProvider` searches all Jackett-configured indexers via Torznab (cat=3000) and returns magnet URIs. It uses the Real-Debrid API internally to resolve and download, exactly as the existing `RealDebridProvider` does. This separates the search concern from the resolve concern without splitting the Director provider trait.
+- The `torrent_album_cli` already had Jackett search wired as a fallback; the Director waterfall now gets the same capability for per-track acquisition.
+- `RealDebridProvider` is kept as a standalone provider using TPB/apibay so it continues to work for users without Jackett configured.
+
+**Tradeoffs**:
+
+- Requires both `JACKETT_URL` + `JACKETT_API_KEY` and `REAL_DEBRID_KEY` to activate.
+- JackettProvider duplicates the RD client/poll/unrestrict/download logic from RealDebridProvider. This duplication is intentional for now — the two providers have different search paths and the shared logic is not complex enough to justify an extraction yet.
+
+**Revisit Condition**:
+
+- If a Jackett-native acquire path (NZB direct, not RD) becomes desirable, split the acquire into a separate `TorrentResolver` trait.
+
+---
+
+## Decision 26: Torrent CLI Failures Feed Back Into The Coordinator Via The Sidecar
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- `torrent_album_cli` failures (no torrent found) were silently logged and forgotten. Those albums then remained in the Spotify backlog with no automatic retry path.
+- The sidecar already has the right primitives: `desired_tracks` + `delta_queue(missing_download)` is exactly how the coordinator discovers work.
+- `--seed-sidecar` expands failed albums via MusicBrainz into per-track `desired_tracks` entries, then enqueues them as `missing_download`. The next `engine_pipeline_cli --resume` run claims and resolves them via Qobuz/Deezer/slskd — providers that are far more reliable for catalog content than TPB.
+
+**Tradeoffs**:
+
+- Requires a MusicBrainz lookup per failed album (1 req/sec rate limit respected).
+- Albums already in `desired_tracks` are skipped to prevent duplicate queue entries.
+- The feedback loop is explicit (`--seed-sidecar` flag), not automatic, so the user controls when to run it.
+
+**Revisit Condition**:
+
+- If the coordinator grows a native "album backlog" mode that handles this automatically, the CLI flag can be deprecated.
+
+---
+
+## Decision 27: `default-run = "cassette"` Is Required For Tauri Build
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- `src-tauri/Cargo.toml` has multiple `[[bin]]` entries (CLI tools). Without `default-run`, Tauri cannot determine which binary is the app entrypoint and fails with "failed to find main binary".
+- Adding `default-run = "cassette"` to the `[package]` section resolves this. The bundler now targets `src-tauri/src/main.rs` correctly.
+- `cargo tauri build` now produces `Cassette_0.1.0_x64_en-US.msi` and `Cassette_0.1.0_x64-setup.exe`.
+
+**Tradeoffs**:
+
+- None — this is a zero-cost correctness fix.
+
+**Revisit Condition**:
+
+- If the package is ever renamed, update `default-run` to match.
+
+---
+
+## Decision 28: Cassette Is Identity-First, Not A Generic Downloader Bundle
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- The repo already has enough providers. The larger risk is unclear ownership, not missing integrations.
+- MusicBrainz is the canonical identity spine for artist/release-group/release/recording truth.
+- Spotify is the intent/import seed and source-alias input, not canonical truth.
+- Qobuz, Deezer, slskd, Usenet, Jackett, Real-Debrid, and yt-dlp are acquisition adapters or evidence sources, not identity owners.
+
+**Tradeoffs**:
+
+- Some existing command shortcuts and docs now need to be reshaped around the identity-first planner story.
+- Provider metadata must be treated as corroborating evidence unless it resolves back to canonical identity.
+
+**Revisit Condition**:
+
+- Only if Cassette intentionally changes product scope away from local-library governance and into generic downloader tooling.
+
+---
+
+## Decision 29: Keep The Dual-Store Runtime Shape Intentionally
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- `cassette_librarian.db` is now the canonical control-plane and identity/planning store.
+- `cassette.db` remains the playback/runtime cache and active desktop-state store.
+- `db_converge_cli` is useful as a migration/export and proof tool, but a single-file runtime is not the near-term architecture goal.
+
+**Tradeoffs**:
+
+- Cross-store convergence must remain explicit and auditable.
+- Some runtime surfaces still need better projection of sidecar truth.
+
+**Revisit Condition**:
+
+- If the planner/review surface and runtime cache can be unified without sacrificing auditability, reversibility, or operational clarity.
+
+---
+
+## Decision 30: Planner Surface Ships Read-Only Before Approval Mutations
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- Cassette needed a real planner stage before acquisition, but not another command-only shortcut that jumps straight to bytes.
+- The first safe cut is read-only: normalize intent, search providers, persist candidate sets, and expose rationale before acquire begins.
+- Approval/rejection mutations can come after the candidate-set and rationale surfaces are proven durable and auditable.
+
+**Tradeoffs**:
+
+- Bypass lanes still exist for some CLI/operator flows until planner-backed submission becomes the default.
+- The planner currently focuses on request-scoped evidence and provider search results; richer approval policy is still ahead.
+
+**Revisit Condition**:
+
+- Once approval/rejection mutation APIs and planner-backed default submission are live.
+
+---
+
 ## Deferred Decisions
 
 ### Distributed / Multi-Machine Coordination

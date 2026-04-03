@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct UsenetProvider {
@@ -203,6 +204,7 @@ impl Provider for UsenetProvider {
                 message: error.to_string(),
             })?;
 
+        let mut sab_job_id: Option<String> = None;
         if let (Some(sabnzbd_url), Some(sabnzbd_api_key)) =
             (self.sabnzbd_url.as_deref(), self.sabnzbd_api_key.as_deref())
         {
@@ -233,11 +235,28 @@ impl Provider for UsenetProvider {
                     message: format!("SABnzbd returned HTTP {}", sab_response.status()),
                 });
             }
+            let sab_body = sab_response
+                .json::<Value>()
+                .await
+                .unwrap_or_else(|_| Value::Null);
+            sab_job_id = extract_sab_job_id(&sab_body);
         }
 
         for _ in 0..24 {
             sleep(Duration::from_secs(5)).await;
-            if let Some(found) = find_matching_audio_file(&self.scan_roots, &task.target.artist, &task.target.title) {
+            let mut scan_roots = self.scan_roots.clone();
+            if let (Some(sabnzbd_url), Some(sabnzbd_api_key), Some(job_id)) = (
+                self.sabnzbd_url.as_deref(),
+                self.sabnzbd_api_key.as_deref(),
+                sab_job_id.as_deref(),
+            ) {
+                match sab_completion_paths(&client, sabnzbd_url, sabnzbd_api_key, job_id).await {
+                    Ok(extra_roots) => scan_roots.extend(extra_roots),
+                    Err(error) => warn!(provider = "usenet", %job_id, %error, "SAB queue/history poll failed"),
+                }
+            }
+
+            if let Some(found) = find_matching_audio_file(&scan_roots, &task.target.artist, &task.target.title) {
                 let extension = found
                     .extension()
                     .and_then(|value| value.to_str())
@@ -272,6 +291,109 @@ impl Provider for UsenetProvider {
             message: "NZB submitted but no finalized audio file appeared in watched roots".to_string(),
         })
     }
+}
+
+fn extract_sab_job_id(body: &Value) -> Option<String> {
+    body.pointer("/nzo_ids/0")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| body.get("nzo_id").and_then(Value::as_str).map(ToString::to_string))
+}
+
+async fn sab_completion_paths(
+    client: &reqwest::Client,
+    sabnzbd_url: &str,
+    sabnzbd_api_key: &str,
+    nzo_id: &str,
+) -> Result<Vec<PathBuf>, ProviderError> {
+    let queue_body = client
+        .get(format!("{sabnzbd_url}/api"))
+        .query(&[
+            ("mode", "queue"),
+            ("apikey", sabnzbd_api_key),
+            ("output", "json"),
+            ("limit", "50"),
+        ])
+        .send()
+        .await
+        .map_err(|error| ProviderError::Network {
+            provider_id: "usenet".to_string(),
+            message: format!("SABnzbd queue poll failed: {error}"),
+        })?
+        .json::<Value>()
+        .await
+        .map_err(|error| ProviderError::Network {
+            provider_id: "usenet".to_string(),
+            message: format!("SABnzbd queue JSON parse failed: {error}"),
+        })?;
+
+    if let Some(slot) = find_sab_slot(&queue_body, nzo_id) {
+        let status = sab_slot_status(slot).unwrap_or_default();
+        if matches!(status.as_str(), "downloading" | "queued" | "fetching" | "grabbing") {
+            return Ok(collect_sab_slot_paths(slot));
+        }
+    }
+
+    let history_body = client
+        .get(format!("{sabnzbd_url}/api"))
+        .query(&[
+            ("mode", "history"),
+            ("apikey", sabnzbd_api_key),
+            ("output", "json"),
+            ("limit", "50"),
+        ])
+        .send()
+        .await
+        .map_err(|error| ProviderError::Network {
+            provider_id: "usenet".to_string(),
+            message: format!("SABnzbd history poll failed: {error}"),
+        })?
+        .json::<Value>()
+        .await
+        .map_err(|error| ProviderError::Network {
+            provider_id: "usenet".to_string(),
+            message: format!("SABnzbd history JSON parse failed: {error}"),
+        })?;
+
+    if let Some(slot) = find_sab_slot(&history_body, nzo_id) {
+        return Ok(collect_sab_slot_paths(slot));
+    }
+
+    Ok(Vec::new())
+}
+
+fn find_sab_slot<'a>(body: &'a Value, nzo_id: &str) -> Option<&'a Value> {
+    body.pointer("/queue/slots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .chain(
+            body.pointer("/history/slots")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+        .find(|slot| {
+            slot.get("nzo_id")
+                .and_then(Value::as_str)
+                .map(|value| value == nzo_id)
+                .unwrap_or(false)
+        })
+}
+
+fn sab_slot_status(slot: &Value) -> Option<String> {
+    slot.get("status")
+        .and_then(Value::as_str)
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn collect_sab_slot_paths(slot: &Value) -> Vec<PathBuf> {
+    ["storage", "path", "completed_path"]
+        .iter()
+        .filter_map(|key| slot.get(*key).and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn find_matching_audio_file(roots: &[PathBuf], artist: &str, title: &str) -> Option<PathBuf> {

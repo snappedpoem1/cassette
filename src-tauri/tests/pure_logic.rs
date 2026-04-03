@@ -22,6 +22,8 @@ fn pending_task(task_id: &str, progress: &str, updated_at: &str) -> PendingDirec
             source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
+                source_album_id: None,
+                source_artist_id: None,
                 source_playlist: None,
                 artist: "Artist".to_string(),
                 album_artist: Some("Artist".to_string()),

@@ -308,11 +308,14 @@ impl AppState {
     }
 }
 
-fn build_director(
+pub(crate) fn build_runtime_provider_stack(
     db: &Db,
     download_config: &DownloadConfig,
     runtime_db_path: Option<PathBuf>,
-) -> cassette_core::director::DirectorHandle {
+) -> (
+    DirectorConfig,
+    Vec<Arc<dyn cassette_core::director::Provider>>,
+) {
     let library_root = db
         .get_setting("library_base")
         .ok()
@@ -379,6 +382,10 @@ fn build_director(
                 max_concurrency: 2, // YouTube/SoundCloud rate limits
             },
             ProviderPolicy {
+                provider_id: "jackett".to_string(),
+                max_concurrency: 3, // search is fast; RD resolve is the bottleneck
+            },
+            ProviderPolicy {
                 provider_id: "real_debrid".to_string(),
                 max_concurrency: 3, // API ~250 req/min; bottleneck is torrent resolve time
             },
@@ -408,10 +415,33 @@ fn build_director(
     let rd_key = read_setting(db, "real_debrid_key")
         .or_else(|| download_config.real_debrid_key.clone())
         .filter(|k| !k.trim().is_empty());
-    if let Some(key) = rd_key {
-        providers.push(Arc::new(RealDebridProvider::new(key)));
+    if let Some(ref key) = rd_key {
+        providers.push(Arc::new(RealDebridProvider::with_direct_search(
+            key.clone(),
+            false,
+        )));
     }
 
+    // Jackett: multi-indexer torrent search via Torznab, resolved through Real-Debrid
+    let jackett_url = read_setting(db, "jackett_url")
+        .or_else(|| download_config.jackett_url.clone())
+        .filter(|u| !u.trim().is_empty());
+    let jackett_api_key = read_setting(db, "jackett_api_key")
+        .or_else(|| download_config.jackett_api_key.clone())
+        .filter(|k| !k.trim().is_empty());
+    if let (Some(jurl), Some(jkey), Some(ref rdkey)) = (jackett_url, jackett_api_key, &rd_key) {
+        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(jurl, jkey, rdkey.clone())));
+    }
+
+    (config, providers)
+}
+
+fn build_director(
+    db: &Db,
+    download_config: &DownloadConfig,
+    runtime_db_path: Option<PathBuf>,
+) -> cassette_core::director::DirectorHandle {
+    let (config, providers) = build_runtime_provider_stack(db, download_config, runtime_db_path);
     Director::new(config, providers).start()
 }
 

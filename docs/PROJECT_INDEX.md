@@ -1,8 +1,8 @@
 # Cassette Project Index
 
-**Status**: Active - hardening, audit proof, and packaging confidence
-**Next**: audit completeness proof, packaging confidence, provenance reuse and review
-**Last Updated**: 2026-04-02
+**Status**: Active - identity-first convergence, hardening, audit proof, and packaging confidence
+**Next**: planner-first acquisition, bypass-lane retirement, audit completeness proof
+**Last Updated**: 2026-04-03
 **Owner**: Christian (Capn)
 
 ---
@@ -24,6 +24,13 @@ At its best, Cassette answers five questions clearly:
 3. What is missing or low quality?
 4. What happened to every file or download attempt?
 5. Can I recover safely when a stage fails?
+
+Current operating reset:
+
+- MusicBrainz is the canonical identity spine.
+- Spotify is the intent/import seed plus fallback metadata input, not canonical truth.
+- `cassette_librarian.db` is the canonical control-plane and identity/planning store.
+- `cassette.db` remains the playback/runtime cache until a later deliberate convergence pass.
 
 ---
 
@@ -48,6 +55,9 @@ Canonical implementation layers:
 - `ui` - end-user interface
 - `scripts` - smoke runs, sandbox reset, operational helpers
 
+Canonical docs live under `docs/`. Research/supporting docs are useful context, but when they diverge from
+`docs/*`, the canonical docs win.
+
 ---
 
 ## Architecture At A Glance
@@ -63,6 +73,16 @@ cassette-core
   ->
 SQLite + local filesystem + external metadata/download providers
 ```
+
+Tool ownership spine:
+
+- Identity and release truth: MusicBrainz
+- Intent and source aliases: Spotify
+- Torrent search: Jackett
+- Torrent resolve/unrestrict: Real-Debrid
+- Premium acquisition: Qobuz, Deezer
+- Long-tail acquisition: slskd, Usenet
+- Last-resort acquisition: yt-dlp
 
 ### Library Workflow
 
@@ -99,7 +119,7 @@ Spotify history/import helpers, settings, provider status, and library organizat
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
 | Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, and startup recovery exist | `MetadataRepairOnly` stubbed; bounded coordinator live proof still pending |
-| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, and request -> task translation now exist | UI and runtime still need deeper convergence beyond request/timeline surfaces |
+| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, source-alias evidence, request -> task translation, and read-only planner commands now exist | Approval/rejection mutations and full bypass-lane retirement still remain |
 | Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
 | Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
 | Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
@@ -116,7 +136,7 @@ The Tauri command layer exposes commands across these areas:
 - Queue management and playback controls
 - Download job starts, metadata search, discography lookups, transfer inspection
 - Playlist CRUD and playback
-- Spotify import parsing and album queueing
+- Spotify history parsing, desired-track import, and album queueing
 - Settings/config persistence and provider status
 - Organizer actions, duplicate finding, tag fixes, staging ingest
 
@@ -243,6 +263,7 @@ Full rationale in [DECISIONS.md](DECISIONS.md).
 - [TELEMETRY.md](TELEMETRY.md)
 - [PROJECT_STATE.md](PROJECT_STATE.md)
 - [CLEAN_MACHINE_CHECKLIST.md](CLEAN_MACHINE_CHECKLIST.md)
+- [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)
 - [RECOVERY_STATUS.md](RECOVERY_STATUS.md)
 
 ---

@@ -16,7 +16,7 @@ Download acquisition providers, ordered by trust rank (lower = more trusted).
 | [slskd.md](providers/slskd.md) | Soulseek / slskd | `slskd` | 10 | Implemented, Unverified |
 | [usenet.md](providers/usenet.md) | Usenet (NZBgeek + SABnzbd) | `usenet` | 30 | Implemented, Unverified |
 | [ytdlp.md](providers/ytdlp.md) | yt-dlp | `yt_dlp` | 50 | Proven Working |
-| [real-debrid.md](providers/real-debrid.md) | Real-Debrid (via TPB) | `real_debrid` | 80 | Implemented, Unverified |
+| [real-debrid.md](providers/real-debrid.md) | Real-Debrid | `real_debrid` | 80 | Implemented, Unverified |
 
 ## Orchestration
 
@@ -57,12 +57,11 @@ These have no working implementation and do not warrant full reference docs:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Jackett | **No code exists** | Referenced in old audit docs as "config-only" but there is zero Jackett code in the repo |
+| Jackett | Active provider, doc coverage lagging | `director/providers/jackett.rs` exists; registry docs were corrected in the 2026-04-03 scope reset |
 | Genius | Config field only | `genius_token` env var defined in DownloadConfig, never used |
 | Discogs | Stub enricher | `librarian/enrich/discogs.rs` has empty `enrich()` — never called |
 | Last.fm enricher | Stub enricher | `librarian/enrich/lastfm.rs` has empty `enrich()` — separate from working player context |
 | Bandcamp | Placeholder | `director/sources/bandcamp.rs` returns explicit placeholder error |
-| Tidal | Doc-only idea | Mentioned in old PROJECT_STATE.md, no code |
 | Cover Art Archive | Not wired | No code references to coverartarchive.org API |
 
 ## Status Legend

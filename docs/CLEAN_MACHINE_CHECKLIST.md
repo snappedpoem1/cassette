@@ -1,6 +1,6 @@
 # Clean Machine Checklist
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
 
 Use this before claiming Cassette is shippable on a fresh Windows machine.
 
@@ -50,6 +50,27 @@ That script currently proves:
 - `npm run build`
 - `.\scripts\smoke_desktop.ps1`
 
+## Packaging (verified 2026-04-03)
+
+`cargo tauri build` produces installable bundles on Windows:
+
+```
+target/release/bundle/msi/Cassette_0.1.0_x64_en-US.msi
+target/release/bundle/nsis/Cassette_0.1.0_x64-setup.exe
+```
+
+Required fix: `default-run = "cassette"` in `src-tauri/Cargo.toml`. Without this, Tauri fails to find the main binary when multiple `[[bin]]` entries exist.
+
+## Optional Provider Configuration
+
+| Provider | Required Settings | Notes |
+|----------|------------------|-------|
+| Jackett | `JACKETT_URL`, `JACKETT_API_KEY`, `REAL_DEBRID_KEY` | Multi-indexer torrent search; RD resolves magnets |
+| Real-Debrid (TPB) | `REAL_DEBRID_KEY` | Standalone TPB search + RD resolve |
+| Jackett config keys | Set via DB settings or `.env` | `jackett_url` defaults to `http://localhost:9117` |
+
 ## Known Gap
 
 - `cargo test --workspace` is now part of the trustworthy clean-machine gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure came from the Tauri lib-test harness starting without the desktop manifest; pure command/bootstrap tests now live in `src-tauri/tests/pure_logic.rs` instead of the Tauri-linked lib harness.
+- Full clean-machine proof (install from `.msi` + first-run bootstrap on a fresh machine) has not been run yet.
+- `slskd localhost:5030` is machine/runtime dependent; in the latest trust-spine run on 2026-04-03 this check reported `False`, so provider-specific smoke expectations should be treated as environment-sensitive unless slskd is actively running.

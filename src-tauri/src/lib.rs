@@ -1,3 +1,4 @@
+pub mod album_resolver;
 mod commands;
 mod now_playing;
 mod pending_recovery;
@@ -84,6 +85,7 @@ pub fn run() {
             commands::player::get_playback_state,
             commands::player::get_now_playing_context,
             commands::downloads::start_download,
+            commands::downloads::start_song_download,
             commands::downloads::start_album_downloads,
             commands::downloads::start_discography_downloads,
             commands::downloads::start_artist_downloads,
@@ -106,6 +108,9 @@ pub fn run() {
             commands::downloads::stop_backlog_run,
             commands::downloads::get_backlog_status,
             commands::downloads::get_director_debug_stats,
+            commands::planner::plan_acquisition,
+            commands::planner::get_candidate_set,
+            commands::planner::get_request_rationale,
             commands::playlists::get_playlists,
             commands::playlists::get_playlist_items,
             commands::playlists::create_playlist,
@@ -113,6 +118,7 @@ pub fn run() {
             commands::playlists::delete_playlist,
             commands::playlists::play_playlist,
             commands::import::parse_spotify_history,
+            commands::import::import_spotify_desired_tracks,
             commands::import::queue_spotify_albums,
             commands::import::get_spotify_import_status,
             commands::settings::get_setting,

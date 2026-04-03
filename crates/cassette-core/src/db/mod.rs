@@ -1,7 +1,8 @@
 use crate::models::{
     Album, Artist, LibraryRoot, Playlist, PlaylistItem, QueueItem, SpotifyAlbumHistory, Track,
 };
-use crate::director::models::{DirectorTaskResult, TrackTask};
+use crate::acquisition::AcquisitionRequest as PlannerAcquisitionRequest;
+use crate::director::models::{CandidateRecord, DirectorTaskResult, ProviderSearchRecord, TrackTask};
 use crate::Result;
 use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, OpenFlags};
@@ -1639,6 +1640,79 @@ impl Db {
         Ok(())
     }
 
+    fn refresh_provider_response_cache_from_planner(
+        &self,
+        task_id: &str,
+        request_signature: &str,
+        provider_searches: &[ProviderSearchRecord],
+        candidate_records: &[CandidateRecord],
+    ) -> Result<()> {
+        let mut provider_ids = std::collections::BTreeSet::<String>::new();
+        for record in provider_searches {
+            provider_ids.insert(record.provider_id.clone());
+        }
+        for record in candidate_records {
+            provider_ids.insert(record.provider_id.clone());
+        }
+
+        for provider_id in provider_ids {
+            let search_rows = provider_searches
+                .iter()
+                .filter(|record| record.provider_id == provider_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let candidate_rows = candidate_records
+                .iter()
+                .filter(|record| record.provider_id == provider_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let outcome = search_rows
+                .last()
+                .map(|record| record.outcome.clone())
+                .unwrap_or_else(|| {
+                    if candidate_rows.is_empty() {
+                        "not_searched".to_string()
+                    } else {
+                        "planned".to_string()
+                    }
+                });
+            let candidate_count = candidate_rows.len() as i64;
+
+            let response_json = serde_json::json!({
+                "provider_searches": search_rows,
+                "candidate_records": candidate_rows,
+                "task_id": task_id,
+            })
+            .to_string();
+
+            self.conn.execute(
+                "
+                INSERT INTO provider_response_cache
+                    (request_signature, provider_id, last_task_id, outcome, candidate_count,
+                     response_json, failure_class, backoff_until, retention_class, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, 'planner_cache', datetime('now'))
+                ON CONFLICT(request_signature, provider_id) DO UPDATE SET
+                    last_task_id = excluded.last_task_id,
+                    outcome = excluded.outcome,
+                    candidate_count = excluded.candidate_count,
+                    response_json = excluded.response_json,
+                    failure_class = NULL,
+                    updated_at = datetime('now')
+                ",
+                params![
+                    request_signature,
+                    provider_id,
+                    task_id,
+                    outcome,
+                    candidate_count,
+                    response_json,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn persist_identity_resolution_evidence(
         &self,
         result: &DirectorTaskResult,
@@ -1891,6 +1965,349 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub fn get_candidate_set_summary(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<StoredCandidateSetSummary>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT task_id, request_signature, request_strategy, disposition,
+                   selected_provider, candidate_count, provider_count, updated_at
+            FROM director_candidate_sets
+            WHERE task_id = ?1
+            LIMIT 1
+            ",
+        )?;
+        let mut rows = stmt.query_map(params![task_id], |row| {
+            Ok(StoredCandidateSetSummary {
+                task_id: row.get(0)?,
+                request_signature: row.get(1)?,
+                request_strategy: row.get(2)?,
+                disposition: row.get(3)?,
+                selected_provider: row.get(4)?,
+                candidate_count: row.get::<_, i64>(5)? as usize,
+                provider_count: row.get::<_, i64>(6)? as usize,
+                updated_at: row.get(7)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn get_provider_search_records(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<StoredProviderSearchRecord>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT provider_id, provider_display_name, provider_trust_rank, provider_order_index,
+                   outcome, candidate_count, error, retryable, recorded_at
+            FROM director_provider_searches
+            WHERE task_id = ?1
+            ORDER BY provider_order_index ASC, id ASC
+            ",
+        )?;
+        let rows = stmt.query_map(params![task_id], |row| {
+            Ok(StoredProviderSearchRecord {
+                provider_id: row.get(0)?,
+                provider_display_name: row.get(1)?,
+                provider_trust_rank: row.get(2)?,
+                provider_order_index: row.get::<_, i64>(3)? as usize,
+                outcome: row.get(4)?,
+                candidate_count: row.get::<_, i64>(5)? as usize,
+                error: row.get(6)?,
+                retryable: row.get::<_, i64>(7)? != 0,
+                recorded_at: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_identity_resolution_evidence_for_request(
+        &self,
+        request_signature: &str,
+    ) -> Result<Vec<StoredIdentityResolutionEvidence>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT task_id, request_signature, entity_type, entity_key, source_name, evidence_type,
+                   canonical_artist_id, canonical_release_id, musicbrainz_recording_id,
+                   musicbrainz_release_id, isrc, confidence, raw_json, retention_class, recorded_at
+            FROM identity_resolution_evidence
+            WHERE request_signature = ?1
+            ORDER BY recorded_at DESC, id DESC
+            ",
+        )?;
+        let rows = stmt.query_map(params![request_signature], |row| {
+            Ok(StoredIdentityResolutionEvidence {
+                task_id: row.get(0)?,
+                request_signature: row.get(1)?,
+                entity_type: row.get(2)?,
+                entity_key: row.get(3)?,
+                source_name: row.get(4)?,
+                evidence_type: row.get(5)?,
+                canonical_artist_id: row.get(6)?,
+                canonical_release_id: row.get(7)?,
+                musicbrainz_recording_id: row.get(8)?,
+                musicbrainz_release_id: row.get(9)?,
+                isrc: row.get(10)?,
+                confidence: row.get(11)?,
+                raw_json: row.get(12)?,
+                retention_class: row.get(13)?,
+                recorded_at: row.get(14)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_source_aliases_for_entity(
+        &self,
+        entity_type: &str,
+        entity_key: &str,
+    ) -> Result<Vec<StoredSourceAlias>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT entity_type, entity_key, source_name, source_key, source_value,
+                   confidence, raw_json, updated_at
+            FROM source_aliases
+            WHERE entity_type = ?1 AND entity_key = ?2
+            ORDER BY source_name ASC, source_key ASC, source_value ASC
+            ",
+        )?;
+        let rows = stmt.query_map(params![entity_type, entity_key], |row| {
+            Ok(StoredSourceAlias {
+                entity_type: row.get(0)?,
+                entity_key: row.get(1)?,
+                source_name: row.get(2)?,
+                source_key: row.get(3)?,
+                source_value: row.get(4)?,
+                confidence: row.get(5)?,
+                raw_json: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn record_request_identity_snapshot(
+        &self,
+        task: &TrackTask,
+        request_signature: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM identity_resolution_evidence WHERE task_id = ?1",
+            params![task.task_id],
+        )?;
+
+        let raw_json = serde_json::to_string(&task.target)?;
+        self.conn.execute(
+            "
+            INSERT INTO identity_resolution_evidence
+                (task_id, request_signature, entity_type, entity_key, source_name, evidence_type,
+                 canonical_artist_id, canonical_release_id, musicbrainz_recording_id, musicbrainz_release_id,
+                 isrc, confidence, raw_json, retention_class, recorded_at)
+            VALUES (?1, ?2, 'request_signature', ?3, 'planner_request', 'normalized_target',
+                    ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'identity_fact', datetime('now'))
+            ",
+            params![
+                task.task_id,
+                request_signature,
+                request_signature,
+                task.target.canonical_artist_id,
+                task.target.canonical_release_id,
+                task.target.musicbrainz_recording_id.as_deref(),
+                task.target.musicbrainz_release_id.as_deref(),
+                task.target.isrc.as_deref(),
+                Some(1.0_f64),
+                raw_json,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_request_source_aliases(
+        &self,
+        request: &PlannerAcquisitionRequest,
+        request_signature: &str,
+    ) -> Result<()> {
+        let entity_type = "request_signature";
+        let entity_key = request_signature;
+        let raw_json = request.raw_payload_json.as_deref();
+
+        if let Some(source_track_id) = request.source_track_id.as_deref() {
+            self.upsert_source_alias(
+                entity_type,
+                entity_key,
+                &request.source_name,
+                "track_id",
+                source_track_id,
+                Some(1.0),
+                raw_json,
+            )?;
+        }
+        if let Some(source_album_id) = request.source_album_id.as_deref() {
+            self.upsert_source_alias(
+                entity_type,
+                entity_key,
+                &request.source_name,
+                "album_id",
+                source_album_id,
+                Some(1.0),
+                raw_json,
+            )?;
+        }
+        if let Some(source_artist_id) = request.source_artist_id.as_deref() {
+            self.upsert_source_alias(
+                entity_type,
+                entity_key,
+                &request.source_name,
+                "artist_id",
+                source_artist_id,
+                Some(1.0),
+                raw_json,
+            )?;
+        }
+        if let Some(recording_id) = request.musicbrainz_recording_id.as_deref() {
+            self.upsert_source_alias(
+                entity_type,
+                entity_key,
+                "musicbrainz",
+                "recording_id",
+                recording_id,
+                Some(1.0),
+                raw_json,
+            )?;
+        }
+        if let Some(release_id) = request.musicbrainz_release_id.as_deref() {
+            self.upsert_source_alias(
+                entity_type,
+                entity_key,
+                "musicbrainz",
+                "release_id",
+                release_id,
+                Some(1.0),
+                raw_json,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn persist_planned_candidate_set(
+        &self,
+        task: &TrackTask,
+        request_strategy: &str,
+        provider_searches: &[ProviderSearchRecord],
+        candidate_records: &[CandidateRecord],
+    ) -> Result<()> {
+        let request_signature = director_request_signature(task);
+        let provider_count = provider_searches
+            .iter()
+            .map(|record| record.provider_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let envelope = serde_json::json!({
+            "provider_searches": provider_searches,
+            "candidate_records": candidate_records,
+            "task_id": task.task_id,
+            "mode": "planner",
+        })
+        .to_string();
+
+        self.conn.execute(
+            "
+            INSERT INTO director_candidate_sets
+                (task_id, request_signature, request_strategy, disposition, selected_provider,
+                 selected_provider_candidate_id, selected_score_total, candidate_count, provider_count,
+                 result_json, created_at, updated_at)
+            VALUES (?1, ?2, ?3, 'Planned', NULL, NULL, NULL, ?4, ?5, ?6, datetime('now'), datetime('now'))
+            ON CONFLICT(task_id) DO UPDATE SET
+                request_signature = excluded.request_signature,
+                request_strategy = excluded.request_strategy,
+                disposition = excluded.disposition,
+                selected_provider = NULL,
+                selected_provider_candidate_id = NULL,
+                selected_score_total = NULL,
+                candidate_count = excluded.candidate_count,
+                provider_count = excluded.provider_count,
+                result_json = excluded.result_json,
+                updated_at = datetime('now')
+            ",
+            params![
+                task.task_id,
+                request_signature,
+                request_strategy,
+                candidate_records.len() as i64,
+                provider_count as i64,
+                envelope,
+            ],
+        )?;
+
+        self.conn.execute(
+            "DELETE FROM director_candidate_items WHERE task_id = ?1",
+            params![task.task_id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM director_provider_searches WHERE task_id = ?1",
+            params![task.task_id],
+        )?;
+
+        for record in candidate_records {
+            self.conn.execute(
+                "
+                INSERT INTO director_candidate_items
+                    (task_id, request_signature, provider_id, provider_display_name, provider_trust_rank,
+                     provider_order_index, search_rank, provider_candidate_id, outcome, rejection_reason,
+                     is_selected, acquisition_temp_path, score_total, candidate_json, validation_json,
+                     score_json, score_reason_json, recorded_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, NULL, NULL, ?11, NULL, NULL, NULL, datetime('now'))
+                ",
+                params![
+                    task.task_id,
+                    request_signature,
+                    record.provider_id,
+                    record.provider_display_name,
+                    record.provider_trust_rank,
+                    record.provider_order_index as i64,
+                    record.search_rank as i64,
+                    record.candidate.provider_candidate_id,
+                    record.outcome,
+                    record.rejection_reason,
+                    serde_json::to_string(record)?,
+                ],
+            )?;
+        }
+
+        for record in provider_searches {
+            self.conn.execute(
+                "
+                INSERT INTO director_provider_searches
+                    (task_id, request_signature, provider_id, provider_display_name, provider_trust_rank,
+                     provider_order_index, outcome, candidate_count, error, retryable, recorded_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
+                ",
+                params![
+                    task.task_id,
+                    request_signature,
+                    record.provider_id,
+                    record.provider_display_name,
+                    record.provider_trust_rank,
+                    record.provider_order_index as i64,
+                    record.outcome,
+                    record.candidate_count as i64,
+                    record.error,
+                    if record.retryable { 1_i64 } else { 0_i64 },
+                ],
+            )?;
+        }
+
+        self.refresh_provider_response_cache_from_planner(
+            &task.task_id,
+            &request_signature,
+            provider_searches,
+            candidate_records,
+        )?;
+
+        Ok(())
+    }
+
     // ── Batch Acquisition Helpers ──────────────────────────────────────────────
 
     /// Returns missing albums from Spotify history that have significant listening
@@ -2137,7 +2554,7 @@ pub struct StoredDirectorCandidateItem {
     pub is_selected: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredProviderMemory {
     pub provider_id: String,
     pub last_outcome: String,
@@ -2148,7 +2565,7 @@ pub struct StoredProviderMemory {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredProviderResponseCache {
     pub provider_id: String,
     pub outcome: String,
@@ -2157,6 +2574,62 @@ pub struct StoredProviderResponseCache {
     pub failure_class: Option<String>,
     pub backoff_until: Option<String>,
     pub retention_class: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCandidateSetSummary {
+    pub task_id: String,
+    pub request_signature: Option<String>,
+    pub request_strategy: Option<String>,
+    pub disposition: String,
+    pub selected_provider: Option<String>,
+    pub candidate_count: usize,
+    pub provider_count: usize,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredProviderSearchRecord {
+    pub provider_id: String,
+    pub provider_display_name: String,
+    pub provider_trust_rank: i32,
+    pub provider_order_index: usize,
+    pub outcome: String,
+    pub candidate_count: usize,
+    pub error: Option<String>,
+    pub retryable: bool,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredIdentityResolutionEvidence {
+    pub task_id: String,
+    pub request_signature: Option<String>,
+    pub entity_type: String,
+    pub entity_key: String,
+    pub source_name: String,
+    pub evidence_type: String,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_release_id: Option<String>,
+    pub isrc: Option<String>,
+    pub confidence: Option<f64>,
+    pub raw_json: String,
+    pub retention_class: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredSourceAlias {
+    pub entity_type: String,
+    pub entity_key: String,
+    pub source_name: String,
+    pub source_key: String,
+    pub source_value: String,
+    pub confidence: Option<f64>,
+    pub raw_json: Option<String>,
     pub updated_at: String,
 }
 
@@ -2177,6 +2650,9 @@ pub fn director_request_signature(task: &TrackTask) -> String {
         .unwrap_or_default();
     [
         "track".to_string(),
+        normalize_signature_text(target.spotify_track_id.as_deref().unwrap_or_default()),
+        normalize_signature_text(target.source_album_id.as_deref().unwrap_or_default()),
+        normalize_signature_text(target.source_artist_id.as_deref().unwrap_or_default()),
         normalize_signature_text(&target.artist),
         normalize_signature_text(&target.title),
         normalize_signature_text(target.album.as_deref().unwrap_or_default()),
@@ -2529,6 +3005,26 @@ impl Db {
         Ok(rows.next().transpose()?)
     }
 
+    pub fn list_canonical_artists(&self) -> Result<Vec<CanonicalArtist>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, normalized_name, musicbrainz_id, spotify_id, discogs_id, sort_name
+             FROM canonical_artists
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CanonicalArtist {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                normalized_name: row.get(2)?,
+                musicbrainz_id: row.get(3)?,
+                spotify_id: row.get(4)?,
+                discogs_id: row.get(5)?,
+                sort_name: row.get(6)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     // ── Canonical Releases ───────────────────────────────────────────────
 
     pub fn upsert_canonical_release(
@@ -2588,6 +3084,31 @@ impl Db {
             )?;
             Ok(self.conn.last_insert_rowid())
         }
+    }
+
+    pub fn list_canonical_releases(&self) -> Result<Vec<CanonicalRelease>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, canonical_artist_id, title, normalized_title, release_group_mbid,
+                    release_mbid, spotify_id, discogs_id, release_type, year, track_count
+             FROM canonical_releases
+             ORDER BY canonical_artist_id ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CanonicalRelease {
+                id: row.get(0)?,
+                canonical_artist_id: row.get(1)?,
+                title: row.get(2)?,
+                normalized_title: row.get(3)?,
+                release_group_mbid: row.get(4)?,
+                release_mbid: row.get(5)?,
+                spotify_id: row.get(6)?,
+                discogs_id: row.get(7)?,
+                release_type: row.get(8)?,
+                year: row.get(9)?,
+                track_count: row.get(10)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn upsert_canonical_recording(
@@ -2678,6 +3199,30 @@ impl Db {
             )?;
             Ok(self.conn.last_insert_rowid())
         }
+    }
+
+    pub fn list_canonical_recordings(&self) -> Result<Vec<CanonicalRecording>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, canonical_artist_id, canonical_release_id, title, normalized_title,
+                    musicbrainz_recording_id, isrc, track_number, disc_number, duration_secs
+             FROM canonical_recordings
+             ORDER BY COALESCE(canonical_release_id, 0) ASC, COALESCE(canonical_artist_id, 0) ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CanonicalRecording {
+                id: row.get(0)?,
+                canonical_artist_id: row.get(1)?,
+                canonical_release_id: row.get(2)?,
+                title: row.get(3)?,
+                normalized_title: row.get(4)?,
+                musicbrainz_recording_id: row.get(5)?,
+                isrc: row.get(6)?,
+                track_number: row.get(7)?,
+                disc_number: row.get(8)?,
+                duration_secs: row.get(9)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     fn upsert_source_alias(
@@ -2944,6 +3489,8 @@ mod tests {
             source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
+                source_album_id: None,
+                source_artist_id: None,
                 source_playlist: None,
                 artist: "Artist".to_string(),
                 album_artist: Some("Artist".to_string()),
@@ -3234,6 +3781,8 @@ mod tests {
             source_operation_id: Some("op-request".to_string()),
             target: NormalizedTrack {
                 spotify_track_id: Some("spotify:track:123".to_string()),
+                source_album_id: Some("spotify:album:123".to_string()),
+                source_artist_id: Some("spotify:artist:123".to_string()),
                 source_playlist: Some("playlist-1".to_string()),
                 artist: "Artist".to_string(),
                 album_artist: Some("Artist".to_string()),
@@ -3297,6 +3846,8 @@ mod tests {
             source_operation_id: Some("op-failure".to_string()),
             target: NormalizedTrack {
                 spotify_track_id: Some("spotify:track:failure".to_string()),
+                source_album_id: Some("spotify:album:failure".to_string()),
+                source_artist_id: Some("spotify:artist:failure".to_string()),
                 source_playlist: None,
                 artist: "Artist".to_string(),
                 album_artist: Some("Artist".to_string()),
@@ -3443,6 +3994,8 @@ mod tests {
             source_operation_id: Some("op-candidates".to_string()),
             target: NormalizedTrack {
                 spotify_track_id: None,
+                source_album_id: None,
+                source_artist_id: None,
                 source_playlist: None,
                 artist: "Artist".to_string(),
                 album_artist: Some("Artist".to_string()),

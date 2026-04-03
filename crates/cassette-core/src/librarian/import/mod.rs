@@ -3,6 +3,7 @@ pub mod spotify;
 use crate::librarian::db::LibrarianDb;
 use crate::librarian::error::{LibrarianError, Result};
 use crate::librarian::import::spotify::parse_spotify_payload;
+use serde_json::Value;
 use tracing::info;
 
 pub async fn import_desired_spotify_json(db: &LibrarianDb, json: &str) -> Result<usize> {
@@ -19,7 +20,11 @@ pub async fn import_desired_spotify_json(db: &LibrarianDb, json: &str) -> Result
 
     let mut imported = 0usize;
     for item in payload.tracks {
-        let raw_payload = serde_json::to_string(&item).ok();
+        let raw_payload = item
+            .raw_payload
+            .as_ref()
+            .map(Value::to_string)
+            .or_else(|| serde_json::to_string(&item).ok());
         db.insert_desired_track(
             source_name,
             item.track_id.as_deref(),

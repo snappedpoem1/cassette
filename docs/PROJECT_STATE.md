@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
 
 ## Architecture
 
@@ -11,6 +11,7 @@ Last updated: 2026-04-02
 - **Active DB location**: Tauri app-data directory (`cassette.db`)
 - **Integrated queue sidecar DB**: Tauri app-data directory (`cassette_librarian.db`) for librarian/orchestrator tables such as `desired_tracks`, `local_files`, `reconciliation_results`, `delta_queue`, `sync_runs`, and `scan_checkpoints`
 - **Repo-local DB files**: root-level `*.db` files in this workspace are local artifacts for tests, probes, or inspection; they are not automatically the live runtime DB
+- **Current role split**: `cassette_librarian.db` is the canonical control-plane and identity/planning store; `cassette.db` remains the playback/runtime cache
 
 ## What Works Today
 
@@ -39,6 +40,7 @@ Last updated: 2026-04-02
 - 6-factor candidate scoring (metadata confidence, duration match, codec quality, provider trust, validation result, file size)
 - Task-local cancellation via `CancellationToken` registry, with batch-wide cancel reserved for shutdown
 - Symphonia-based audio validation with truthful `audio_readable` / `header_readable` reporting and codec/container mismatch rejection
+- Lossless is still preferred, but acquisition now falls back to the next available quality tier instead of hard-failing when only lossy material is available
 - Post-acquisition metadata tagging via Lofty
 - Atomic finalization with duplicate policy (`KeepExisting` or `ReplaceIfBetter`)
 - Per-task temp directories with stale recovery and quarantine
@@ -51,7 +53,7 @@ Last updated: 2026-04-02
 - Deezer session caching now uses a recoverable `RwLock<Option<...>>` path instead of permanently caching auth failure
 - Deezer acquisition now decrypts directly to disk through a streaming Blowfish stripe path
 
-### Providers (7 active)
+### Providers (8 active)
 
 | Provider | Trust Rank | Capabilities | Status |
 |----------|------------|-------------|--------|
@@ -59,9 +61,19 @@ Last updated: 2026-04-02
 | Deezer | 5 | Search + acquire with Blowfish CBC stream decryption | Implemented |
 | Qobuz | 10 | MD5-signed session, search + acquire (lossless) | Implemented |
 | slskd/Soulseek | 10 | P2P search with queue recovery, transfer polling + filesystem fallback | Implemented |
-| Usenet | 30 | NZBgeek search + SABnzbd execution, filesystem polling | Implemented |
+| Usenet | 30 | NZBgeek search + SABnzbd execution, queue/history polling with filesystem fallback | Implemented |
+| Jackett | 40 | Multi-indexer Torznab search → magnet → RD unrestrict → archive extraction | Implemented |
 | yt-dlp | 50 | Subprocess fallback, `ytsearch1` + `scsearch1` | Proven working |
 | Real-Debrid | 80 | TPB/apibay search → magnet → RD unrestrict → archive extraction via 7z | Live-proven |
+
+Jackett requires both `JACKETT_URL` + `JACKETT_API_KEY` in settings and a configured `REAL_DEBRID_KEY` for resolve. When both are present, Jackett is added to the Director waterfall between Usenet and Real-Debrid (trust_rank 40). The `torrent_album_cli` also uses Jackett when configured, falling back to apibay.
+
+Current provider-role reset:
+
+- Jackett is the canonical torrent search owner in the Director.
+- Real-Debrid remains the torrent/hoster resolve and unrestrict owner.
+- Real-Debrid direct TPB search is disabled by default in the Director.
+- `torrent_album_cli` only uses apibay when `--allow-apibay-fallback` is explicitly supplied.
 
 ### Metadata Services
 
@@ -72,12 +84,23 @@ Last updated: 2026-04-02
 | LRCLIB | Synced/plain lyrics lookup | None |
 | Spotify | History import, search, discography seeds | Optional OAuth |
 
+Role clarification:
+
+- MusicBrainz is the canonical identity spine.
+- Spotify is the intent/import seed and fallback metadata input in the shared resolver, not canonical truth.
+
 ### Data Pipeline
 - Sidecar-owned acquisition requests now persist in `cassette_librarian.db` with request status, task linkage, request signatures, normalized target fields, and event timeline rows
-- Current download entrypoints (`start_download`, album queueing, discography queueing, backlog runner) now create control-plane request rows before submitting Director tasks
+- Current download entrypoints (`start_download`/`start_song_download`, album queueing, discography queueing, backlog runner) now create control-plane request rows before submitting Director tasks
+- Acquisition requests are scope-aware at the control-plane boundary: song requests use `track`, album/discography requests use `album`
 - Spotify play history import from external SQLite DB
+- Direct desired-track Spotify import now reuses the shared payload parser and persists `source_track_id`, `source_album_id`, `source_artist_id`, `duration_ms`, best-effort `isrc`, and richer raw payload JSON
 - Missing album detection (Spotify albums not in local library)
-- Album and Spotify-missing queues expand releases into per-track `TrackTask` submissions via MusicBrainz release tracklists
+- Album and Spotify-missing queues expand releases into per-track `TrackTask` submissions through the shared resolver chain
+- Album queueing, backlog queueing, and Spotify backlog CLI resolution now route through the shared resolver chain: MusicBrainz -> iTunes -> Spotify credentials
+- Request and task signatures now retain richer source identity (`source_track_id`, `source_album_id`, `source_artist_id`) alongside ISRC, MusicBrainz IDs, and canonical IDs when available
+- Read-only planner commands now exist for pre-acquisition search and rationale: `plan_acquisition`, `get_candidate_set`, and `get_request_rationale`
+- Planner candidate sets now persist into runtime candidate/search tables before byte acquisition starts, and planner runs refresh request-scoped source-alias and identity-evidence rows
 - Director task result persistence to `director_task_history`
 - Terminal history retains the original `TrackTask` request payload and strategy for failed/cancelled/finalized results
 - Terminal history also preserves the last known provider and `failure_class` for failed/cancelled rows instead of leaving those outcomes provider-blank
@@ -90,6 +113,8 @@ Last updated: 2026-04-02
 - Runtime `tracks` rows now persist sovereignty/evidence fields (`isrc`, MusicBrainz IDs, canonical artist/release IDs, `quality_tier`, `content_hash`) instead of silently dropping them on upsert
 - Canonical identity persistence now includes `canonical_recordings` in the active runtime DB
 - Sidecar canonical identity persistence now includes `canonical_artists`, `canonical_releases`, and `canonical_recordings` for request-planning ownership
+- Runtime startup now mirrors canonical identity rows into the sidecar with duplicate-safe upserts so the two stores converge on a shared normalized identity view
+- `db_converge_cli` now supports physical datastore convergence by producing `cassette_unified.db` from runtime + sidecar, copying control-plane tables into `control_*` namespace tables in the unified file
 - `TrackTask` payloads now carry `desired_track_id` and `source_operation_id` for control-plane closure
 - Librarian `local_files` rows now persist `acoustid_fingerprint`, per-file fingerprint attempt state, and source mtime proof; Gatekeeper admission writes fingerprints back into the same table, and `run_librarian_sync` performs bounded parallel backfill with unchanged-failure suppression and stale-fingerprint invalidation on file mtime change
 
@@ -111,7 +136,7 @@ Primary active runtime tables include:
 - `director_provider_attempts`
 - `director_provider_memory`
 
-Separate richer schemas also exist in the `library`, `librarian`, and `gatekeeper` subsystems. Those remain part of the architecture convergence story, not a replacement for the active Tauri runtime database.
+Separate richer schemas also exist in the `library`, `librarian`, and `gatekeeper` subsystems. Those remain part of the architecture convergence story. Near-term runtime shape stays dual-store by design: sidecar for control-plane identity/planning, runtime DB for playback/UI cache.
 
 ## Concurrency Model
 
@@ -142,6 +167,8 @@ Director runtime behavior now exposes config for:
 ## Pipeline Integration Architecture
 
 The integrated acquisition loop is now centered on `delta_queue` as the authoritative durable work bus, hosted in the librarian sidecar DB so it does not collide with the playback/runtime schema in `cassette.db`.
+
+Spotify desired-state intake now covers both direct desired-track payload import and history-derived album backlog inputs. The richer direct import path lands in `desired_tracks`; history import still feeds `spotify_album_history`.
 
 ```
 Spotify Export -> desired_tracks
@@ -209,6 +236,8 @@ It now:
 
 `torrent_album_cli` added as a dedicated album-first torrent downloader that bypasses the per-track Director flow for albums where torrent is the best source.
 
+Current policy note: Jackett is the default search owner here too. apibay is now explicit emergency fallback only via `--allow-apibay-fallback`.
+
 **Flow:**
 1. Pull missing albums from `spotify_album_history` (app DB)
 2. Filter singles (feat./with/ft. patterns, remix/EP labels)
@@ -238,6 +267,34 @@ It now:
 **Known gaps:**
 - ~26 albums per 40-album batch are genuinely absent from TPB (Drake, Eminem, Jack Harlow, etc. — streaming exclusives/mixtapes)
 - Taylor Swift — Red (Taylor's Version): emoji in RAR filename causes decode error; needs alternate torrent
+
+## Packaging Status (2026-04-03)
+
+`cargo tauri build` now succeeds on Windows and produces:
+- `target/release/bundle/msi/Cassette_0.1.0_x64_en-US.msi`
+- `target/release/bundle/nsis/Cassette_0.1.0_x64-setup.exe`
+
+Fix applied: `default-run = "cassette"` added to `src-tauri/Cargo.toml`. Tauri requires this when the workspace has multiple `[[bin]]` entries.
+
+Release process checklist now lives in `docs/RELEASE_CHECKLIST.md`, including clean-machine install gates and `db_converge_cli` unified-datastore verification steps.
+
+Latest verification snapshot on 2026-04-03:
+- `./scripts/verify_trust_spine.ps1` completed successfully
+- `cargo tauri build` completed and produced both Windows bundles
+- `cargo run -p cassette --bin db_converge_cli -- --overwrite` produced `cassette_unified.db` with counts: `desired_tracks=4`, `delta_queue=11`, `acquisition_requests=0`
+- Desktop smoke output in this run reported `slskd localhost:5030 = False` (environment-dependent service availability)
+
+## Torrent CLI Failure Feedback Loop (2026-04-03)
+
+`torrent_album_cli --seed-sidecar` now seeds albums that failed torrent search into `cassette_librarian.db` as `desired_tracks` + `delta_queue(missing_download)` entries. The coordinator (`engine_pipeline_cli --resume`) picks them up on the next run via Qobuz/Deezer/slskd.
+
+Flow:
+1. Run `torrent_album_cli --limit 50 --seed-sidecar`
+2. Albums installed via torrent as before
+3. Albums with no torrent found → MusicBrainz tracklist expansion → `desired_tracks` + `delta_queue` in sidecar
+4. Run `engine_pipeline_cli --resume` → claims and resolves via streaming providers
+
+Skips albums already in `desired_tracks` to avoid duplicates. Respects MusicBrainz 1 req/sec rate limit.
 
 ## Known Limitations
 

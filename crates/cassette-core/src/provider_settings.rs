@@ -97,13 +97,19 @@ impl DownloadConfig {
             ),
             // ── Torrent / debrid ─────────────────────────────────────────
             Self::build_status(
+                "jackett",
+                "Jackett (canonical torrent search)",
+                vec![
+                    ("URL", &self.jackett_url),
+                    ("API key", &self.jackett_api_key),
+                ],
+                Some(vec![("Real-Debrid key (required for resolve)", &self.real_debrid_key)]),
+            ),
+            Self::build_status(
                 "real_debrid",
-                "Real-Debrid",
+                "Real-Debrid (resolver/unrestrict; direct search debug-only)",
                 vec![("API key", &self.real_debrid_key)],
-                Some(vec![
-                    ("Jackett URL", &self.jackett_url),
-                    ("Jackett API key", &self.jackett_api_key),
-                ]),
+                None,
             ),
             // ── Usenet ───────────────────────────────────────────────────
             Self::build_status(

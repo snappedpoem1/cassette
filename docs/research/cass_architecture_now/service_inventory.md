@@ -16,8 +16,8 @@ This inventory was built from workspace manifests, config surfaces, provider mod
 | NZBGeek | Usenet indexer search | `director/providers/usenet.rs`, settings/config |
 | SABnzbd | Usenet execution queue | `director/providers/usenet.rs`, settings/config |
 | Real-Debrid | Torrent resolver / unrestrict | `director/providers/real_debrid.rs`, `torrent_album_cli.rs` |
-| apibay / TPB | Torrent search upstream | `director/providers/real_debrid.rs`, `torrent_album_cli.rs` |
-| Jackett | Optional torrent search broker | `torrent_album_cli.rs`, settings/config |
+| apibay / TPB | Explicit torrent fallback upstream | `torrent_album_cli.rs` fallback flag only |
+| Jackett | Canonical torrent search broker | `director/providers/jackett.rs`, `torrent_album_cli.rs`, settings/config |
 | yt-dlp | Fallback extraction | `director/providers/ytdlp.rs` |
 | YouTube | Desired-source adapter and yt-dlp upstream | `director/sources/youtube.rs` |
 | SoundCloud | yt-dlp search lane | `director/providers/ytdlp.rs` search tokens |
@@ -29,7 +29,6 @@ This inventory was built from workspace manifests, config surfaces, provider mod
 | AcoustID / fingerprinting | Collision and identity fields referenced | gatekeeper/orchestrator schema and queries |
 | Genius | Configured token surface only | `provider_settings.rs`, settings commands |
 | iTunes Search API | Metadata fallback | `crates/cassette-core/src/metadata.rs` |
-| Tidal | Doc-only idea / not wired | older project docs only |
 | Cover Art Archive | Referenced architectural fit, not wired | project docs only |
 | ListenBrainz | Not wired, but strategically relevant | not present in runtime code |
 

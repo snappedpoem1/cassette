@@ -1,6 +1,6 @@
 # Cassette Hit List
 
-Last updated: 2026-03-31
+Last updated: 2026-04-03
 
 This is the short-form execution board for the current mission.
 For full context and acceptance details, see `TODO.md` and `PROJECT_STATE.md`.
@@ -15,6 +15,13 @@ Current audited backlog shape:
 - [ ] 12 remaining items
 - [x] Green verification snapshot recorded on 2026-03-30
 - [x] Runtime/control-plane split documented: `cassette.db` + `cassette_librarian.db`
+
+New (2026-04-03):
+
+- [x] Jackett multi-indexer torrent search provider added to Director waterfall (trust_rank 40, between Usenet and Real-Debrid)
+- [x] `torrent_album_cli --seed-sidecar` feeds failed albums into sidecar delta_queue for coordinator retry
+- [x] `cargo tauri build` produces `.msi` + `.exe` installer bundles
+- [x] `db_converge_cli --overwrite` re-proven against app-data DBs (`desired_tracks=4`, `delta_queue=11`, `acquisition_requests=0`)
 
 Already proven:
 
@@ -43,7 +50,8 @@ Already proven:
 
 ### P1 Next
 
-- [ ] Raise packaging and clean-machine confidence
+- [x] `cargo tauri build` produces `.msi` + `.exe` — packaging is buildable — **DONE 2026-04-03**: `default-run = "cassette"` added to `src-tauri/Cargo.toml`
+- [x] Install/build steps documented for clean environment; release checklist updated — **DONE 2026-04-03**: `docs/CLEAN_MACHINE_CHECKLIST.md` + `docs/RELEASE_CHECKLIST.md`
 - [ ] Formalize performance baselines and regression budgets
 - [ ] Reuse persisted provenance and candidate memory in runtime behavior
 - [ ] Capture one fresh live recovery/resume proof with the coordinator path as part of async hardening

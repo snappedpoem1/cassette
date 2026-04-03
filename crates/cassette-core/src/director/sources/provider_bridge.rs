@@ -146,6 +146,8 @@ fn desired_track_to_task(track: &DesiredTrack) -> TrackTask {
         source_operation_id: None,
         target: NormalizedTrack {
             spotify_track_id: track.source_track_id.clone(),
+            source_album_id: track.source_album_id.clone(),
+            source_artist_id: track.source_artist_id.clone(),
             source_playlist: None,
             artist: track.artist_name.clone(),
             album_artist: None,

@@ -1,7 +1,8 @@
 /// torrent_album_cli — album-first torrent downloader via Real-Debrid
 ///
 /// Flow per album:
-///   1. Search TPB for "artist album FLAC"
+///   1. Search Jackett (multi-indexer)
+///   2. Fall back to apibay/TPB only when `--allow-apibay-fallback` is set
 ///   2. Add best magnet to Real-Debrid (dedup by hash)
 ///   3. Wait for RD to finish downloading
 ///   4. Unrestrict all audio links
@@ -9,14 +10,25 @@
 ///   6. Match downloaded files to expected tracks by track number / title similarity
 ///   7. Copy matched files into the library, write tags, upsert to DB
 ///
+/// Failure feedback loop (--seed-sidecar):
+///   Albums that fail torrent search are expanded via MusicBrainz into per-track
+///   desired_tracks entries in cassette_librarian.db so the coordinator (engine_pipeline_cli)
+///   can pick them up via Qobuz/Deezer/slskd on the next run.
+///
 /// Usage:
 ///   torrent_album_cli [--dry-run] [--limit N] [--min-plays N] [--staging PATH]
 ///   torrent_album_cli --album "Artist" "Album Title"
+///   torrent_album_cli --limit 50 --seed-sidecar
+///   torrent_album_cli --allow-apibay-fallback      # explicit emergency fallback
 use cassette_core::db::Db;
+use cassette_core::librarian::db::LibrarianDb;
+use cassette_core::librarian::models::{DeltaActionType, NewDeltaQueueItem};
 use cassette_core::library::read_track_metadata;
+use cassette_core::metadata::MetadataService;
 use cassette_core::sources::normalize_text;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde_json::Value;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
@@ -94,6 +106,7 @@ fn extract_archive(archive: &std::path::Path, dest_dir: &std::path::Path) -> Vec
 }
 
 /// Simple title similarity: fraction of words in `needle` found in `haystack`.
+#[allow(dead_code)]
 fn title_similarity(needle: &str, haystack: &str) -> f64 {
     let n = normalize_text(needle);
     let h = normalize_text(haystack);
@@ -555,7 +568,11 @@ async fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> 
 }
 
 // ── track matching ───────────────────────────────────────────────────────────
+// These utilities are built for MusicBrainz-driven track matching.
+// Currently the flow uses direct filename sort; these will be wired in when
+// tracklist-aware placement is added to process_album.
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct ExpectedTrack {
     disc: u32,
@@ -563,8 +580,9 @@ struct ExpectedTrack {
     title: String,
 }
 
-/// Match downloaded audio files to expected tracks.
+/// Match downloaded audio files to expected tracks by title similarity + track number.
 /// Returns vec of (expected_index, file_path) pairs.
+#[allow(dead_code)]
 fn match_files_to_tracks(
     files: &[PathBuf],
     tracks: &[ExpectedTrack],
@@ -622,27 +640,37 @@ async fn process_album(
     db: &Db,
     dry_run: bool,
     jackett: Option<(&str, &str)>, // (url, api_key)
+    allow_apibay_fallback: bool,
 ) -> Result<usize, String> {
     let artist = &job.artist;
     let album = &job.album;
 
     println!("  [{artist} - {album}]");
 
-    // 1. Search — Jackett first (if configured), fall back to apibay/TPB
-    let results = if let Some((jurl, jkey)) = jackett {
+    // 1. Search — Jackett is canonical; apibay is explicit fallback only.
+    let (results, source) = if let Some((jurl, jkey)) = jackett {
         let r = search_jackett(artist, album, jurl, jkey).await;
         if r.is_empty() {
-            println!("    jackett: no results, trying apibay...");
-            search_tpb(artist, album).await
-        } else { r }
+            if allow_apibay_fallback {
+                println!("    jackett: no results, trying apibay fallback...");
+                (search_tpb(artist, album).await, "apibay")
+            } else {
+                (Vec::new(), "jackett")
+            }
+        } else {
+            (r, "jackett")
+        }
+    } else if allow_apibay_fallback {
+        println!("    jackett: not configured, using explicit apibay fallback");
+        (search_tpb(artist, album).await, "apibay")
     } else {
-        search_tpb(artist, album).await
+        println!("    jackett: not configured, apibay fallback disabled");
+        (Vec::new(), "jackett")
     };
     if results.is_empty() {
         return Err(format!("No torrents found for {artist} - {album}"));
     }
     let best = &results[0];
-    let source = if jackett.is_some() { "jackett" } else { "apibay" };
     println!("    torrent [{source}]: {} ({} seeders)", best.title, best.seeders);
 
     if dry_run {
@@ -781,6 +809,190 @@ async fn process_album(
     Ok(installed)
 }
 
+// ── sidecar failure seeding ──────────────────────────────────────────────────
+
+fn librarian_db_path() -> PathBuf {
+    let app_data = std::env::var("APPDATA").unwrap_or_default();
+    PathBuf::from(app_data)
+        .join("dev.cassette.app")
+        .join("cassette_librarian.db")
+}
+
+/// Seed failed albums into the sidecar delta_queue so the coordinator can pick them up.
+///
+/// For each failed album, queries MusicBrainz for the tracklist and writes each track
+/// as a `desired_tracks` + `delta_queue(missing_download)` row in cassette_librarian.db.
+/// The coordinator (engine_pipeline_cli --resume) will then attempt acquisition via
+/// Qobuz, Deezer, slskd, etc.
+///
+/// Albums that are already in desired_tracks are skipped to avoid duplicates.
+async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
+    if failed_albums.is_empty() {
+        return;
+    }
+
+    let db_path = librarian_db_path();
+    let connect_options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true);
+    let pool = match SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("seed_failures: failed to open sidecar DB: {e}");
+            println!("  [seed-sidecar] Could not open sidecar DB: {e}");
+            return;
+        }
+    };
+
+    let sidecar = LibrarianDb::from_pool(pool);
+    if let Err(e) = sidecar.migrate().await {
+        warn!("seed_failures: migration failed: {e}");
+        println!("  [seed-sidecar] Migration failed: {e}");
+        return;
+    }
+
+    let metadata = match MetadataService::new() {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("seed_failures: MetadataService init failed: {e}");
+            println!("  [seed-sidecar] MetadataService init failed: {e}");
+            return;
+        }
+    };
+
+    let mut seeded_albums = 0usize;
+    let mut seeded_tracks = 0usize;
+    let mut skipped = 0usize;
+
+    println!("\n=== seeding {} failed albums to sidecar ===", failed_albums.len());
+
+    for (artist, album) in failed_albums {
+        print!("  [{artist} - {album}] ");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+
+        // Check if any desired_tracks already exist for this album
+        let existing: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM desired_tracks WHERE artist_name = ?1 AND album_title = ?2"
+        )
+        .bind(artist)
+        .bind(album)
+        .fetch_one(sidecar.pool())
+        .await
+        .unwrap_or(0);
+
+        if existing > 0 {
+            println!("skip ({existing} tracks already in desired_tracks)");
+            skipped += 1;
+            continue;
+        }
+
+        // Resolve tracklist via MusicBrainz
+        let releases = match metadata.search_release(artist, album).await {
+            Ok(r) if !r.is_empty() => r,
+            Ok(_) => {
+                println!("no MusicBrainz results");
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                println!("MusicBrainz search failed: {e}");
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let release = match releases.into_iter().find(|r| r.track_count.unwrap_or(0) > 0) {
+            Some(r) => r,
+            None => {
+                println!("no release with tracks");
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let release_with_tracks = match metadata.get_release_tracks(&release.id).await {
+            Ok(r) if !r.tracks.is_empty() => r,
+            Ok(_) => {
+                println!("MusicBrainz returned empty tracklist");
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                println!("get_release_tracks failed: {e}");
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let track_count = release_with_tracks.tracks.len();
+        let mut inserted = 0usize;
+
+        for track in &release_with_tracks.tracks {
+            let track_artist = if track.artist.trim().is_empty() {
+                artist.as_str()
+            } else {
+                track.artist.as_str()
+            };
+
+            let desired_id = match sidecar
+                .insert_desired_track(
+                    "torrent_album_cli_fallback",
+                    None,
+                    None,
+                    None,
+                    track_artist,
+                    Some(album),
+                    &track.title,
+                    Some(track.track_number as i64),
+                    Some(track.disc_number as i64),
+                    if track.duration_ms > 0 { Some(track.duration_ms as i64) } else { None },
+                    None,
+                    Some(&format!(
+                        r#"{{"artist":"{artist}","album":"{album}","release_id":"{}"}}"#,
+                        release.id
+                    )),
+                )
+                .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("insert_desired_track failed for {} - {}: {e}", artist, track.title);
+                    continue;
+                }
+            };
+
+            // Enqueue as missing_download
+            let delta = NewDeltaQueueItem {
+                desired_track_id: desired_id,
+                action_type: DeltaActionType::MissingDownload,
+                priority: 100,
+                reason: format!("torrent_album_cli fallback: no torrent found for {artist} - {album}"),
+                target_quality: Some("lossless_preferred".to_string()),
+            };
+            match sidecar.enqueue_delta(&delta).await {
+                Ok(_) => inserted += 1,
+                Err(e) => warn!("enqueue_delta failed: {e}"),
+            }
+        }
+
+        println!("{inserted}/{track_count} tracks seeded");
+        seeded_albums += 1;
+        seeded_tracks += inserted;
+
+        // Brief delay to avoid hammering MusicBrainz (1 req/sec limit)
+        sleep(Duration::from_millis(1100)).await;
+    }
+
+    println!(
+        "seed-sidecar: {seeded_albums} albums, {seeded_tracks} tracks seeded; {skipped} skipped"
+    );
+    println!("Run `engine_pipeline_cli --resume` to acquire via Qobuz/Deezer/slskd.");
+}
+
 // ── main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -794,6 +1006,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
+    // --seed-sidecar: after the run, write failed albums to cassette_librarian.db
+    // so engine_pipeline_cli can acquire them via Qobuz/Deezer/slskd on the next run
+    let seed_sidecar = args.iter().any(|a| a == "--seed-sidecar");
+    let allow_apibay_fallback = args.iter().any(|a| a == "--allow-apibay-fallback");
     let limit: usize = args.windows(2)
         .find(|w| w[0] == "--limit")
         .and_then(|w| w[1].parse().ok())
@@ -817,7 +1033,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let staging_folder = read_setting(&db, "staging_folder").unwrap_or_else(|| "A:\\Staging".to_string());
     let staging_dir = PathBuf::from(&staging_folder).join(".torrent-album-staging");
 
-    // Jackett config — optional; falls back to apibay if not set
+    // Jackett config — canonical torrent search owner. apibay remains explicit fallback only.
     let jackett_url = read_setting(&db, "jackett_url")
         .unwrap_or_else(|| "http://localhost:9117".to_string());
     let jackett_api_key = read_setting(&db, "jackett_api_key");
@@ -873,11 +1089,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut total_installed = 0usize;
     let mut errors: Vec<String> = Vec::new();
+    // Track which jobs failed (for --seed-sidecar feedback loop)
+    let mut failed_jobs: Vec<(String, String)> = Vec::new();
 
     for (i, job) in jobs.iter().enumerate() {
         println!("\n[{}/{}]", i + 1, jobs.len());
         let jref = jackett.as_ref().map(|(u, k)| (u.as_str(), k.as_str()));
-        match process_album(&job, &rd, &staging_dir, &library_base, &db, dry_run, jref).await {
+        match process_album(
+            &job,
+            &rd,
+            &staging_dir,
+            &library_base,
+            &db,
+            dry_run,
+            jref,
+            allow_apibay_fallback,
+        )
+        .await
+        {
             Ok(n) => {
                 total_installed += n;
                 println!("    -> {n} tracks installed");
@@ -885,6 +1114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => {
                 println!("    -> FAILED: {e}");
                 errors.push(format!("{} - {}: {e}", job.artist, job.album));
+                failed_jobs.push((job.artist.clone(), job.album.clone()));
             }
         }
         // Small delay between albums to avoid hammering TPB/RD
@@ -898,6 +1128,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Errors:    {}", errors.len());
     for e in &errors {
         println!("  - {e}");
+    }
+
+    // Feedback loop: seed failed albums into the sidecar so the coordinator can
+    // attempt acquisition via Qobuz/Deezer/slskd on the next `engine_pipeline_cli --resume`
+    if seed_sidecar && !failed_jobs.is_empty() {
+        seed_failures_to_sidecar(&failed_jobs).await;
+    } else if seed_sidecar && failed_jobs.is_empty() {
+        println!("\n[seed-sidecar] No failures to seed.");
     }
 
     Ok(())

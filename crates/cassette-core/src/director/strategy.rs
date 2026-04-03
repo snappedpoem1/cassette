@@ -10,6 +10,7 @@ pub struct StrategyPlan {
     pub collect_multiple_candidates: bool,
     pub selection_mode: CandidateSelectionMode,
     pub require_lossless: bool,
+    pub compare_after_first_quality_gate: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -28,58 +29,62 @@ impl StrategyPlanner {
         match task.strategy {
             AcquisitionStrategy::Standard | AcquisitionStrategy::DiscographyBatch => {
                 // Mainstream albums: quality-first, lossy last
-                // Qobuz → Deezer → Local Archive → Usenet → Real Debrid → Slskd → yt-dlp
+                // Qobuz → Deezer → Local Archive → Usenet → Jackett → Real Debrid → Slskd → yt-dlp
                 ordered.sort_by_key(|d| match d.id.as_str() {
                     "qobuz" => 0,
                     "deezer" => 1,
                     "local_archive" => 2,
                     "usenet" => 3,
-                    "real_debrid" => 4,
-                    "slskd" => 5,
-                    "yt_dlp" => 6,
-                    _ => 7,
+                    "jackett" => 4,
+                    "real_debrid" => 5,
+                    "slskd" => 6,
+                    "yt_dlp" => 7,
+                    _ => 8,
                 });
             }
             AcquisitionStrategy::HighQualityOnly
             | AcquisitionStrategy::RedownloadReplaceIfBetter => {
                 // Lossless only: yt-dlp excluded entirely
-                // Qobuz → Deezer → Usenet → Local Archive → Real Debrid → Slskd
+                // Qobuz → Deezer → Usenet → Local Archive → Jackett → Real Debrid → Slskd
                 ordered.sort_by_key(|d| match d.id.as_str() {
                     "qobuz" => 0,
                     "deezer" => 1,
                     "usenet" => 2,
                     "local_archive" => 3,
-                    "real_debrid" => 4,
-                    "slskd" => 5,
+                    "jackett" => 4,
+                    "real_debrid" => 5,
+                    "slskd" => 6,
                     "yt_dlp" => 99, // effectively excluded by require_lossless
-                    _ => 6,
+                    _ => 7,
                 });
             }
             AcquisitionStrategy::ObscureFallbackHeavy => {
                 // Rare/out-of-print: deep catalog providers promoted
-                // Local Archive → Real Debrid → Slskd → Usenet → Deezer → Qobuz → yt-dlp
+                // Local Archive → Jackett → Real Debrid → Slskd → Usenet → Deezer → Qobuz → yt-dlp
                 ordered.sort_by_key(|d| match d.id.as_str() {
                     "local_archive" => 0,
-                    "real_debrid" => 1,
-                    "slskd" => 2,
-                    "usenet" => 3,
-                    "deezer" => 4,
-                    "qobuz" => 5,
-                    "yt_dlp" => 6,
-                    _ => 7,
+                    "jackett" => 1,
+                    "real_debrid" => 2,
+                    "slskd" => 3,
+                    "usenet" => 4,
+                    "deezer" => 5,
+                    "qobuz" => 6,
+                    "yt_dlp" => 7,
+                    _ => 8,
                 });
             }
             AcquisitionStrategy::SingleTrackPriority => {
                 // Individual tracks/remixes: yt-dlp promoted for community content
-                // Deezer → Qobuz → yt-dlp → Slskd → Real Debrid → Local Archive
+                // Deezer → Qobuz → yt-dlp → Slskd → Jackett → Real Debrid → Local Archive
                 ordered.sort_by_key(|d| match d.id.as_str() {
                     "deezer" => 0,
                     "qobuz" => 1,
                     "yt_dlp" => 2,
                     "slskd" => 3,
-                    "real_debrid" => 4,
-                    "local_archive" => 5,
-                    _ => 6,
+                    "jackett" => 4,
+                    "real_debrid" => 5,
+                    "local_archive" => 6,
+                    _ => 7,
                 });
             }
             _ => {
@@ -103,6 +108,18 @@ impl StrategyPlanner {
             CandidateSelectionMode::FirstValidWins
         );
 
+        // For compare modes, first evaluate the top-ranked provider and only continue
+        // comparing other providers when the first valid candidate does not meet the
+        // expected high-quality floor.
+        let compare_after_first_quality_gate = matches!(
+            task.strategy,
+            AcquisitionStrategy::Standard
+                | AcquisitionStrategy::DiscographyBatch
+                | AcquisitionStrategy::HighQualityOnly
+                | AcquisitionStrategy::RedownloadReplaceIfBetter
+                | AcquisitionStrategy::ObscureFallbackHeavy
+        );
+
         let require_lossless = matches!(
             task.strategy,
             AcquisitionStrategy::HighQualityOnly | AcquisitionStrategy::RedownloadReplaceIfBetter
@@ -114,6 +131,7 @@ impl StrategyPlanner {
             collect_multiple_candidates,
             selection_mode,
             require_lossless,
+            compare_after_first_quality_gate,
         }
     }
 }
@@ -145,6 +163,8 @@ mod tests {
             source_operation_id: None,
             target: NormalizedTrack {
                 spotify_track_id: None,
+                source_album_id: None,
+                source_artist_id: None,
                 source_playlist: None,
                 artist: "Artist".to_string(),
                 album_artist: None,

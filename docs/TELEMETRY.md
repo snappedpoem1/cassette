@@ -3,7 +3,7 @@
 This file tracks what we know about build, runtime, and operational confidence.
 It is not a dashboard — it is a record of observed facts with dates.
 
-**Last Updated**: 2026-03-28
+**Last Updated**: 2026-04-03
 
 ---
 
@@ -30,9 +30,9 @@ It is not a dashboard — it is a record of observed facts with dates.
 | Pending-task startup recovery | Working | Deterministic startup replay proven with `recovery_probe_cli` |
 | Qobuz acquisition | Partial | Wired and provider probe passes on this machine |
 | Deezer acquisition | Working | Live full-track FLAC probe succeeded on 2026-03-27 |
-| Tidal acquisition | Not started | OAuth device flow not implemented |
 | slskd acquisition | Partial | Health/probe path passes when daemon is up; transfer acceptance still varies by peer |
 | Usenet acquisition | Partial | SABnzbd handoff wired; end-to-end not formally proven |
+| Jackett torrent search | Partial | Active in Director and CLI, but still needs broader live proof |
 | yt-dlp acquisition | Wired | Depends on yt-dlp binary in PATH |
 | Spotify import | Working | JSON export parsing and album queue confirmed |
 | Organizer / duplicate finder | Working | Dry-run confirmed |
@@ -87,7 +87,7 @@ No formal benchmarks exist yet. Qualitative observations:
 - Packaging confidence is not yet a repeatable telemetry artifact.
 - Long-session stability has not been tested beyond a single smoke run.
 - Full UI-driven crash/relaunch capture is still worth recording even though startup replay is now proven with a deterministic probe.
-- Full candidate-set persistence and negative-result memory are still absent from the active runtime path.
+- Candidate persistence and provider-response memory are in the runtime path, but planner-stage reuse and explainability are not fully surfaced yet.
 
 ---
 
