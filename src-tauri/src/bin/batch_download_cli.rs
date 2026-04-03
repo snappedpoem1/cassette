@@ -1,6 +1,5 @@
 use cassette_lib::album_resolver::{
-    metadata_service_from_spotify_credentials,
-    resolve_album_track_tasks as resolve_album_track_tasks_with_metadata,
+    resolve_album_track_tasks_from_spotify_credentials,
 };
 use cassette_core::db::Db;
 use cassette_core::director::providers::{
@@ -243,11 +242,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tasks = Vec::<TrackTask>::new();
     let spotify_id = read_setting(&db, "spotify_client_id");
     let spotify_secret = read_setting(&db, "spotify_client_secret");
-    let metadata = Arc::new(metadata_service_from_spotify_credentials(
-        spotify_id,
-        spotify_secret,
-    )?);
-
     let albums_to_resolve: Vec<_> = missing_albums
         .iter()
         .filter(|a| !a.artist.trim().is_empty() && !a.album.trim().is_empty())
@@ -261,8 +255,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if tasks.len() >= limit {
             break;
         }
-        let result = resolve_album_track_tasks_with_metadata(
-            &metadata,
+        let result = resolve_album_track_tasks_from_spotify_credentials(
+            spotify_id.clone(),
+            spotify_secret.clone(),
             artist,
             title,
             TrackTaskSource::SpotifyHistory,

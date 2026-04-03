@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[path = "../src/album_resolver.rs"]
+mod album_resolver;
 #[path = "../src/now_playing.rs"]
 mod now_playing;
 #[path = "../src/pending_recovery.rs"]
@@ -245,4 +247,33 @@ fn runtime_bootstrap_creates_runtime_and_sidecar_dbs() {
     );
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn shared_album_resolver_uses_expected_fallback_order() {
+    assert_eq!(
+        album_resolver::resolution_fallback_order().as_slice(),
+        ["musicbrainz", "itunes", "spotify"]
+    );
+}
+
+#[test]
+fn downloads_command_album_queue_uses_shared_remote_config_resolver() {
+    let source = include_str!("../src/commands/downloads.rs");
+    assert!(source.contains("resolve_album_track_tasks_from_remote_config("));
+    assert!(!source.contains("resolve_album_track_tasks_with_metadata("));
+}
+
+#[test]
+fn engine_pipeline_spotify_backlog_uses_shared_remote_config_resolver() {
+    let source = include_str!("../src/bin/engine_pipeline_cli.rs");
+    assert!(source.contains("resolve_album_track_tasks_from_remote_config("));
+    assert!(!source.contains("resolve_album_track_tasks_with_metadata("));
+}
+
+#[test]
+fn batch_downloader_uses_shared_spotify_credential_resolver() {
+    let source = include_str!("../src/bin/batch_download_cli.rs");
+    assert!(source.contains("resolve_album_track_tasks_from_spotify_credentials("));
+    assert!(!source.contains("resolve_album_track_tasks_with_metadata("));
 }

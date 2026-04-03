@@ -98,6 +98,7 @@ Role clarification:
 - Missing album detection (Spotify albums not in local library)
 - Album and Spotify-missing queues expand releases into per-track `TrackTask` submissions through the shared resolver chain
 - Album queueing, backlog queueing, and Spotify backlog CLI resolution now route through the shared resolver chain: MusicBrainz -> iTunes -> Spotify credentials
+- Resolver regression tests now guard the active album-expansion paths so Tauri queueing, `engine_pipeline_cli --import-spotify-missing`, and `batch_download_cli` cannot silently drift back to ad hoc MB-only resolution
 - Request and task signatures now retain richer source identity (`source_track_id`, `source_album_id`, `source_artist_id`) alongside ISRC, MusicBrainz IDs, and canonical IDs when available
 - Read-only planner commands now exist for pre-acquisition search and rationale: `plan_acquisition`, `get_candidate_set`, and `get_request_rationale`
 - Planner candidate sets now persist into runtime candidate/search tables before byte acquisition starts, and planner runs refresh request-scoped source-alias and identity-evidence rows

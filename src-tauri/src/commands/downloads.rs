@@ -1,6 +1,5 @@
 use crate::album_resolver::{
-    metadata_service_from_remote_config,
-    resolve_album_track_tasks as resolve_album_track_tasks_with_metadata,
+    resolve_album_track_tasks_from_remote_config,
 };
 use crate::state::{AppState, BacklogRunStatus};
 use cassette_core::acquisition::{
@@ -713,9 +712,14 @@ pub(crate) async fn queue_album_tracks(
     completed_keys: &std::collections::HashSet<String>,
 ) -> Result<Vec<String>, String> {
     let remote_provider_config = load_remote_provider_config(&state)?;
-    let metadata = metadata_service_from_remote_config(&remote_provider_config)?;
-    let resolved =
-        resolve_album_track_tasks_with_metadata(&metadata, artist, album, source, strategy).await?;
+    let resolved = resolve_album_track_tasks_from_remote_config(
+        &remote_provider_config,
+        artist,
+        album,
+        source,
+        strategy,
+    )
+    .await?;
     let crate::album_resolver::ResolvedAlbumTrackTasks {
         resolver_source,
         resolver_release_id,
@@ -1028,7 +1032,7 @@ pub async fn start_backlog_run(
     let backlog_status = Arc::clone(&state.backlog_status);
     let backlog_cancel = Arc::clone(&state.backlog_cancel);
     let remote_provider_config = load_remote_provider_config(&state)?;
-    let metadata = std::sync::Arc::new(metadata_service_from_remote_config(&remote_provider_config)?);
+    let remote_provider_config = std::sync::Arc::new(remote_provider_config);
     let batch = batch_size.unwrap_or(10);
     let hard_limit = limit.unwrap_or(500);
 
@@ -1092,8 +1096,8 @@ pub async fn start_backlog_run(
                 });
 
                 // Resolve tracklist via the shared metadata fallback chain.
-                let resolved_album = match resolve_album_track_tasks_with_metadata(
-                    &metadata,
+                let resolved_album = match resolve_album_track_tasks_from_remote_config(
+                    remote_provider_config.as_ref(),
                     &artist,
                     &title,
                     TrackTaskSource::SpotifyHistory,

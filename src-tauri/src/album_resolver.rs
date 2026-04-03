@@ -3,6 +3,8 @@ use cassette_core::metadata::MetadataService;
 use cassette_core::provider_settings::DownloadConfig;
 use cassette_core::sources::RemoteProviderConfig;
 
+pub const RESOLUTION_FALLBACK_ORDER: [&str; 3] = ["musicbrainz", "itunes", "spotify"];
+
 #[derive(Debug, Clone)]
 pub struct ResolvedAlbumTrackTasks {
     pub resolver_source: String,
@@ -35,6 +37,45 @@ pub fn metadata_service_from_spotify_credentials(
 ) -> Result<MetadataService, String> {
     MetadataService::with_spotify(spotify_client_id, spotify_client_secret)
         .map_err(|error| error.to_string())
+}
+
+pub fn resolution_fallback_order() -> &'static [&'static str; 3] {
+    &RESOLUTION_FALLBACK_ORDER
+}
+
+pub async fn resolve_album_track_tasks_from_remote_config(
+    config: &RemoteProviderConfig,
+    artist: &str,
+    album: &str,
+    source: TrackTaskSource,
+    strategy: AcquisitionStrategy,
+) -> Result<ResolvedAlbumTrackTasks, String> {
+    let metadata = metadata_service_from_remote_config(config)?;
+    resolve_album_track_tasks(&metadata, artist, album, source, strategy).await
+}
+
+pub async fn resolve_album_track_tasks_from_download_config(
+    config: &DownloadConfig,
+    artist: &str,
+    album: &str,
+    source: TrackTaskSource,
+    strategy: AcquisitionStrategy,
+) -> Result<ResolvedAlbumTrackTasks, String> {
+    let metadata = metadata_service_from_download_config(config)?;
+    resolve_album_track_tasks(&metadata, artist, album, source, strategy).await
+}
+
+pub async fn resolve_album_track_tasks_from_spotify_credentials(
+    spotify_client_id: Option<String>,
+    spotify_client_secret: Option<String>,
+    artist: &str,
+    album: &str,
+    source: TrackTaskSource,
+    strategy: AcquisitionStrategy,
+) -> Result<ResolvedAlbumTrackTasks, String> {
+    let metadata =
+        metadata_service_from_spotify_credentials(spotify_client_id, spotify_client_secret)?;
+    resolve_album_track_tasks(&metadata, artist, album, source, strategy).await
 }
 
 pub async fn resolve_album_track_tasks(
@@ -162,7 +203,7 @@ fn classify_release_identity(
 
 #[cfg(test)]
 mod tests {
-    use super::classify_release_identity;
+    use super::{classify_release_identity, resolution_fallback_order};
 
     #[test]
     fn classifies_release_identity_sources() {
@@ -180,5 +221,13 @@ mod tests {
         assert_eq!(musicbrainz.0, "musicbrainz");
         assert!(musicbrainz.1.is_none());
         assert_eq!(musicbrainz.2.as_deref(), Some("mb-release-1"));
+    }
+
+    #[test]
+    fn fallback_order_is_musicbrainz_then_itunes_then_spotify() {
+        assert_eq!(
+            resolution_fallback_order().as_slice(),
+            ["musicbrainz", "itunes", "spotify"]
+        );
     }
 }

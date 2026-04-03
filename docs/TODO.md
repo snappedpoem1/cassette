@@ -263,7 +263,7 @@ Acceptance:
 - [ ] Album-summary queueing and direct desired-track intake share one canonical operator story
 - [ ] Replay proof shows improved reconciliation hit-rate on a fixed sample
 
-### [P1] [review] Route all album expansion through the resilient resolver
+### [P1] [done] Route all album expansion through the resilient resolver
 
 Why:
 
@@ -274,7 +274,7 @@ Acceptance:
 - [x] Tauri album queueing uses the shared resolver (`MusicBrainz -> iTunes -> Spotify`)
 - [x] `engine_pipeline_cli --import-spotify-missing` uses the shared resolver
 - [x] `batch_download_cli` uses the shared resolver
-- [ ] Regression tests prove the shared resolver is the only album expansion path
+- [x] Regression tests prove the shared resolver is the only album expansion path
 
 ### [P1] [review] Separate search owners from execution owners
 

@@ -1,6 +1,5 @@
 use cassette_lib::album_resolver::{
-    metadata_service_from_remote_config,
-    resolve_album_track_tasks as resolve_album_track_tasks_with_metadata,
+    resolve_album_track_tasks_from_remote_config,
 };
 use cassette_core::db::{Db, TrackPathUpdate};
 use cassette_core::director::models::FinalizedTrackDisposition;
@@ -397,7 +396,7 @@ fn is_unfetchable_track(title: &str) -> bool {
 async fn run_spotify_backlog(
     db: &Db,
     handle_director: &DirectorHandle,
-    metadata: &cassette_core::metadata::MetadataService,
+    remote_provider_config: &RemoteProviderConfig,
     min_plays: i64,
     limit: usize,
 ) -> Result<(usize, usize, Vec<String>), Box<dyn std::error::Error>> {
@@ -420,8 +419,8 @@ async fn run_spotify_backlog(
         }
         albums_attempted += 1;
 
-        let resolved = match resolve_album_track_tasks_with_metadata(
-            metadata,
+        let resolved = match resolve_album_track_tasks_from_remote_config(
+            remote_provider_config,
             artist,
             title,
             TrackTaskSource::SpotifyHistory,
@@ -555,9 +554,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut results = handle_director.subscribe_results();
 
         let remote_provider_config = load_remote_provider_config(&db);
-        let metadata = metadata_service_from_remote_config(&remote_provider_config)?;
         let (albums_attempted, tracks_submitted, errors) =
-            run_spotify_backlog(&db, &handle_director, &metadata, spotify_min_plays, limit)
+            run_spotify_backlog(
+                &db,
+                &handle_director,
+                &remote_provider_config,
+                spotify_min_plays,
+                limit,
+            )
                 .await?;
 
         println!(
