@@ -13,24 +13,31 @@ fn app_db_path() -> Result<PathBuf, String> {
         .join("cassette.db"))
 }
 
-fn parse_args() -> Result<(String, String, Option<String>), String> {
+fn parse_args() -> Result<(String, String, Option<String>, bool), String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.len() < 2 {
+    let operator_direct_submit = args.iter().any(|value| value == "--operator-direct-submit");
+    let positional = args
+        .iter()
+        .filter(|value| !value.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if positional.len() < 2 {
         return Err(
-            "Usage: acquire_cli <artist> <title> [album]\nExample: acquire_cli \"Brand New\" \"Sic Transit Gloria... Glory Fades\" \"Deja Entendu\""
+            "Usage: acquire_cli <artist> <title> [album] --operator-direct-submit\nExample: acquire_cli \"Brand New\" \"Sic Transit Gloria... Glory Fades\" \"Deja Entendu\" --operator-direct-submit"
                 .to_string(),
         );
     }
-    let artist = args[0].trim().to_string();
-    let title = args[1].trim().to_string();
-    let album = args
+    let artist = positional[0].trim().to_string();
+    let title = positional[1].trim().to_string();
+    let album = positional
         .get(2)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if artist.is_empty() || title.is_empty() {
         return Err("Artist and title must be non-empty.".to_string());
     }
-    Ok((artist, title, album))
+    Ok((artist, title, album, operator_direct_submit))
 }
 
 fn status_label(status: &DownloadStatus) -> &'static str {
@@ -46,7 +53,13 @@ fn status_label(status: &DownloadStatus) -> &'static str {
 }
 
 fn main() -> Result<(), String> {
-    let (artist, title, album) = parse_args()?;
+    let (artist, title, album, operator_direct_submit) = parse_args()?;
+    if !operator_direct_submit {
+        return Err(
+            "acquire_cli direct Director submission is operator-only. Re-run with --operator-direct-submit."
+                .to_string(),
+        );
+    }
     let db_path = app_db_path()?;
     let runtime = Builder::new_multi_thread()
         .enable_all()

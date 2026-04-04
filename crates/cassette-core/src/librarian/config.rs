@@ -74,6 +74,11 @@ pub struct LibrarianConfig {
 
 impl Default for LibrarianConfig {
     fn default() -> Self {
+        let cpu_parallelism = std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(4);
+        let fingerprint_backfill_concurrency = cpu_parallelism.clamp(4, 32);
+
         Self {
             library_roots: vec![PathBuf::from("A:\\music")],
             sqlite_path: PathBuf::from("staging/librarian.sqlite"),
@@ -81,12 +86,12 @@ impl Default for LibrarianConfig {
             enable_content_hashing: true,
             enable_fingerprint_backfill: false,
             fingerprint_backfill_limit: 0,
-            fingerprint_backfill_concurrency: 4,
+            fingerprint_backfill_concurrency,
             skip_scan: false,
             duplicate_policy: DuplicatePolicy::Flag,
             quality: QualityConfig::default(),
             scan_behavior: ScanBehavior::default(),
-            scan_mode: ScanMode::Full,
+            scan_mode: ScanMode::Resume,
             tracing_filter: "info,cassette_core::librarian=debug".to_string(),
         }
     }

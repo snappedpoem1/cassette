@@ -27,7 +27,21 @@ const STALE_CLAIM_MINUTES_DEFAULT: i64 = 30;
 const MAX_ZERO_TRACK_RENAMES_ABSOLUTE: usize = 25;
 const MAX_ZERO_TRACK_RENAMES_RATIO: f64 = 0.05;
 const FINGERPRINT_BACKFILL_LIMIT_DEFAULT: usize = 64;
-const FINGERPRINT_BACKFILL_CONCURRENCY_DEFAULT: usize = 4;
+
+fn cpu_parallelism_default() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(4)
+}
+
+fn fingerprint_backfill_concurrency_default() -> usize {
+    cpu_parallelism_default().clamp(4, 32)
+}
+
+fn sqlite_pool_connections_default() -> u32 {
+    let target = cpu_parallelism_default().saturating_mul(2).clamp(4, 32);
+    u32::try_from(target).unwrap_or(8)
+}
 
 async fn pending_non_download_summary(pool: &sqlx::SqlitePool) -> Result<Option<String>, sqlx::Error> {
     let rows = sqlx::query(
@@ -69,7 +83,8 @@ fn parse_scan_mode(args: &[String], resume_shorthand: bool) -> Result<ScanMode, 
         (true, Some(other)) => Err(format!(
             "--resume conflicts with --scan-mode {other}; use one scan mode"
         )),
-        (false, Some("full")) | (false, None) => Ok(ScanMode::Full),
+        (false, Some("full")) => Ok(ScanMode::Full),
+        (false, None) => Ok(ScanMode::Resume),
         (false, Some("resume")) => Ok(ScanMode::Resume),
         (false, Some("delta-only")) => Ok(ScanMode::DeltaOnly),
         (false, Some(other)) => Err(format!(
@@ -99,6 +114,29 @@ fn skip_content_hash(args: &[String], scan_mode: ScanMode) -> bool {
 
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_scan_mode, ScanMode};
+
+    #[test]
+    fn parse_scan_mode_defaults_to_resume_when_unspecified() {
+        let args: Vec<String> = vec!["engine_pipeline_cli".to_string()];
+        let mode = parse_scan_mode(&args, false).expect("parse scan mode");
+        assert_eq!(mode, ScanMode::Resume);
+    }
+
+    #[test]
+    fn parse_scan_mode_honors_explicit_full() {
+        let args: Vec<String> = vec![
+            "engine_pipeline_cli".to_string(),
+            "--scan-mode".to_string(),
+            "full".to_string(),
+        ];
+        let mode = parse_scan_mode(&args, false).expect("parse explicit full mode");
+        assert_eq!(mode, ScanMode::Full);
+    }
 }
 
 fn app_db_path() -> Result<PathBuf, String> {
@@ -494,6 +532,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|window| window[1].parse::<i64>().ok())
         .unwrap_or(STALE_CLAIM_MINUTES_DEFAULT);
     let import_spotify_missing = has_flag(&args, "--import-spotify-missing");
+    let operator_direct_submit = has_flag(&args, "--operator-direct-submit");
     let disable_fingerprint_backfill = has_flag(&args, "--skip-fingerprint-backfill");
     let fingerprint_backfill_limit = args
         .windows(2)
@@ -504,7 +543,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .windows(2)
         .find(|window| window[0] == "--fingerprint-backfill-concurrency")
         .and_then(|window| window[1].parse::<usize>().ok())
-        .unwrap_or(FINGERPRINT_BACKFILL_CONCURRENCY_DEFAULT);
+        .unwrap_or_else(fingerprint_backfill_concurrency_default);
     let spotify_min_plays = args
         .windows(2)
         .find(|window| window[0] == "--min-plays")
@@ -517,7 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filename(&librarian_db_path)
         .create_if_missing(true);
     let pool = SqlitePoolOptions::new()
-        .max_connections(1)
+        .max_connections(sqlite_pool_connections_default())
         .connect_with(connect_options)
         .await?;
     let db = Db::open(&db_path)?;
@@ -544,8 +583,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     librarian_config.fingerprint_backfill_concurrency = fingerprint_backfill_concurrency.max(1);
     librarian_config.skip_scan = skip_scan;
 
-    // Spotify backlog mode: resolve missing albums directly via Director, bypass sidecar queue
+    // Spotify backlog mode is an operator-only direct Director bypass.
     if import_spotify_missing {
+        if !operator_direct_submit {
+            return Err(
+                "--import-spotify-missing runs a direct Director bypass and is operator-only; re-run with --operator-direct-submit"
+                    .into(),
+            );
+        }
         println!(
             "engine_pipeline_cli: spotify-backlog mode (min_plays={}, limit={})",
             spotify_min_plays, limit

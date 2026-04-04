@@ -102,6 +102,9 @@ Role clarification:
 - Request and task signatures now retain richer source identity (`source_track_id`, `source_album_id`, `source_artist_id`) alongside ISRC, MusicBrainz IDs, and canonical IDs when available
 - Read-only planner commands now exist for pre-acquisition search and rationale: `plan_acquisition`, `get_candidate_set`, and `get_request_rationale`
 - Planner candidate sets now persist into runtime candidate/search tables before byte acquisition starts, and planner runs refresh request-scoped source-alias and identity-evidence rows
+- Planner review mutations now exist in the command surface via `approve_planned_request` and `reject_planned_request`, and those approvals now submit to Director with audit events and pending-task persistence
+- Active queue submissions now use planner-first flow (`plan_acquisition` -> `approve_planned_request`) for song requests and album/artist expansion requests; remaining bypass and operator lanes are still pending cutover
+- Direct-submit bypass CLIs are now explicitly operator-only via `--operator-direct-submit` gating (`acquire_cli`, `batch_download_cli`, and `engine_pipeline_cli --import-spotify-missing`)
 - Director task result persistence to `director_task_history`
 - Terminal history retains the original `TrackTask` request payload and strategy for failed/cancelled/finalized results
 - Terminal history also preserves the last known provider and `failure_class` for failed/cancelled rows instead of leaving those outcomes provider-blank
@@ -111,6 +114,7 @@ Role clarification:
 - Provider search outcomes and negative-result memory persist in `director_provider_searches`, `director_provider_attempts`, and `director_provider_memory`
 - Provider search/candidate evidence, per-provider response snapshots, identity evidence, and source aliases now also persist in `provider_search_evidence`, `provider_candidate_evidence`, `provider_response_cache`, `identity_resolution_evidence`, and `source_aliases`
 - Director search now consults persisted provider memory before network search: fresh dead-end memory can skip a provider entirely, and fresh cached candidate payloads can hydrate the in-memory search cache for identical requests
+- Release-group identity and edition-level planning are still not threaded through the active queue/planner path strongly enough to call that layer complete
 - Runtime `tracks` rows now persist sovereignty/evidence fields (`isrc`, MusicBrainz IDs, canonical artist/release IDs, `quality_tier`, `content_hash`) instead of silently dropping them on upsert
 - Canonical identity persistence now includes `canonical_recordings` in the active runtime DB
 - Sidecar canonical identity persistence now includes `canonical_artists`, `canonical_releases`, and `canonical_recordings` for request-planning ownership
@@ -436,6 +440,9 @@ Verified on 2026-04-02:
 - Librarian/orchestrator migrations now ensure `delta_queue.source_operation_id`, `claimed_at`, and `claim_run_id`
 - Librarian sidecar scan state now persists `scan_checkpoints` plus `local_files.file_mtime_ms`
 - `engine_pipeline_cli` now accepts `--scan-mode full|resume|delta-only`, with `--resume` defined as the `resume` scan-mode shorthand
+- `engine_pipeline_cli` now defaults to `resume` scan mode when `--scan-mode` is not provided, so repeat coordinator runs reuse completed checkpoints and skip redundant full scans
+- Librarian config now defaults to `scan_mode=resume` and adaptive fingerprint-backfill concurrency based on available CPU (clamped to 4..32)
+- `engine_pipeline_cli` now uses an adaptive SQLite sidecar pool size based on CPU (2x parallelism, clamped to 4..32) instead of a single connection
 - Director task payloads now persist `desired_track_id` and `source_operation_id` through the request payload path
 - `tag_rescue_cli` now plans/applies staged track-number recovery and can emit a JSON repair report
 - Organizer canonical path generation now preserves an existing non-zero filename track prefix when DB `track_number` is zero or missing
@@ -456,6 +463,12 @@ Verified on 2026-04-02:
 - Downloads UI: Backlog panel with start/stop/limit controls and live progress display; Debug panel with per-provider stats and scrollable recent results list
 - Downloads UI now also exposes recent control-plane requests, per-request timeline events, and request-level candidate/provenance inspection
 - Tauri command surface now includes `create_acquisition_request`, `list_acquisition_requests`, `get_acquisition_request_timeline`, `get_request_candidate_review`, and `get_request_lineage`
+- Audit completeness proof updated: `validation::logging` now includes representative tests for operation-to-gatekeeper correlation, strict full-path lineage filtering, and gatekeeper failure/completion event trails
+- `get_file_lineage` now uses strict full-path matching when a full path is provided (with JSON-escaped path support), preventing basename collisions from polluting audit traces
+- Repeatable audit proof command surface re-verified: `cassette-cli operation --help`, `cassette-cli lineage --help`, and `cassette-cli validate --help`
+- Performance baseline tooling now exists: `scripts/perf_baseline_capture.ps1` and `scripts/perf_regression_gate.ps1`
+- Baseline and budget artifacts are now tracked in `docs/perf/BASELINE.latest.json` and `docs/perf/BUDGETS.json`
+- Initial perf capture artifact recorded at `artifacts/perf/run-20260403-155455/results.json` and promoted to `docs/perf/BASELINE.latest.json`
 
 ## Documentation
 

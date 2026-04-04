@@ -111,6 +111,8 @@ pub fn run() {
             commands::planner::plan_acquisition,
             commands::planner::get_candidate_set,
             commands::planner::get_request_rationale,
+            commands::planner::approve_planned_request,
+            commands::planner::reject_planned_request,
             commands::playlists::get_playlists,
             commands::playlists::get_playlist_items,
             commands::playlists::create_playlist,

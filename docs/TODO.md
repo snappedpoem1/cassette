@@ -139,7 +139,7 @@ Acceptance:
 - [x] Bounded live organize proof captured on a safe subset
 - [x] Post-proof unresolved set documented clearly
 
-### [P0] [todo] Prove audit completeness across organization and admission flows
+### [P0] [done] Prove audit completeness across organization and admission flows
 
 Why:
 
@@ -163,9 +163,9 @@ Acceptance:
 
 - [x] Canonical audit-trace query surface exists for operation events plus gatekeeper audit rows
 - [x] Regression coverage exists for the audit-trace query surface
-- [ ] Representative tests added or updated
-- [ ] Validation/logging proof is repeatable
-- [ ] Documentation updated if expectations change
+- [x] Representative tests added or updated
+- [x] Validation/logging proof is repeatable
+- [x] Documentation updated if expectations change
 
 ### [P0] [done] Prove Deezer full-track acquisition end-to-end
 
@@ -224,7 +224,7 @@ Acceptance:
 - [x] Trust-spine verification script exists (`scripts/verify_trust_spine.ps1`)
 - [x] `cargo tauri build` produces `.msi` and `.exe` installers — `default-run = "cassette"` added to `src-tauri/Cargo.toml` (2026-04-03)
 
-### [P1] [todo] Formalize performance baseline and regression budget
+### [P1] [done] Formalize performance baseline and regression budget
 
 Why:
 
@@ -232,9 +232,9 @@ Why:
 
 Acceptance:
 
-- [ ] Core commands benchmarked or timed (scan, organize, validation, bounded coordinator run)
-- [ ] Baselines recorded in `TELEMETRY.md`
-- [ ] Regression thresholds documented
+- [x] Core commands benchmarked or timed (scan, organize, validation, bounded coordinator run)
+- [x] Baselines recorded in `TELEMETRY.md`
+- [x] Regression thresholds documented
 
 ### [P1] [done] Audit and correct tool-role documentation drift
 
@@ -295,36 +295,41 @@ Acceptance:
 Why:
 
 - The control-plane schema can already carry much richer identity than some active intake/queue boundaries provide.
+- The remaining weak point is release-group planning and queue-boundary discipline, not raw provider count.
 
 Acceptance:
 
 - [x] Runtime and sidecar persist canonical artist/release/recording and alias-evidence surfaces
 - [x] Shared Spotify import now carries richer source IDs and best-effort ISRC
 - [x] Active queue/request boundaries now preserve richer source-track/source-album/source-artist identity when available
-- [ ] Release-group identity plan is documented and scoped
+- [ ] Release-group identity is carried and queryable where planning needs edition-level decisions
+- [ ] No active queue boundary collapses back to `artist + title + optional album` when richer identity is already known
 
 ### [P1] [in_progress] Introduce a planner stage before byte acquisition
 
 Why:
 
 - Candidate search, memory reuse, review, and policy still sit too close to direct acquisition.
+- The planner now supports review mutations and submit-on-approval for song and album/artist expansion queue submissions, but it is not yet the default operating path for all lanes.
 
 Acceptance:
 
 - [x] Search/planning and byte acquisition are now distinct stages in the command surface
 - [x] Candidate sets are persisted before acquire starts
-- [ ] Review/policy APIs exist for approval, rejection, and rationale
+- [x] Rationale can be queried before acquire begins
+- [x] Review/policy APIs exist for approval, rejection, and rationale
 
 ### [P1] [todo] Retire acquisition bypass lanes after planner cutover
 
 Why:
 
 - `batch_download_cli` and direct backlog submission paths still bypass the future planner surface.
+- Those shortcuts are useful operator tools, but they should stop defining the product story.
 
 Acceptance:
 
-- [ ] Bypass lanes are demoted, removed, or explicitly marked as operator-only debt
-- [ ] Canonical planner path is the default for UI/runtime queue submission
+- [x] Bypass lanes are demoted, removed, or explicitly marked as operator-only debt
+- [x] Canonical planner path is the default for UI/runtime queue submission
 
 ### [P1] [review] Reuse persisted provenance and candidate memory in runtime behavior
 
@@ -361,11 +366,11 @@ Acceptance:
 - [x] Unchanged fingerprint failures are suppressed instead of retried every sync
 - [x] File mtime changes invalidate stale fingerprint state so rewritten files can be re-backfilled
 
-### [P1] [review] Clean the remaining warning budget
+### [P1] [done] Clean the remaining warning budget
 
 Acceptance:
 
-- [ ] `cargo check --workspace` is warning-free
+- [x] `cargo check --workspace` is warning-free
 - [x] Real-Debrid dead fields resolved
 - [x] CLI bin warnings caused by `state.rs` inclusion removed
 

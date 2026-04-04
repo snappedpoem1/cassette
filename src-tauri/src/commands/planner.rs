@@ -6,7 +6,11 @@ use cassette_core::db::{
     StoredSourceAlias,
 };
 use cassette_core::director::error::ProviderError;
-use cassette_core::director::models::{CandidateRecord, ProviderSearchCandidate, ProviderSearchRecord};
+use cassette_core::director::models::{
+    AcquisitionStrategy, CandidateRecord, NormalizedTrack, ProviderSearchCandidate,
+    ProviderSearchRecord, TrackTask, TrackTaskSource,
+};
+use cassette_core::director::DirectorProgress;
 use cassette_core::director::provider::Provider;
 use cassette_core::director::strategy::{StrategyPlan, StrategyPlanner};
 use cassette_core::librarian::models::AcquisitionRequestRow;
@@ -237,6 +241,207 @@ pub async fn get_request_rationale(
     })
 }
 
+#[tauri::command]
+pub async fn approve_planned_request(
+    state: State<'_, AppState>,
+    request_id: i64,
+    note: Option<String>,
+) -> Result<AcquisitionRequestRow, String> {
+    let request = state
+        .control_db
+        .get_acquisition_request(request_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("request {request_id} not found"))?;
+    let task_id = request
+        .task_id
+        .clone()
+        .ok_or_else(|| format!("request {request_id} is missing task_id"))?;
+
+    if request.status != AcquisitionRequestStatus::Reviewing.as_str() {
+        return Err(format!(
+            "request {request_id} has status '{}' (expected '{}')",
+            request.status,
+            AcquisitionRequestStatus::Reviewing.as_str()
+        ));
+    }
+
+    let task = track_task_from_request_row(&request)?;
+
+    let payload = serde_json::json!({
+        "request_id": request_id,
+        "review_action": "approved",
+    })
+    .to_string();
+    state
+        .control_db
+        .update_acquisition_request_status_by_task_id(
+            &task_id,
+            AcquisitionRequestStatus::Queued.as_str(),
+            "review_approved",
+            note.as_deref().or(Some("planner review approved")),
+            Some(payload.as_str()),
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("request {request_id} not found for task {task_id}"))?;
+
+    state
+        .persist_pending_task(&task, DirectorProgress::Queued)
+        .map_err(|error| error.to_string())?;
+    let task_payload = serde_json::to_string(&task).ok();
+    let _ = state
+        .control_db
+        .update_acquisition_request_status_by_task_id(
+            &task_id,
+            AcquisitionRequestStatus::Queued.as_str(),
+            "runtime_queued",
+            Some("queued for director submission"),
+            task_payload.as_deref(),
+        )
+        .await;
+
+    match state.director_submitter.submit(task).await {
+        Ok(()) => state
+            .control_db
+            .update_acquisition_request_status_by_task_id(
+                &task_id,
+                AcquisitionRequestStatus::Submitted.as_str(),
+                "director_submitted",
+                Some("submitted to director"),
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("request {request_id} not found for task {task_id}")),
+        Err(error) => {
+            let _ = state.delete_pending_task(&task_id);
+            let _ = state
+                .control_db
+                .update_acquisition_request_status_by_task_id(
+                    &task_id,
+                    AcquisitionRequestStatus::Failed.as_str(),
+                    "director_submit_failed",
+                    Some(&error.to_string()),
+                    None,
+                )
+                .await;
+            Err(error.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn reject_planned_request(
+    state: State<'_, AppState>,
+    request_id: i64,
+    reason: Option<String>,
+) -> Result<AcquisitionRequestRow, String> {
+    let request = state
+        .control_db
+        .get_acquisition_request(request_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("request {request_id} not found"))?;
+    let task_id = request
+        .task_id
+        .clone()
+        .ok_or_else(|| format!("request {request_id} is missing task_id"))?;
+
+    if request.status != AcquisitionRequestStatus::Reviewing.as_str() {
+        return Err(format!(
+            "request {request_id} has status '{}' (expected '{}')",
+            request.status,
+            AcquisitionRequestStatus::Reviewing.as_str()
+        ));
+    }
+
+    let payload = serde_json::json!({
+        "request_id": request_id,
+        "review_action": "rejected",
+    })
+    .to_string();
+    let updated = state
+        .control_db
+        .update_acquisition_request_status_by_task_id(
+            &task_id,
+            AcquisitionRequestStatus::Cancelled.as_str(),
+            "review_rejected",
+            reason.as_deref().or(Some("planner review rejected")),
+            Some(payload.as_str()),
+        )
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("request {request_id} not found for task {task_id}"))?;
+
+    Ok(updated)
+}
+
+fn track_task_from_request_row(request: &AcquisitionRequestRow) -> Result<TrackTask, String> {
+    let task_id = request
+        .task_id
+        .clone()
+        .ok_or_else(|| format!("request {} is missing task_id", request.id))?;
+    let source = parse_track_task_source(&request.source_name)?;
+    let strategy = parse_acquisition_strategy(&request.strategy)?;
+
+    let track_number = request.track_number.and_then(|value| u32::try_from(value).ok());
+    let disc_number = request.disc_number.and_then(|value| u32::try_from(value).ok());
+    let year = request.year.and_then(|value| i32::try_from(value).ok());
+
+    Ok(TrackTask {
+        task_id,
+        source,
+        desired_track_id: request.desired_track_id,
+        source_operation_id: request.source_operation_id.clone(),
+        target: NormalizedTrack {
+            spotify_track_id: request.source_track_id.clone(),
+            source_album_id: request.source_album_id.clone(),
+            source_artist_id: request.source_artist_id.clone(),
+            source_playlist: None,
+            artist: request.artist.clone(),
+            album_artist: Some(request.artist.clone()),
+            title: request.title.clone(),
+            album: request.album.clone(),
+            track_number,
+            disc_number,
+            year,
+            duration_secs: request.duration_secs,
+            isrc: request.isrc.clone(),
+            musicbrainz_recording_id: request.musicbrainz_recording_id.clone(),
+            musicbrainz_release_id: request.musicbrainz_release_id.clone(),
+            canonical_artist_id: request.canonical_artist_id,
+            canonical_release_id: request.canonical_release_id,
+        },
+        strategy,
+    })
+}
+
+fn parse_track_task_source(source_name: &str) -> Result<TrackTaskSource, String> {
+    match source_name {
+        "manual" => Ok(TrackTaskSource::Manual),
+        "spotify_library" => Ok(TrackTaskSource::SpotifyLibrary),
+        "spotify_history" => Ok(TrackTaskSource::SpotifyHistory),
+        "spotify_playlist" => Ok(TrackTaskSource::SpotifyPlaylist {
+            playlist_id: "unknown".to_string(),
+        }),
+        _ => Err(format!("unsupported request source_name '{source_name}'")),
+    }
+}
+
+fn parse_acquisition_strategy(strategy: &str) -> Result<AcquisitionStrategy, String> {
+    match strategy {
+        "standard" => Ok(AcquisitionStrategy::Standard),
+        "high_quality_only" => Ok(AcquisitionStrategy::HighQualityOnly),
+        "obscure_fallback_heavy" => Ok(AcquisitionStrategy::ObscureFallbackHeavy),
+        "discography_batch" => Ok(AcquisitionStrategy::DiscographyBatch),
+        "single_track_priority" => Ok(AcquisitionStrategy::SingleTrackPriority),
+        "metadata_repair_only" => Ok(AcquisitionStrategy::MetadataRepairOnly),
+        "redownload_replace_if_better" => Ok(AcquisitionStrategy::RedownloadReplaceIfBetter),
+        _ => Err(format!("unsupported request strategy '{strategy}'")),
+    }
+}
+
 async fn load_planned_acquisition_result(
     state: &State<'_, AppState>,
     request_id: i64,
@@ -451,7 +656,8 @@ fn provider_error_outcome(error: &ProviderError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::cache_is_fresh;
+    use super::{cache_is_fresh, parse_acquisition_strategy, parse_track_task_source};
+    use cassette_core::director::models::{AcquisitionStrategy, TrackTaskSource};
     use chrono::Utc;
 
     #[test]
@@ -463,5 +669,20 @@ mod tests {
     #[test]
     fn stale_cache_rows_are_rejected() {
         assert!(!cache_is_fresh("2001-01-01 00:00:00", 60));
+    }
+
+    #[test]
+    fn strategy_parser_recognizes_known_values() {
+        let parsed = parse_acquisition_strategy("discography_batch").expect("known strategy");
+        assert_eq!(parsed, AcquisitionStrategy::DiscographyBatch);
+    }
+
+    #[test]
+    fn source_parser_rejects_unknown_values() {
+        let parsed = parse_track_task_source("not-a-real-source");
+        assert!(parsed.is_err());
+
+        let manual = parse_track_task_source("manual").expect("manual source");
+        assert!(matches!(manual, TrackTaskSource::Manual));
     }
 }

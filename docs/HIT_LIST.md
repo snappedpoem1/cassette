@@ -46,13 +46,13 @@ Already proven:
 - [x] Capture the first bounded end-to-end `engine_pipeline_cli` live proof — **DONE 2026-03-31**: scan→delta→Qobuz acquisition→`processed_at` stamped→post-run delta-only closes gap. Proof in `PROJECT_STATE.md`.
 - [x] Capture coordinator interruption plus `--resume` recovery proof — **DONE 2026-03-31**: stale claims reclaimed (3), checkpoint fast-path (0 files scanned), 3 tracks re-acquired (Qobuz/Deezer), already-finalized row 1 not re-acquired. Proof in `PROJECT_STATE.md`.
 - [x] Capture the bounded safe organizer live proof after staged track-number repair — **DONE 2026-03-31**: 23,393 files organized live, 0 zero-track renames, 1 stale-path error handled gracefully. 1,833 unresolved zero-track rows documented (1,371 singles, 389 zero-prefix albums, 73 other — no embedded tag recovery possible).
-- [ ] Prove audit completeness across organization and admission flows
+- [x] Prove audit completeness across organization and admission flows
 
 ### P1 Next
 
 - [x] `cargo tauri build` produces `.msi` + `.exe` — packaging is buildable — **DONE 2026-04-03**: `default-run = "cassette"` added to `src-tauri/Cargo.toml`
 - [x] Install/build steps documented for clean environment; release checklist updated — **DONE 2026-04-03**: `docs/CLEAN_MACHINE_CHECKLIST.md` + `docs/RELEASE_CHECKLIST.md`
-- [ ] Formalize performance baselines and regression budgets
+- [x] Formalize performance baselines and regression budgets — **DONE 2026-04-03**: `scripts/perf_baseline_capture.ps1`, `scripts/perf_regression_gate.ps1`, `docs/perf/BUDGETS.json`, `docs/perf/BASELINE.latest.json`
 - [ ] Reuse persisted provenance and candidate memory in runtime behavior
 - [ ] Capture one fresh live recovery/resume proof with the coordinator path as part of async hardening
 

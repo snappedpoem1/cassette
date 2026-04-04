@@ -21,6 +21,8 @@ Use this checklist before calling a Windows release candidate shippable.
 - [ ] `Set-Location ui; npm install; npm run build; Set-Location ..`
 - [ ] `.\scripts\smoke_desktop.ps1`
 - [ ] `.\scripts\verify_trust_spine.ps1`
+- [ ] `.\scripts\perf_baseline_capture.ps1 -Runs 3 -WarmupRuns 1`
+- [ ] `.\scripts\perf_regression_gate.ps1 -CandidateResultPath artifacts\perf\run-<timestamp>\results.json`
 
 ## Packaging Gate
 

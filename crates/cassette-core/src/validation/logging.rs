@@ -141,6 +141,7 @@ pub async fn get_file_lineage(
     manager: &LibraryManager,
     file_path: &str,
 ) -> Result<Vec<FileLineageLikeEvent>> {
+    let has_path_context = file_path.contains('\\') || file_path.contains('/');
     let filename = std::path::Path::new(file_path)
         .file_name()
         .and_then(|v| v.to_str())
@@ -148,28 +149,53 @@ pub async fn get_file_lineage(
         .to_string();
 
     let like_full = format!("%{file_path}%");
+    let escaped_file_path = file_path.replace('\\', "\\\\");
+    let like_full_escaped = format!("%{escaped_file_path}%");
     let like_name = format!("%{filename}%");
 
-    let rows = sqlx::query_as::<_, FileLineageLikeEvent>(
-        r#"
-        SELECT
-            oe.event_id,
-            oe.operation_id,
-            ol.module,
-            ol.phase,
-            oe.event_type,
-            oe.timestamp,
-            oe.event_data
-        FROM operation_events oe
-        JOIN operation_log ol ON oe.operation_id = ol.operation_id
-        WHERE oe.event_data LIKE ?1 OR oe.event_data LIKE ?2
-        ORDER BY oe.event_id ASC
-        "#,
-    )
-    .bind(like_full)
-    .bind(like_name)
-    .fetch_all(manager.db_pool())
-    .await?;
+    let rows = if has_path_context {
+        sqlx::query_as::<_, FileLineageLikeEvent>(
+            r#"
+            SELECT
+                oe.event_id,
+                oe.operation_id,
+                ol.module,
+                ol.phase,
+                oe.event_type,
+                oe.timestamp,
+                oe.event_data
+            FROM operation_events oe
+            JOIN operation_log ol ON oe.operation_id = ol.operation_id
+            WHERE oe.event_data LIKE ?1 OR oe.event_data LIKE ?2
+            ORDER BY oe.event_id ASC
+            "#,
+        )
+        .bind(like_full)
+        .bind(like_full_escaped)
+        .fetch_all(manager.db_pool())
+        .await?
+    } else {
+        sqlx::query_as::<_, FileLineageLikeEvent>(
+            r#"
+            SELECT
+                oe.event_id,
+                oe.operation_id,
+                ol.module,
+                ol.phase,
+                oe.event_type,
+                oe.timestamp,
+                oe.event_data
+            FROM operation_events oe
+            JOIN operation_log ol ON oe.operation_id = ol.operation_id
+            WHERE oe.event_data LIKE ?1 OR oe.event_data LIKE ?2
+            ORDER BY oe.event_id ASC
+            "#,
+        )
+        .bind(like_full)
+        .bind(like_name)
+        .fetch_all(manager.db_pool())
+        .await?
+    };
 
     Ok(rows)
 }
@@ -304,7 +330,10 @@ pub async fn explain_audit_trace(
 mod tests {
     use super::*;
     use crate::gatekeeper::database::ensure_schema as ensure_gatekeeper_schema;
+    use crate::gatekeeper::config::GatekeeperConfig;
     use crate::library::{LibraryManager, ManagerConfig, Module};
+    use std::collections::HashSet;
+    use std::path::Path;
 
     #[tokio::test]
     async fn explain_audit_trace_collects_operation_events_and_gatekeeper_rows() {
@@ -365,5 +394,124 @@ mod tests {
         assert!(!trace.operation_events.is_empty());
         assert!(!trace.gatekeeper_audit.is_empty());
         assert_eq!(trace.gatekeeper_audit[0].desired_track_id, Some(desired_track_id));
+
+        let operation_ids: HashSet<&str> = trace
+            .operation_events
+            .iter()
+            .map(|row| row.operation_id.as_str())
+            .collect();
+        for audit_row in &trace.gatekeeper_audit {
+            assert!(
+                operation_ids.contains(audit_row.operation_id.as_str()),
+                "gatekeeper_audit operation_id must correlate to operation_events"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn explain_audit_trace_filters_to_exact_file_path_context() {
+        let db_file = tempfile::NamedTempFile::new().expect("temp db");
+        let db_url = format!("sqlite://{}", db_file.path().to_string_lossy());
+        let manager = LibraryManager::connect(&db_url, ManagerConfig::default())
+            .await
+            .expect("manager");
+
+        let operation_id = manager
+            .start_operation(Module::Gatekeeper, "batch_ingest")
+            .await
+            .expect("start operation");
+
+        let wanted = "C:\\library\\a\\track.wav";
+        let other = "C:\\library\\b\\track.wav";
+
+        manager
+            .log_event(
+                &operation_id,
+                "gatekeeper_admitted",
+                None,
+                None,
+                None,
+                None,
+                &serde_json::json!({
+                    "file_path": wanted,
+                    "desired_track_id": 77,
+                }),
+            )
+            .await
+            .expect("wanted event");
+
+        manager
+            .log_event(
+                &operation_id,
+                "gatekeeper_admitted",
+                None,
+                None,
+                None,
+                None,
+                &serde_json::json!({
+                    "file_path": other,
+                    "desired_track_id": 88,
+                }),
+            )
+            .await
+            .expect("other event");
+
+        let lineage = get_file_lineage(&manager, wanted)
+            .await
+            .expect("lineage for wanted path");
+
+        assert!(!lineage.is_empty(), "expected at least one matching lineage row");
+        let wanted_escaped = wanted.replace('\\', "\\\\");
+        assert!(
+            lineage.iter().all(|row| {
+                let data = row.event_data.as_deref().unwrap_or_default();
+                data.contains(wanted) || data.contains(&wanted_escaped)
+            }),
+            "lineage rows must only include event_data for the requested full path"
+        );
+    }
+
+    #[tokio::test]
+    async fn gatekeeper_failure_emits_failure_and_completion_events() {
+        let db_file = tempfile::NamedTempFile::new().expect("temp db");
+        let db_url = format!("sqlite://{}", db_file.path().to_string_lossy());
+        let manager = LibraryManager::connect(&db_url, ManagerConfig::default())
+            .await
+            .expect("manager");
+        ensure_gatekeeper_schema(manager.db_pool())
+            .await
+            .expect("gatekeeper schema");
+
+        let config = GatekeeperConfig::default();
+        let missing = Path::new("C:\\definitely-missing\\audit-gap-test.wav");
+        let batch = vec![(missing, None)];
+
+        let outcome = manager
+            .run_gatekeeper_with_manager(&batch, &config)
+            .await
+            .expect("batch ingest should complete even with rejected rows");
+
+        assert_eq!(outcome.total_files, 1);
+        assert_eq!(outcome.rejected, 1);
+
+        let failed_events = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM operation_events WHERE event_type = 'gatekeeper_ingest_failed'",
+        )
+        .fetch_one(manager.db_pool())
+        .await
+        .expect("count failed events");
+
+        let completion_events = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM operation_events WHERE event_type = 'batch_ingest_complete'",
+        )
+        .fetch_one(manager.db_pool())
+        .await
+        .expect("count completion events");
+
+        assert!(failed_events >= 1, "expected failure event to be logged");
+        assert!(
+            completion_events >= 1,
+            "expected batch completion event to be logged"
+        );
     }
 }

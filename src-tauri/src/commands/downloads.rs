@@ -552,13 +552,29 @@ async fn queue_track_request(
         .map_err(|error| error.to_string())?
         .insert(task.task_id.clone(), job);
 
-    match state.submit_acquisition_request(&request).await {
-        Ok(_) => Ok(task.task_id),
+    let auto_note = format!(
+        "auto-approved on planner queue path for {} scope",
+        request.scope.as_str()
+    );
+    let submit_result = async {
+        let planned = crate::commands::planner::plan_acquisition(state.clone(), request).await?;
+        let _ = crate::commands::planner::approve_planned_request(
+            state.clone(),
+            planned.request.id,
+            Some(auto_note),
+        )
+        .await?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match submit_result {
+        Ok(()) => Ok(task.task_id),
         Err(error) => {
             if let Ok(mut jobs) = state.download_jobs.lock() {
                 jobs.remove(&task.task_id);
             }
-            Err(error.to_string())
+            Err(error)
         }
     }
 }

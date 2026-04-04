@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updated": "2026-04-03",
+  "scenarios": {
+    "scan_resume_queue_only": {
+      "warnMedianPct": 20,
+      "failMedianPct": 35,
+      "warnP95Pct": 25,
+      "failP95Pct": 45
+    },
+    "organize_dry_run": {
+      "warnMedianPct": 20,
+      "failMedianPct": 30,
+      "warnP95Pct": 25,
+      "failP95Pct": 40
+    },
+    "validation_targeted_suite": {
+      "warnMedianPct": 25,
+      "failMedianPct": 40,
+      "warnP95Pct": 30,
+      "failP95Pct": 50
+    },
+    "bounded_coordinator_limit5": {
+      "warnMedianPct": 30,
+      "failMedianPct": 50,
+      "warnP95Pct": 40,
+      "failP95Pct": 60
+    }
+  }
+}

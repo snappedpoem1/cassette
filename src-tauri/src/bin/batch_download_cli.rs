@@ -207,6 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let resolve_singles = args.iter().any(|a| a == "--resolve-singles");
+    let operator_direct_submit = args.iter().any(|a| a == "--operator-direct-submit");
     let limit: usize = args
         .windows(2)
         .find(|w| w[0] == "--limit")
@@ -316,8 +317,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if tasks.len() > 20 {
             println!("  ... and {} more", tasks.len() - 20);
         }
-        println!("\nRun without --dry-run to submit these to the Director pipeline.");
+        println!(
+            "\nRun without --dry-run and with --operator-direct-submit to use this operator-only direct Director lane."
+        );
         return Ok(());
+    }
+
+    if !operator_direct_submit {
+        return Err(
+            "batch_download_cli direct Director submission is operator-only. Re-run with --operator-direct-submit."
+                .into(),
+        );
     }
 
     let remote_config = RemoteProviderConfig {

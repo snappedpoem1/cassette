@@ -620,6 +620,26 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
+## Decision 31: Bypass Lanes Are Temporary Operator Debt, Not Product Architecture
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- `batch_download_cli`, backlog submission shortcuts, and similar direct-acquire flows are still useful for operator recovery and live probing.
+- They should not remain the canonical acquisition story now that request planning, candidate persistence, and rationale surfaces exist.
+- Keeping those shortcuts alive as permanent first-class flows would let command-level convenience keep outrunning the planner and identity model.
+
+**Tradeoffs**:
+
+- Some existing operator workflows stay faster in the short term than the intended product path.
+- The repo must carry explicit debt markers until planner-backed submission becomes the default.
+
+**Revisit Condition**:
+
+- Once planner-backed submission and review are the default UI/runtime path and the remaining bypass commands are either demoted or retired.
+
+---
+
 ## Deferred Decisions
 
 ### Distributed / Multi-Machine Coordination

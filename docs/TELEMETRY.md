@@ -41,15 +41,30 @@ It is not a dashboard — it is a record of observed facts with dates.
 
 ---
 
-## Known Performance Observations
+## Performance Baseline Contract
 
-No formal benchmarks exist yet. Qualitative observations:
+Baseline artifacts:
 
-- Library scan on a ~10,000 track collection: order of seconds (not minutes)
-- UI responsiveness after scan: responsive; no observed stalls
-- App startup time: fast; no measured baseline
+- `docs/perf/BASELINE.latest.json`
+- `docs/perf/BUDGETS.json`
+- `scripts/perf_baseline_capture.ps1`
+- `scripts/perf_regression_gate.ps1`
 
-**TODO**: Add formal benchmarks and record results here when they are run.
+Baseline capture (2026-04-03, machine `DESKTOP-8TK5EVK`, 16 logical processors, 1 run, 0 warmup):
+
+| Scenario | Median (s) | P95 (s) | Command |
+|---|---:|---:|---|
+| `scan_resume_queue_only` | 1.546 | 1.546 | `cargo run -p cassette --bin engine_pipeline_cli -- --resume --limit 0 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill` |
+| `validation_targeted_suite` | 1.227 | 1.227 | `cargo test -p cassette-core validation::logging::tests:: -- --nocapture` |
+| `bounded_coordinator_limit5` | 1.552 | 1.552 | `cargo run -p cassette --bin engine_pipeline_cli -- --resume --limit 5 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill` |
+| `organize_dry_run` | 14.748 | 14.748 | `cargo run -p cassette --bin organize_cli -- --dry-run` |
+
+Regression budget policy:
+
+- Warning threshold and fail threshold are enforced per scenario in `docs/perf/BUDGETS.json`.
+- Release gate fails if candidate median or P95 exceeds the fail threshold.
+- Release gate command: `scripts/perf_regression_gate.ps1 -CandidateResultPath <artifact>`.
+- Baseline promotion only happens after candidate gate passes.
 
 ---
 
@@ -69,11 +84,11 @@ No formal benchmarks exist yet. Qualitative observations:
 - Validation pass/fail for representative sandbox workflows
 - Director task history: proportion of `Done` vs `Failed` dispositions
 
-### Performance (to be established)
+### Performance
 
-- Library scan duration (by track count)
-- Organize duration (by file count)
-- Validation duration (by file count)
+- Library scan duration (queue-only and bounded coordinator paths)
+- Organize duration (dry-run)
+- Validation duration (targeted validation suite)
 - App startup time (cold)
 - UI render time for large libraries
 
@@ -81,8 +96,7 @@ No formal benchmarks exist yet. Qualitative observations:
 
 ## Known Gaps
 
-- No formal benchmark suite exists yet.
-- No numeric regression budget is enforced.
+- Baseline currently uses a single measured run per scenario; move to multi-run captures (`-Runs 3` minimum) before final release lock.
 - Provider reliability is configuration-dependent and machine-dependent.
 - Packaging confidence is not yet a repeatable telemetry artifact.
 - Long-session stability has not been tested beyond a single smoke run.
