@@ -69,6 +69,38 @@ impl Db {
             CREATE INDEX IF NOT EXISTS idx_tracks_album        ON tracks(album);
             CREATE INDEX IF NOT EXISTS idx_tracks_title        ON tracks(title);
             CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
+            CREATE TABLE IF NOT EXISTS play_history_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id    INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+                source      TEXT NOT NULL,
+                artist      TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                album       TEXT,
+                played_at   TEXT NOT NULL,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (source, artist, title, album, played_at)
+            );
+            CREATE INDEX IF NOT EXISTS idx_play_history_events_played_at
+                ON play_history_events(played_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_play_history_events_artist_title
+                ON play_history_events(artist COLLATE NOCASE, title COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS artist_play_history (
+                artist      TEXT PRIMARY KEY,
+                play_count  INTEGER NOT NULL DEFAULT 0,
+                last_played TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_artist_play_history_play_count
+                ON artist_play_history(play_count DESC);
+            CREATE TABLE IF NOT EXISTS song_play_history (
+                artist      TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                album       TEXT NOT NULL DEFAULT '',
+                play_count  INTEGER NOT NULL DEFAULT 0,
+                last_played TEXT,
+                PRIMARY KEY (artist, title, album)
+            );
+            CREATE INDEX IF NOT EXISTS idx_song_play_history_play_count
+                ON song_play_history(play_count DESC);
             CREATE TABLE IF NOT EXISTS queue_items (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -680,10 +712,52 @@ impl Db {
         Ok(rows.next().transpose()?)
     }
 
-    pub fn get_albums(&self) -> Result<Vec<Album>> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+    pub fn find_tracks_for_metadata_repair(
+        &self,
+        target: &crate::director::models::NormalizedTrack,
+        limit: usize,
+    ) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
+                    duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
+                    cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                    canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
+             FROM tracks
+             WHERE (
+                    (?1 IS NOT NULL AND lower(ifnull(isrc, '')) = lower(?1))
+                 OR (?2 IS NOT NULL AND lower(ifnull(musicbrainz_recording_id, '')) = lower(?2))
+                 OR (
+                        lower(ifnull(album_artist, artist)) = lower(?3)
+                    AND lower(title) = lower(?4)
+                    AND (?5 IS NULL OR lower(album) = lower(?5))
+                 )
+             )
+             ORDER BY
+                CASE
+                    WHEN (?1 IS NOT NULL AND lower(ifnull(isrc, '')) = lower(?1)) THEN 0
+                    WHEN (?2 IS NOT NULL AND lower(ifnull(musicbrainz_recording_id, '')) = lower(?2)) THEN 1
+                    ELSE 2
+                END,
+                added_at DESC
+             LIMIT ?6",
+        )?;
 
+        let rows = stmt.query_map(
+            params![
+                target.isrc.as_deref(),
+                target.musicbrainz_recording_id.as_deref(),
+                target.artist.as_str(),
+                target.title.as_str(),
+                target.album.as_deref(),
+                i64::try_from(limit.max(1)).unwrap_or(50),
+            ],
+            Self::row_to_track,
+        )?;
+
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_albums(&self) -> Result<Vec<Album>> {
         let mut stmt = self.conn.prepare("
             SELECT album_artist, album, MIN(year), MIN(cover_art_path), COUNT(*)
             FROM tracks GROUP BY album_artist, album
@@ -692,11 +766,7 @@ impl Db {
         let rows = stmt.query_map([], |row| {
             let artist: String = row.get(0)?;
             let title: String = row.get(1)?;
-            // Stable id derived from the group key — survives re-ordering.
-            let mut hasher = DefaultHasher::new();
-            artist.to_ascii_lowercase().hash(&mut hasher);
-            title.to_ascii_lowercase().hash(&mut hasher);
-            let id = hasher.finish() as i64;
+            let id = stable_entity_id(&[artist.as_str(), title.as_str()]);
             Ok(Album {
                 id,
                 title,
@@ -723,9 +793,6 @@ impl Db {
     }
 
     pub fn get_artists(&self) -> Result<Vec<Artist>> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let mut stmt = self.conn.prepare("
             SELECT album_artist, COUNT(DISTINCT album), COUNT(*)
             FROM tracks GROUP BY album_artist
@@ -733,9 +800,7 @@ impl Db {
         ")?;
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
-            let mut hasher = DefaultHasher::new();
-            name.to_ascii_lowercase().hash(&mut hasher);
-            let id = hasher.finish() as i64;
+            let id = stable_entity_id(&[name.as_str()]);
             Ok(Artist {
                 id,
                 name,
@@ -939,6 +1004,83 @@ impl Db {
             params![track_id],
         )?;
         Ok(())
+    }
+
+    pub fn increment_play_count_by_identity(
+        &self,
+        artist: &str,
+        title: &str,
+        played_at: Option<&str>,
+    ) -> Result<usize> {
+        let affected = self.conn.execute(
+            "UPDATE tracks
+             SET play_count = play_count + 1,
+                 last_played = COALESCE(?3, datetime('now'))
+             WHERE lower(trim(artist)) = lower(trim(?1))
+               AND lower(trim(title)) = lower(trim(?2))",
+            params![artist.trim(), title.trim(), played_at],
+        )?;
+        Ok(affected)
+    }
+
+    pub fn record_play_history_event(
+        &self,
+        source: &str,
+        artist: &str,
+        title: &str,
+        album: Option<&str>,
+        played_at: Option<&str>,
+        track_id: Option<i64>,
+    ) -> Result<bool> {
+        let source = source.trim();
+        let artist = artist.trim();
+        let title = title.trim();
+        if source.is_empty() || artist.is_empty() || title.is_empty() {
+            return Ok(false);
+        }
+
+        let album_value = album
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+        let played_at_value = played_at
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
+        let rows = self.conn.execute(
+            "INSERT OR IGNORE INTO play_history_events
+             (track_id, source, artist, title, album, played_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![track_id, source, artist, title, album_value, played_at_value],
+        )?;
+
+        if rows == 0 {
+            return Ok(false);
+        }
+
+        self.conn.execute(
+            "INSERT INTO artist_play_history (artist, play_count, last_played)
+             VALUES (?1, 1, ?2)
+             ON CONFLICT(artist)
+             DO UPDATE SET
+               play_count = artist_play_history.play_count + 1,
+               last_played = MAX(artist_play_history.last_played, excluded.last_played)",
+            params![artist, played_at_value],
+        )?;
+
+        self.conn.execute(
+            "INSERT INTO song_play_history (artist, title, album, play_count, last_played)
+             VALUES (?1, ?2, ?3, 1, ?4)
+             ON CONFLICT(artist, title, album)
+             DO UPDATE SET
+               play_count = song_play_history.play_count + 1,
+               last_played = MAX(song_play_history.last_played, excluded.last_played)",
+            params![artist, title, album_value.unwrap_or_default(), played_at_value],
+        )?;
+
+        Ok(true)
     }
 
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<Track> {
@@ -3414,6 +3556,24 @@ fn normalize_canonical(value: &str) -> String {
         .join(" ")
 }
 
+fn stable_entity_id(parts: &[&str]) -> i64 {
+    let mut hasher = blake3::Hasher::new();
+    for part in parts {
+        hasher.update(part.trim().to_ascii_lowercase().as_bytes());
+        hasher.update(&[0x1f]);
+    }
+
+    let digest = hasher.finalize();
+    let mut id_bytes = [0_u8; 8];
+    id_bytes.copy_from_slice(&digest.as_bytes()[..8]);
+    let raw = u64::from_le_bytes(id_bytes) & 0x7FFF_FFFF_FFFF_FFFF;
+    if raw == 0 {
+        1
+    } else {
+        raw as i64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3502,6 +3662,7 @@ mod tests {
                 duration_secs: Some(42.0),
                 isrc: None,
                 musicbrainz_recording_id: None,
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: None,
                 canonical_artist_id: None,
                 canonical_release_id: None,
@@ -3794,6 +3955,7 @@ mod tests {
                 duration_secs: Some(42.0),
                 isrc: Some("US1234567890".to_string()),
                 musicbrainz_recording_id: None,
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: None,
                 canonical_artist_id: None,
                 canonical_release_id: None,
@@ -3859,6 +4021,7 @@ mod tests {
                 duration_secs: Some(42.0),
                 isrc: Some("US0000000001".to_string()),
                 musicbrainz_recording_id: Some("mb-recording-failure".to_string()),
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: Some("mb-release-failure".to_string()),
                 canonical_artist_id: Some(5),
                 canonical_release_id: Some(8),
@@ -4007,6 +4170,7 @@ mod tests {
                 duration_secs: Some(42.0),
                 isrc: None,
                 musicbrainz_recording_id: None,
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: None,
                 canonical_artist_id: None,
                 canonical_release_id: None,
@@ -4200,6 +4364,116 @@ mod tests {
         assert!(!provider_memory[0].retryable);
         assert_eq!(provider_memory[0].candidate_count, 1);
         assert!(provider_memory[0].updated_at.contains('-'));
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn album_ids_are_stable_across_db_reopen() {
+        let db_path = temp_db_path("album-id-stability");
+
+        {
+            let db = Db::open(&db_path).expect("db should open");
+            let track = Track {
+                id: 0,
+                path: "C:\\Music\\Artist\\Album\\01 - Song.flac".to_string(),
+                title: "Song".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                album_artist: "Artist".to_string(),
+                track_number: Some(1),
+                disc_number: Some(1),
+                year: Some(2024),
+                duration_secs: 42.0,
+                sample_rate: None,
+                bit_depth: None,
+                bitrate_kbps: None,
+                format: "FLAC".to_string(),
+                file_size: 4,
+                cover_art_path: None,
+                isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
+                quality_tier: None,
+                content_hash: None,
+                added_at: String::new(),
+            };
+            db.upsert_track(&track).expect("track should save");
+        }
+
+        let first_id = {
+            let db = Db::open(&db_path).expect("db should reopen");
+            let albums = db.get_albums().expect("albums should load");
+            assert_eq!(albums.len(), 1);
+            albums[0].id
+        };
+
+        let second_id = {
+            let db = Db::open(&db_path).expect("db should reopen");
+            let albums = db.get_albums().expect("albums should load");
+            assert_eq!(albums.len(), 1);
+            albums[0].id
+        };
+
+        assert_eq!(first_id, second_id);
+        assert_eq!(first_id, stable_entity_id(&["artist", "album"]));
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn artist_ids_are_stable_across_db_reopen() {
+        let db_path = temp_db_path("artist-id-stability");
+
+        {
+            let db = Db::open(&db_path).expect("db should open");
+            let track = Track {
+                id: 0,
+                path: "C:\\Music\\Artist\\Album\\01 - Song.flac".to_string(),
+                title: "Song".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                album_artist: "Artist".to_string(),
+                track_number: Some(1),
+                disc_number: Some(1),
+                year: Some(2024),
+                duration_secs: 42.0,
+                sample_rate: None,
+                bit_depth: None,
+                bitrate_kbps: None,
+                format: "FLAC".to_string(),
+                file_size: 4,
+                cover_art_path: None,
+                isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_release_id: None,
+                canonical_artist_id: None,
+                canonical_release_id: None,
+                quality_tier: None,
+                content_hash: None,
+                added_at: String::new(),
+            };
+            db.upsert_track(&track).expect("track should save");
+        }
+
+        let first_id = {
+            let db = Db::open(&db_path).expect("db should reopen");
+            let artists = db.get_artists().expect("artists should load");
+            assert_eq!(artists.len(), 1);
+            artists[0].id
+        };
+
+        let second_id = {
+            let db = Db::open(&db_path).expect("db should reopen");
+            let artists = db.get_artists().expect("artists should load");
+            assert_eq!(artists.len(), 1);
+            artists[0].id
+        };
+
+        assert_eq!(first_id, second_id);
+        assert_eq!(first_id, stable_entity_id(&["artist"]));
 
         let _ = fs::remove_file(db_path);
     }

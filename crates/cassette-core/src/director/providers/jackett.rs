@@ -26,10 +26,16 @@ pub struct JackettProvider {
     jackett_url: String,
     jackett_api_key: String,
     rd_client: reqwest::Client,
+    archive_binary: String,
 }
 
 impl JackettProvider {
-    pub fn new(jackett_url: String, jackett_api_key: String, rd_api_key: String) -> Self {
+    pub fn new(
+        jackett_url: String,
+        jackett_api_key: String,
+        rd_api_key: String,
+        archive_binary: Option<String>,
+    ) -> Self {
         let mut headers = HeaderMap::new();
         if let Ok(value) = HeaderValue::from_str(&format!("Bearer {rd_api_key}")) {
             headers.insert(AUTHORIZATION, value);
@@ -44,6 +50,9 @@ impl JackettProvider {
             jackett_url,
             jackett_api_key,
             rd_client,
+            archive_binary: archive_binary
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "7z".to_string()),
         }
     }
 
@@ -414,7 +423,7 @@ impl JackettProvider {
             return Ok(false);
         }
 
-        let output = tokio::process::Command::new("7z")
+        let output = tokio::process::Command::new(&self.archive_binary)
             .args(["x", "-y", "-o"])
             .arg(dest_dir)
             .arg(file_path)

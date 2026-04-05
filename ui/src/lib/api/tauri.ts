@@ -158,6 +158,7 @@ export interface DownloadConfig {
   genius_token: string | null;
   discogs_token: string | null;
   lastfm_api_key: string | null;
+  lastfm_username: string | null;
   // Tools
   ytdlp_path: string | null;
   sevenzip_path: string | null;
@@ -339,6 +340,7 @@ export interface AcquisitionRequest {
   duration_secs?: number | null;
   isrc?: string | null;
   musicbrainz_recording_id?: string | null;
+  musicbrainz_release_group_id?: string | null;
   musicbrainz_release_id?: string | null;
   canonical_artist_id?: number | null;
   canonical_release_id?: number | null;
@@ -384,6 +386,28 @@ export interface AcquisitionRequestEvent {
   created_at: string;
 }
 
+export interface PlannedAcquisitionResult {
+  request: AcquisitionRequestListItem & { status: string };
+  identity_lane: PlannerIdentityLane;
+  provider_order: string[];
+  cached_provider_ids: string[];
+  summary: unknown;
+  provider_searches: unknown[];
+  candidate_review: CandidateReviewItem[];
+}
+
+export interface PlannerIdentityLane {
+  scope: string;
+  musicbrainz_release_group_id?: string | null;
+  musicbrainz_release_id?: string | null;
+  musicbrainz_recording_id?: string | null;
+  canonical_artist_id?: number | null;
+  canonical_release_id?: number | null;
+  quality_policy?: string | null;
+  edition_policy?: string | null;
+  confirmation_policy: string;
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -413,6 +437,8 @@ export const api = {
   getPlaybackState: () => invoke<PlaybackState>('get_playback_state'),
   getNowPlayingContext: (artist: string, title: string, album?: string) =>
     invoke<NowPlayingContext>('get_now_playing_context', { artist, title, album }),
+  syncLastfmHistory: (username?: string, limit?: number) =>
+    invoke<number>('sync_lastfm_history', { username, limit }),
 
   // Queue
   getQueue: () => invoke<QueueItem[]>('get_queue'),
@@ -495,6 +521,12 @@ export const api = {
     invoke<TaskResultSummary[]>('get_recent_task_results', { limit }),
   createAcquisitionRequest: (request: AcquisitionRequest) =>
     invoke('create_acquisition_request', { request }),
+  planAcquisition: (request: AcquisitionRequest) =>
+    invoke<PlannedAcquisitionResult>('plan_acquisition', { request }),
+  approvePlannedRequest: (requestId: number, note?: string) =>
+    invoke('approve_planned_request', { requestId, note }),
+  rejectPlannedRequest: (requestId: number, reason?: string) =>
+    invoke('reject_planned_request', { requestId, reason }),
   listAcquisitionRequests: (status?: string, limit?: number) =>
     invoke<AcquisitionRequestListItem[]>('list_acquisition_requests', { status, limit }),
   getAcquisitionRequestTimeline: (requestId: number) =>

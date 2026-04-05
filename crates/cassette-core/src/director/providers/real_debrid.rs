@@ -51,14 +51,19 @@ pub struct RealDebridProvider {
     client: reqwest::Client,
     qualifiers: SeedingQualifiers,
     direct_search_enabled: bool,
+    archive_binary: String,
 }
 
 impl RealDebridProvider {
     pub fn new(api_key: String) -> Self {
-        Self::with_direct_search(api_key, false)
+        Self::with_direct_search(api_key, false, None)
     }
 
-    pub fn with_direct_search(api_key: String, direct_search_enabled: bool) -> Self {
+    pub fn with_direct_search(
+        api_key: String,
+        direct_search_enabled: bool,
+        archive_binary: Option<String>,
+    ) -> Self {
         let mut headers = HeaderMap::new();
         if let Ok(value) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
             headers.insert(AUTHORIZATION, value);
@@ -73,6 +78,9 @@ impl RealDebridProvider {
             client,
             qualifiers: SeedingQualifiers::default(),
             direct_search_enabled,
+            archive_binary: archive_binary
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "7z".to_string()),
         }
     }
 
@@ -490,7 +498,7 @@ impl RealDebridProvider {
             return Ok(false);
         }
 
-        let output = tokio::process::Command::new("7z")
+        let output = tokio::process::Command::new(&self.archive_binary)
             .args(["x", "-y", "-o"])
             .arg(dest_dir)
             .arg(file_path)

@@ -51,17 +51,17 @@ Rust crates for audio validation and metadata.
 | [symphonia.md](audio/symphonia.md) | Format probing, codec detection, playback | Proven Working |
 | [lofty.md](audio/lofty.md) | Tag read/write, cover art embedding | Proven Working |
 
-## Not Documented (Stubs / Placeholders / No Code)
+## Not Yet Documented (Coverage Gaps)
 
-These have no working implementation and do not warrant full reference docs:
+These components either have working code without dedicated reference pages, or are intentionally partial integrations:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Jackett | Active provider, doc coverage lagging | `director/providers/jackett.rs` exists; registry docs were corrected in the 2026-04-03 scope reset |
+| Jackett | Active provider | `director/providers/jackett.rs` exists; add a dedicated provider reference page |
 | Genius | Config field only | `genius_token` env var defined in DownloadConfig, never used |
-| Discogs | Stub enricher | `librarian/enrich/discogs.rs` has empty `enrich()` — never called |
-| Last.fm enricher | Stub enricher | `librarian/enrich/lastfm.rs` has empty `enrich()` — separate from working player context |
-| Bandcamp | Placeholder | `director/sources/bandcamp.rs` returns explicit placeholder error |
+| Discogs | Implemented enrichment/search usage | `librarian/enrich/discogs.rs` and `sources.rs` are active; add dedicated Discogs reference doc |
+| Last.fm history sync | Implemented | `sync_lastfm_history` and play-history persistence are active; expand `metadata/lastfm.md` coverage |
+| Bandcamp | Partial resolver helper | `director/sources/bandcamp.rs` resolves payload URLs only; no catalog/search integration |
 | Cover Art Archive | Not wired | No code references to coverartarchive.org API |
 
 ## Status Legend

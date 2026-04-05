@@ -1,3 +1,8 @@
+param(
+    [switch]$Strict,
+    [switch]$RequireSlskd
+)
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -22,3 +27,30 @@ $checks.GetEnumerator() | ForEach-Object {
         Passed = $_.Value
     }
 } | Format-Table -AutoSize
+
+if ($Strict) {
+    $requiredChecks = @(
+        "Repo .env",
+        "A:\Music exists",
+        "A:\Staging exists",
+        "Bundled slskd.exe",
+        "App DB exists"
+    )
+    if ($RequireSlskd) {
+        $requiredChecks += "slskd localhost:5030"
+    }
+
+    $failed = @()
+    foreach ($name in $requiredChecks) {
+        if (-not $checks[$name]) {
+            $failed += $name
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Host ""
+        Write-Host "[smoke] required checks failed:" -ForegroundColor Red
+        $failed | ForEach-Object { Write-Host " - $_" -ForegroundColor Red }
+        exit 1
+    }
+}

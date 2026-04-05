@@ -1,8 +1,8 @@
 # Cassette Project Index
 
 **Status**: Active - identity-first convergence, hardening, audit proof, and packaging confidence
-**Next**: planner-first acquisition, bypass-lane retirement, audit completeness proof
-**Last Updated**: 2026-04-03
+**Next**: proof hardening, audit completeness proof, and packaging confidence
+**Last Updated**: 2026-04-05
 **Owner**: Christian (Capn)
 
 ---
@@ -118,8 +118,8 @@ Spotify history/import helpers, settings, provider status, and library organizat
 | Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
-| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, and startup recovery exist | `MetadataRepairOnly` stubbed; bounded coordinator live proof still pending |
-| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, source-alias evidence, request -> task translation, and read-only planner commands now exist | Approval/rejection mutations and full bypass-lane retirement still remain |
+| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, startup recovery, and planner-time edition policy filtering exist | Bounded coordinator live proof still pending |
+| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, source-alias evidence, request -> task translation, planner rationale, and review mutations exist | Full proof/UX hardening and exclusion-memory lanes still remain |
 | Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
 | Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
 | Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
@@ -166,10 +166,10 @@ The Tauri command layer exposes commands across these areas:
 
 - [ ] `downloader/` remains in-tree as a legacy compatibility re-export for provider settings.
   Runtime acquisition ownership is `director/providers/`; no new runtime behavior should land in `downloader/`.
-- [ ] `MetadataRepairOnly` in `director/engine.rs` is explicitly stubbed.
+- [x] `MetadataRepairOnly` is implemented for runtime DB-backed local metadata repair flows.
 - [ ] Long-session desktop reliability is not formally tested or documented.
-- [ ] `Album.id` is a computed `ROW_NUMBER()` from SQL, not a real primary key.
-  IDs are not stable across queries if data changes.
+- [x] Album/artist projection IDs now use deterministic hash IDs rather than seeded `DefaultHasher`
+  values, so IDs remain stable across process restarts.
 
 ---
 
@@ -180,7 +180,7 @@ Before declaring a release candidate ready, all of the following must pass:
 - [ ] `cargo check` passes at workspace root with no actionable warnings
 - [ ] `cargo test` passes for the Rust workspace
 - [ ] `ui` build passes with `npm run build`
-- [ ] Desktop smoke script passes: `scripts/smoke_desktop.ps1`
+- [ ] Desktop smoke script passes: `scripts/smoke_desktop.ps1 -Strict`
 - [ ] Validation flows complete against sandbox inputs without corrupting source files
 - [ ] File and operation lineage is queryable for representative workflows
 - [ ] Provider failures are visible, recoverable, and documented

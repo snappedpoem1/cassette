@@ -1,8 +1,7 @@
-use crate::now_playing::{
-    base_now_playing_context, parse_lastfm_album_info, parse_lastfm_artist_info,
-    LastfmAlbumInfo, LastfmArtistInfo, LrclibResult, LASTFM_API_KEY,
-};
+use crate::now_playing::{base_now_playing_context, LrclibResult};
 use crate::state::AppState;
+use cassette_core::librarian::enrich::discogs::DiscogsClient;
+use cassette_core::librarian::enrich::lastfm::LastFmClient;
 use cassette_core::models::{NowPlayingContext, PlaybackState};
 use tauri::State;
 
@@ -18,7 +17,41 @@ pub fn player_load(state: State<'_, AppState>, path: String) {
 
 #[tauri::command]
 pub fn player_play(state: State<'_, AppState>) {
+    let was_playing = state.player.is_playing();
     state.player.play();
+
+    if was_playing || state.player.position_secs() > 1.0 {
+        return;
+    }
+
+    let current_track = {
+        let ps = state.playback_state.lock().unwrap();
+        ps.current_track.clone()
+    };
+    let Some(track) = current_track else {
+        return;
+    };
+
+    let db = state.db.lock().unwrap();
+    if let Err(error) = db.increment_play_count(track.id) {
+        tracing::warn!(
+            "[player_play] failed to increment play count for track {}: {error}",
+            track.id
+        );
+    }
+    if let Err(error) = db.record_play_history_event(
+        "local_playback",
+        &track.artist,
+        &track.title,
+        Some(&track.album),
+        None,
+        Some(track.id),
+    ) {
+        tracing::warn!(
+            "[player_play] failed to record play-history event for track {}: {error}",
+            track.id
+        );
+    }
 }
 
 #[tauri::command]
@@ -41,6 +74,7 @@ pub fn player_toggle(state: State<'_, AppState>) {
 
 #[tauri::command]
 pub fn player_next(state: State<'_, AppState>) {
+    let was_playing = state.player.is_playing();
     let db = state.db.lock().unwrap();
     let queue = db.get_queue().unwrap_or_default();
     let next_pos = {
@@ -53,8 +87,20 @@ pub fn player_next(state: State<'_, AppState>) {
             let mut ps = state.playback_state.lock().unwrap();
             ps.current_track = Some(track.clone());
             ps.queue_position = next_pos;
-            if let Err(e) = db.increment_play_count(track.id) {
-                tracing::warn!("[player_next] failed to increment play count for track {}: {e}", track.id);
+            if was_playing {
+                if let Err(e) = db.increment_play_count(track.id) {
+                    tracing::warn!("[player_next] failed to increment play count for track {}: {e}", track.id);
+                }
+                if let Err(e) = db.record_play_history_event(
+                    "local_playback",
+                    &track.artist,
+                    &track.title,
+                    Some(&track.album),
+                    None,
+                    Some(track.id),
+                ) {
+                    tracing::warn!("[player_next] failed to record play-history event for track {}: {e}", track.id);
+                }
             }
         }
     }
@@ -113,28 +159,70 @@ pub async fn get_now_playing_context(
 
     let mut ctx = base_now_playing_context(&artist, album.clone());
 
-    let lastfm_key = {
+    let (lastfm_key, discogs_token) = {
         let db = state.db.lock().unwrap();
-        db.get_setting("lastfm_api_key")
-            .ok()
-            .flatten()
-            .filter(|v| !v.trim().is_empty())
-    }
-    .or_else(|| std::env::var("LASTFM_API_KEY").ok().filter(|v| !v.trim().is_empty()))
-    .unwrap_or_else(|| LASTFM_API_KEY.to_string());
+        (
+            db.get_setting("lastfm_api_key")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty()),
+            db.get_setting("discogs_token")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty()),
+        )
+    };
 
-    let lastfm_artist = fetch_lastfm_artist(&client, &artist, &lastfm_key).await;
-    if let Some(info) = lastfm_artist {
-        ctx.artist_summary = info.summary;
-        ctx.artist_tags = info.tags;
-        ctx.listeners = info.listeners;
+    let lastfm_client = LastFmClient::new(
+        lastfm_key.or_else(|| std::env::var("LASTFM_API_KEY").ok().filter(|value| !value.trim().is_empty())),
+    );
+    let discogs_client = DiscogsClient::new(
+        discogs_token.or_else(|| std::env::var("DISCOGS_TOKEN").ok().filter(|value| !value.trim().is_empty())),
+    );
+
+    if let Some(info) = lastfm_client.fetch_artist_context(&client, &artist).await {
+        if ctx.artist_summary.is_none() {
+            ctx.artist_summary = info.summary;
+        }
+        if ctx.listeners.is_none() {
+            ctx.listeners = info.listeners;
+        }
+        merge_unique_tags(&mut ctx.artist_tags, info.tags);
     }
 
     if let Some(ref alb) = album {
-        let lastfm_album = fetch_lastfm_album(&client, &artist, alb, &lastfm_key).await;
-        if let Some(info) = lastfm_album {
-            ctx.album_summary = info.summary;
-            ctx.album_art_url = info.image_url;
+        if let Some(info) = lastfm_client.fetch_album_context(&client, &artist, alb).await {
+            if ctx.album_summary.is_none() {
+                ctx.album_summary = info.summary;
+            }
+            if ctx.album_art_url.is_none() {
+                ctx.album_art_url = info.image_url;
+            }
+        }
+
+        if let Some(release) = discogs_client
+            .fetch_release_context(&client, &artist, alb)
+            .await
+        {
+            let mut discogs_tags = release.genres;
+            discogs_tags.extend(release.styles);
+            merge_unique_tags(&mut ctx.artist_tags, discogs_tags);
+
+            if ctx.album_summary.is_none() {
+                let mut parts: Vec<String> = Vec::new();
+                if let Some(year) = release.year {
+                    parts.push(year.to_string());
+                }
+                if !release.labels.is_empty() {
+                    parts.push(format!("label: {}", release.labels.join(", ")));
+                }
+                if let Some(country) = release.country {
+                    parts.push(format!("country: {country}"));
+                }
+                if !parts.is_empty() {
+                    ctx.album_summary = Some(format!("Discogs release metadata ({})", parts.join(" | ")));
+                }
+            }
         }
     }
 
@@ -148,48 +236,81 @@ pub async fn get_now_playing_context(
     Ok(ctx)
 }
 
-async fn fetch_lastfm_artist(
-    client: &reqwest::Client,
-    artist: &str,
-    api_key: &str,
-) -> Option<LastfmArtistInfo> {
-    let resp = client
-        .get("https://ws.audioscrobbler.com/2.0/")
-        .query(&[
-            ("method", "artist.getinfo"),
-            ("artist", artist),
-            ("api_key", api_key),
-            ("format", "json"),
-        ])
-        .send()
+#[tauri::command]
+pub async fn sync_lastfm_history(
+    state: State<'_, AppState>,
+    username: Option<String>,
+    limit: Option<u32>,
+) -> Result<usize, String> {
+    let (lastfm_key, configured_username) = {
+        let db = state.db.lock().unwrap();
+        (
+            db.get_setting("lastfm_api_key")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("LASTFM_API_KEY")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                }),
+            db.get_setting("lastfm_username")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("LASTFM_USERNAME")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                }),
+        )
+    };
+
+    let api_key = lastfm_key.ok_or_else(|| {
+        "Last.fm API key missing. Set lastfm_api_key in settings or LASTFM_API_KEY in environment.".to_string()
+    })?;
+    let resolved_username = username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .or(configured_username)
+        .ok_or_else(|| {
+            "Last.fm username missing. Pass username or set lastfm_username / LASTFM_USERNAME.".to_string()
+        })?;
+
+    let history_limit = limit.unwrap_or(200).clamp(1, 200);
+    let lastfm_client = LastFmClient::new(Some(api_key));
+    let recent_tracks = lastfm_client
+        .fetch_recent_tracks(&state.http_client, &resolved_username, history_limit)
         .await
-        .ok()?;
+        .ok_or_else(|| "Last.fm history fetch failed or returned no parsable rows.".to_string())?;
 
-    let json: serde_json::Value = resp.json().await.ok()?;
-    parse_lastfm_artist_info(&json)
-}
+    let mut inserted = 0usize;
+    let db = state.db.lock().unwrap();
+    for scrobble in recent_tracks {
+        let was_inserted = db
+            .record_play_history_event(
+                "lastfm",
+                &scrobble.artist,
+                &scrobble.title,
+                scrobble.album.as_deref(),
+                scrobble.played_at.as_deref(),
+                None,
+            )
+            .map_err(|error| format!("record_play_history_event failed: {error}"))?;
+        if !was_inserted {
+            continue;
+        }
+        inserted += 1;
+        let _ = db.increment_play_count_by_identity(
+            &scrobble.artist,
+            &scrobble.title,
+            scrobble.played_at.as_deref(),
+        );
+    }
 
-async fn fetch_lastfm_album(
-    client: &reqwest::Client,
-    artist: &str,
-    album: &str,
-    api_key: &str,
-) -> Option<LastfmAlbumInfo> {
-    let resp = client
-        .get("https://ws.audioscrobbler.com/2.0/")
-        .query(&[
-            ("method", "album.getinfo"),
-            ("artist", artist),
-            ("album", album),
-            ("api_key", api_key),
-            ("format", "json"),
-        ])
-        .send()
-        .await
-        .ok()?;
-
-    let json: serde_json::Value = resp.json().await.ok()?;
-    parse_lastfm_album_info(&json)
+    Ok(inserted)
 }
 
 async fn fetch_lrclib_lyrics(
@@ -234,4 +355,20 @@ async fn fetch_lrclib_lyrics(
     }
 
     Some(LrclibResult { plain, synced })
+}
+
+fn merge_unique_tags(existing: &mut Vec<String>, incoming: Vec<String>) {
+    for tag in incoming {
+        let normalized = tag.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        if existing
+            .iter()
+            .any(|current| current.eq_ignore_ascii_case(normalized))
+        {
+            continue;
+        }
+        existing.push(normalized.to_string());
+    }
 }

@@ -49,6 +49,10 @@ pub fn merge_normalized_track(
             .musicbrainz_recording_id
             .clone()
             .or_else(|| resolved.musicbrainz_recording_id.clone()),
+        musicbrainz_release_group_id: requested
+            .musicbrainz_release_group_id
+            .clone()
+            .or_else(|| resolved.musicbrainz_release_group_id.clone()),
         musicbrainz_release_id: requested
             .musicbrainz_release_id
             .clone()
@@ -85,6 +89,7 @@ fn merge_embedded_metadata(requested: &NormalizedTrack, staged_path: &Path) -> N
                 duration_secs: Some(track.duration_secs),
                 isrc: None,
                 musicbrainz_recording_id: None,
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: None,
                 canonical_artist_id: None,
                 canonical_release_id: None,
@@ -308,6 +313,7 @@ mod tests {
             duration_secs: None,
             isrc: None,
             musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
             musicbrainz_release_id: None,
             canonical_artist_id: None,
             canonical_release_id: None,

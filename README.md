@@ -8,12 +8,22 @@ Cass//ette is a desktop application built with Rust, Tauri 2, SvelteKit, and SQL
 
 Active hardening, audit proof, and packaging confidence.
 
-Current verified state on this machine, as of 2026-03-30:
+Verified on 2026-04-05:
 
 - `cargo check --workspace` passes
 - `cargo test --workspace` passes
 - `npm run build` passes in `ui/`
-- `.\scripts\smoke_desktop.ps1` passes
+- `.\scripts\smoke_desktop.ps1 -Strict` passes
+
+What just landed:
+
+- planner identity lane
+- request contract boundary enforcement
+- planner edition policy filtering
+
+Next:
+
+- remaining work is proof hardening and packaging confidence
 
 ## Architecture
 

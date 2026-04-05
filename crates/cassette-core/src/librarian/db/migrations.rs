@@ -241,6 +241,7 @@ pub const MIGRATIONS: &[&str] = &[
       duration_secs REAL,
       isrc TEXT,
       musicbrainz_recording_id TEXT,
+      musicbrainz_release_group_id TEXT,
       musicbrainz_release_id TEXT,
       canonical_artist_id INTEGER REFERENCES canonical_artists(id),
       canonical_release_id INTEGER REFERENCES canonical_releases(id),

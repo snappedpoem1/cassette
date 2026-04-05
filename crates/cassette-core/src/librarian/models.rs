@@ -313,6 +313,7 @@ pub struct AcquisitionRequestRow {
     pub duration_secs: Option<f64>,
     pub isrc: Option<String>,
     pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_release_group_id: Option<String>,
     pub musicbrainz_release_id: Option<String>,
     pub canonical_artist_id: Option<i64>,
     pub canonical_release_id: Option<i64>,

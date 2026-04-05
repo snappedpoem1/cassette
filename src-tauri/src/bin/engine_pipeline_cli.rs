@@ -182,6 +182,7 @@ fn load_remote_provider_config(db: &Db) -> RemoteProviderConfig {
         spotify_client_id: read_setting(db, "spotify_client_id"),
         spotify_client_secret: read_setting(db, "spotify_client_secret"),
         spotify_access_token: read_setting(db, "spotify_access_token"),
+        discogs_token: read_setting(db, "discogs_token"),
     }
 }
 
@@ -194,15 +195,39 @@ fn load_slskd_connection_config(db: &Db) -> SlskdConnectionConfig {
     }
 }
 
+fn usenet_is_configured(
+    api_key: Option<&str>,
+    sabnzbd_url: Option<&str>,
+    sabnzbd_api_key: Option<&str>,
+) -> bool {
+    [api_key, sabnzbd_url, sabnzbd_api_key]
+        .into_iter()
+        .all(|value| value.map(|item| !item.trim().is_empty()).unwrap_or(false))
+}
+
 fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
     let library_root = read_setting(db, "library_base").unwrap_or_else(|| "A:\\Music".to_string());
     let staging_root =
         read_setting(db, "staging_folder").unwrap_or_else(|| "A:\\Staging".to_string());
     let remote_provider_config = load_remote_provider_config(db);
     let slskd_connection = load_slskd_connection_config(db);
+    let slskd_configured = [
+        read_setting(db, "slskd_url"),
+        read_setting(db, "slskd_user"),
+        read_setting(db, "slskd_pass"),
+    ]
+    .iter()
+    .all(|value| value.as_ref().map(|item| !item.trim().is_empty()).unwrap_or(false));
     let usenet_api_key = read_setting(db, "nzbgeek_api_key");
     let sabnzbd_url = read_setting(db, "sabnzbd_url");
     let sabnzbd_api_key = read_setting(db, "sabnzbd_api_key");
+    let usenet_configured = usenet_is_configured(
+        usenet_api_key.as_deref(),
+        sabnzbd_url.as_deref(),
+        sabnzbd_api_key.as_deref(),
+    );
+    let ytdlp_binary = read_setting(db, "ytdlp_path").unwrap_or_else(|| "yt-dlp".to_string());
+    let sevenzip_binary = read_setting(db, "sevenzip_path");
 
     let config = DirectorConfig {
         library_root: PathBuf::from(&library_root),
@@ -240,27 +265,34 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
     };
 
     let mut providers: Vec<Arc<dyn Provider>> = vec![
-        Arc::new(SlskdProvider::new(
-            slskd_connection,
-            vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
-        )),
         Arc::new(QobuzProvider::new(remote_provider_config.clone())),
         Arc::new(DeezerProvider::new(remote_provider_config.clone())),
-        Arc::new(UsenetProvider {
+        Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
+        Arc::new(YtDlpProvider::new(ytdlp_binary)),
+    ];
+
+    if slskd_configured {
+        providers.push(Arc::new(SlskdProvider::new(
+            slskd_connection,
+            vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
+        )));
+    }
+
+    if usenet_configured {
+        providers.push(Arc::new(UsenetProvider {
             api_key: usenet_api_key,
             sabnzbd_url,
             sabnzbd_api_key,
             scan_roots: vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
-        }),
-        Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
-        Arc::new(YtDlpProvider::new("yt-dlp")),
-    ];
+        }));
+    }
 
     let rd_key = read_setting(db, "real_debrid_key");
     if let Some(ref key) = rd_key {
         providers.push(Arc::new(RealDebridProvider::with_direct_search(
             key.clone(),
             false,
+            sevenzip_binary.clone(),
         )));
     }
 
@@ -268,7 +300,12 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
     let jackett_url = read_setting(db, "jackett_url").filter(|u| !u.trim().is_empty());
     let jackett_api_key = read_setting(db, "jackett_api_key").filter(|k| !k.trim().is_empty());
     if let (Some(jurl), Some(jkey), Some(ref rdkey)) = (jackett_url, jackett_api_key, &rd_key) {
-        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(jurl, jkey, rdkey.clone())));
+        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(
+            jurl,
+            jkey,
+            rdkey.clone(),
+            sevenzip_binary,
+        )));
     }
 
     Director::new(config, providers).start()
@@ -328,6 +365,7 @@ fn task_from_claim(
             duration_secs: claim.desired.duration_ms.map(|value| value as f64 / 1000.0),
             isrc: claim.desired.isrc.clone(),
             musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
             musicbrainz_release_id: None,
             canonical_artist_id: None,
             canonical_release_id: None,

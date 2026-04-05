@@ -40,6 +40,14 @@ Run:
 .\scripts\verify_trust_spine.ps1
 ```
 
+For clean-room bootstrap verification after installer launch, run:
+
+```powershell
+.\scripts\verify_cleanroom_local.ps1 -Mode DisposableProfile
+```
+
+Use `-Mode Sandbox` when validating inside Windows Sandbox.
+
 That script currently proves:
 
 - `cargo check --workspace`
@@ -48,7 +56,13 @@ That script currently proves:
 - `cargo test -p cassette-core`
 - `cargo test -p cassette --lib --no-run`
 - `npm run build`
-- `.\scripts\smoke_desktop.ps1`
+- `.\scripts\smoke_desktop.ps1 -Strict`
+
+Optional integrated run (includes local clean-room bootstrap checks):
+
+```powershell
+.\scripts\verify_trust_spine.ps1 -RunCleanroomLocal -CleanroomMode DisposableProfile
+```
 
 ## Packaging (verified 2026-04-03)
 
@@ -72,5 +86,5 @@ Required fix: `default-run = "cassette"` in `src-tauri/Cargo.toml`. Without this
 ## Known Gap
 
 - `cargo test --workspace` is now part of the trustworthy clean-machine gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure came from the Tauri lib-test harness starting without the desktop manifest; pure command/bootstrap tests now live in `src-tauri/tests/pure_logic.rs` instead of the Tauri-linked lib harness.
-- Full clean-machine proof (install from `.msi` + first-run bootstrap on a fresh machine) has not been run yet.
+- Full clean-machine proof can be satisfied by either a second machine or a same-machine clean-room run (Windows Sandbox or disposable local profile). If only app-data reset fallback is used, record it as lower-confidence evidence in release notes.
 - `slskd localhost:5030` is machine/runtime dependent; in the latest trust-spine run on 2026-04-03 this check reported `False`, so provider-specific smoke expectations should be treated as environment-sensitive unless slskd is actively running.

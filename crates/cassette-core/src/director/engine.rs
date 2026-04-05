@@ -4,10 +4,10 @@ use crate::director::finalize::{finalize_selected_candidate, merge_normalized_tr
 use crate::director::metadata::apply_metadata;
 use crate::director::models::{
     CandidateDisposition, CandidateQuality, CandidateRecord, CandidateSelection, CandidateSelectionMode,
-    DirectorEvent, DirectorProgress, DirectorTaskResult, FinalizedTrack,
+    CandidateScore, DirectorEvent, DirectorProgress, DirectorTaskResult, FinalizedTrack,
     FinalizedTrackDisposition, ProviderAttemptRecord, ProviderDescriptor, ProviderHealthState,
     ProviderHealthStatus, ProviderSearchCandidate, ProviderSearchRecord, ProvenanceRecord,
-    TrackTask,
+    SelectionReason, TrackTask, ValidationReport,
 };
 use crate::director::provider::Provider;
 use crate::director::scoring::score_candidate;
@@ -18,7 +18,8 @@ use crate::db::{director_request_signature, Db, StoredProviderMemory, StoredProv
 use chrono::Utc;
 use moka::sync::Cache;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 use tokio::task::JoinSet;
@@ -444,22 +445,30 @@ async fn process_task(
     }
 
     if matches!(task.strategy, crate::director::models::AcquisitionStrategy::MetadataRepairOnly) {
-        send_event(
-            &events,
-            &task.task_id,
-            DirectorProgress::Skipped,
-            None,
-            "metadata repair only is intentionally stubbed in phase 1",
-        );
-        let _ = results.send(DirectorTaskResult {
-            task_id: task.task_id.clone(),
-            disposition: FinalizedTrackDisposition::MetadataOnly,
-            finalized: None,
-            attempts: Vec::new(),
-            error: None,
-            candidate_records: Vec::new(),
-            provider_searches: Vec::new(),
-        });
+        let metadata_result = run_metadata_repair_only(&config, &events, &task).await;
+        let _ = results.send(metadata_result.clone());
+        match metadata_result.disposition {
+            FinalizedTrackDisposition::MetadataOnly => send_event(
+                &events,
+                &task.task_id,
+                DirectorProgress::Finalized,
+                Some("metadata_repair".to_string()),
+                metadata_result
+                    .error
+                    .as_deref()
+                    .unwrap_or("metadata repair completed"),
+            ),
+            _ => send_event(
+                &events,
+                &task.task_id,
+                DirectorProgress::Failed,
+                Some("metadata_repair".to_string()),
+                metadata_result
+                    .error
+                    .as_deref()
+                    .unwrap_or("metadata repair failed"),
+            ),
+        }
         unregister_task_token(&task_tokens, &task.task_id);
         return Ok(());
     }
@@ -601,6 +610,175 @@ async fn process_task(
             unregister_task_token(&task_tokens, &task.task_id);
             Err(error)
         }
+    }
+}
+
+async fn run_metadata_repair_only(
+    config: &DirectorConfig,
+    events: &broadcast::Sender<DirectorEvent>,
+    task: &TrackTask,
+) -> DirectorTaskResult {
+    send_event(
+        events,
+        &task.task_id,
+        DirectorProgress::Tagging,
+        Some("metadata_repair".to_string()),
+        "resolving local tracks for metadata repair",
+    );
+
+    let Some(runtime_db_path) = config.runtime_db_path.clone() else {
+        return DirectorTaskResult {
+            task_id: task.task_id.clone(),
+            disposition: FinalizedTrackDisposition::Failed,
+            finalized: None,
+            attempts: Vec::new(),
+            error: Some("metadata repair requires runtime_db_path in DirectorConfig".to_string()),
+            candidate_records: Vec::new(),
+            provider_searches: Vec::new(),
+        };
+    };
+
+    let task_target = task.target.clone();
+    let local_tracks = match tokio::task::spawn_blocking(move || -> Result<_, DirectorError> {
+        let db = Db::open(&runtime_db_path)
+            .map_err(|error| DirectorError::DatabaseError(error.to_string()))?;
+        db.find_tracks_for_metadata_repair(&task_target, 64)
+            .map_err(|error| DirectorError::DatabaseError(error.to_string()))
+    })
+    .await
+    {
+        Ok(Ok(tracks)) => tracks,
+        Ok(Err(error)) => {
+            return DirectorTaskResult {
+                task_id: task.task_id.clone(),
+                disposition: FinalizedTrackDisposition::Failed,
+                finalized: None,
+                attempts: Vec::new(),
+                error: Some(error.to_string()),
+                candidate_records: Vec::new(),
+                provider_searches: Vec::new(),
+            };
+        }
+        Err(error) => {
+            return DirectorTaskResult {
+                task_id: task.task_id.clone(),
+                disposition: FinalizedTrackDisposition::Failed,
+                finalized: None,
+                attempts: Vec::new(),
+                error: Some(format!("metadata repair worker failed: {error}")),
+                candidate_records: Vec::new(),
+                provider_searches: Vec::new(),
+            };
+        }
+    };
+
+    if local_tracks.is_empty() {
+        return DirectorTaskResult {
+            task_id: task.task_id.clone(),
+            disposition: FinalizedTrackDisposition::Failed,
+            finalized: None,
+            attempts: Vec::new(),
+            error: Some("metadata repair found no matching local tracks".to_string()),
+            candidate_records: Vec::new(),
+            provider_searches: Vec::new(),
+        };
+    }
+
+    let mut attempts = Vec::<ProviderAttemptRecord>::new();
+    let mut repaired = 0usize;
+    let mut failed = 0usize;
+
+    for (idx, track) in local_tracks.iter().enumerate() {
+        let track_path = PathBuf::from(&track.path);
+        if !track_path.exists() {
+            failed += 1;
+            attempts.push(ProviderAttemptRecord {
+                provider_id: "metadata_repair".to_string(),
+                attempt: u32::try_from(idx + 1).unwrap_or(u32::MAX),
+                outcome: format!("skipped missing local file: {}", track.path),
+            });
+            continue;
+        }
+
+        let selection = CandidateSelection {
+            provider_id: "metadata_repair".to_string(),
+            provider_candidate_id: format!("track-{}", track.id),
+            temp_path: track_path,
+            score: CandidateScore {
+                total: 0,
+                metadata_match_points: 0,
+                duration_points: 0,
+                codec_points: 0,
+                provider_points: 0,
+                validation_points: 0,
+                size_points: 0,
+                bitrate_points: 0,
+                format_points: 0,
+            },
+            reason: SelectionReason {
+                summary: "metadata repair on existing local file".to_string(),
+                details: BTreeMap::new(),
+            },
+            validation: ValidationReport {
+                is_valid: true,
+                format_name: None,
+                duration_secs: Some(track.duration_secs),
+                audio_readable: true,
+                header_readable: true,
+                extension_ok: true,
+                file_size: track.file_size,
+                quality: CandidateQuality::Unknown,
+                issues: Vec::new(),
+            },
+            cover_art_url: None,
+        };
+
+        match apply_metadata(task.clone(), selection).await {
+            Ok(_) => {
+                repaired += 1;
+                attempts.push(ProviderAttemptRecord {
+                    provider_id: "metadata_repair".to_string(),
+                    attempt: u32::try_from(idx + 1).unwrap_or(u32::MAX),
+                    outcome: format!("metadata repaired: {}", track.path),
+                });
+            }
+            Err(error) => {
+                failed += 1;
+                attempts.push(ProviderAttemptRecord {
+                    provider_id: "metadata_repair".to_string(),
+                    attempt: u32::try_from(idx + 1).unwrap_or(u32::MAX),
+                    outcome: format!("metadata repair failed: {} ({error})", track.path),
+                });
+            }
+        }
+    }
+
+    if repaired == 0 {
+        return DirectorTaskResult {
+            task_id: task.task_id.clone(),
+            disposition: FinalizedTrackDisposition::Failed,
+            finalized: None,
+            attempts,
+            error: Some("metadata repair failed for all matching local tracks".to_string()),
+            candidate_records: Vec::new(),
+            provider_searches: Vec::new(),
+        };
+    }
+
+    let summary = if failed == 0 {
+        format!("metadata repaired for {repaired} local track(s)")
+    } else {
+        format!("metadata repaired for {repaired} local track(s), {failed} failed")
+    };
+
+    DirectorTaskResult {
+        task_id: task.task_id.clone(),
+        disposition: FinalizedTrackDisposition::MetadataOnly,
+        finalized: None,
+        attempts,
+        error: Some(summary),
+        candidate_records: Vec::new(),
+        provider_searches: Vec::new(),
     }
 }
 
@@ -1979,6 +2157,7 @@ mod tests {
                 duration_secs: Some(1.0),
                 isrc: None,
                 musicbrainz_recording_id: None,
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: None,
                 canonical_artist_id: None,
                 canonical_release_id: None,
@@ -2362,6 +2541,252 @@ mod tests {
             .iter()
             .any(|attempt| attempt.provider_id == "metadata"
                 && attempt.outcome == "skipped: provider is metadata-only"));
+    }
+
+    #[tokio::test]
+    async fn metadata_repair_only_requires_runtime_db_path() {
+        let root = tempdir().expect("temp dir");
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            runtime_db_path: None,
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(config, vec![]);
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+
+        handle
+            .submitter
+            .submit(task(AcquisitionStrategy::MetadataRepairOnly))
+            .await
+            .expect("submit task");
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = results.recv().await.expect("receive result");
+                if result.task_id == "task-1" {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("result received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        assert!(matches!(result.disposition, FinalizedTrackDisposition::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("runtime_db_path"));
+    }
+
+    #[tokio::test]
+    async fn metadata_repair_only_fails_when_no_matching_local_tracks() {
+        let root = tempdir().expect("temp dir");
+        let runtime_db_path = root.path().join("runtime.db");
+        let db = Db::open(&runtime_db_path).expect("runtime db should open");
+
+        // Seed a non-matching track so the query exercises real DB lookup.
+        db.upsert_track(&crate::models::Track {
+            id: 0,
+            path: root
+                .path()
+                .join("library")
+                .join("Other Artist")
+                .join("Other Album")
+                .join("01 - Other Song.wav")
+                .to_string_lossy()
+                .to_string(),
+            title: "Other Song".to_string(),
+            artist: "Other Artist".to_string(),
+            album: "Other Album".to_string(),
+            album_artist: "Other Artist".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2020),
+            duration_secs: 10.0,
+            sample_rate: None,
+            bit_depth: None,
+            bitrate_kbps: None,
+            format: "wav".to_string(),
+            file_size: 1,
+            cover_art_path: None,
+            isrc: Some("US0000000000".to_string()),
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            quality_tier: None,
+            content_hash: None,
+            added_at: String::new(),
+        })
+        .expect("seed track");
+
+        let config = DirectorConfig {
+            library_root: root.path().join("library"),
+            temp_root: root.path().join("temp"),
+            runtime_db_path: Some(runtime_db_path),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(config, vec![]);
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+
+        handle
+            .submitter
+            .submit(task(AcquisitionStrategy::MetadataRepairOnly))
+            .await
+            .expect("submit task");
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = results.recv().await.expect("receive result");
+                if result.task_id == "task-1" {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("result received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        assert!(matches!(result.disposition, FinalizedTrackDisposition::Failed));
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no matching local tracks"));
+    }
+
+    #[tokio::test]
+    async fn metadata_repair_only_repairs_matching_local_track() {
+        let root = tempdir().expect("temp dir");
+        let runtime_db_path = root.path().join("runtime.db");
+        let library_root = root.path().join("library");
+        std::fs::create_dir_all(&library_root).expect("library root");
+
+        let track_path = library_root
+            .join("Artist")
+            .join("Album")
+            .join("01 - Song.wav");
+        std::fs::create_dir_all(track_path.parent().expect("parent dir")).expect("artist album dir");
+        std::fs::write(&track_path, build_wav_bytes()).expect("seed wav");
+
+        let db = Db::open(&runtime_db_path).expect("runtime db should open");
+        db.upsert_track(&crate::models::Track {
+            id: 0,
+            path: track_path.to_string_lossy().to_string(),
+            title: "Song".to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            album_artist: "Artist".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2020),
+            duration_secs: 1.0,
+            sample_rate: None,
+            bit_depth: None,
+            bitrate_kbps: None,
+            format: "wav".to_string(),
+            file_size: 1,
+            cover_art_path: None,
+            isrc: Some("US1234567890".to_string()),
+            musicbrainz_recording_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            quality_tier: None,
+            content_hash: None,
+            added_at: String::new(),
+        })
+        .expect("seed track");
+
+        let mut metadata_task = task(AcquisitionStrategy::MetadataRepairOnly);
+        metadata_task.target.isrc = Some("US1234567890".to_string());
+
+        let config = DirectorConfig {
+            library_root,
+            temp_root: root.path().join("temp"),
+            runtime_db_path: Some(runtime_db_path),
+            local_search_roots: vec![root.path().join("staging")],
+            worker_concurrency: 1,
+            provider_timeout_secs: 2,
+            retry_policy: Default::default(),
+            quality_policy: crate::director::config::QualityPolicy {
+                minimum_duration_secs: 0.5,
+                max_duration_delta_secs: Some(2.0),
+                preferred_extensions: vec!["wav".to_string()],
+            },
+            duplicate_policy: DuplicatePolicy::KeepExisting,
+            temp_recovery: TempRecoveryPolicy {
+                stale_after_hours: 24,
+                quarantine_failures: false,
+            },
+            ..DirectorConfig::default()
+        };
+
+        let director = Director::new(config, vec![]);
+        let handle = director.start();
+        let mut results = handle.subscribe_results();
+
+        handle
+            .submitter
+            .submit(metadata_task)
+            .await
+            .expect("submit task");
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let result = results.recv().await.expect("receive result");
+                if result.task_id == "task-1" {
+                    break result;
+                }
+            }
+        })
+        .await
+        .expect("result received");
+
+        handle.shutdown().await.expect("shutdown director");
+
+        assert!(matches!(result.disposition, FinalizedTrackDisposition::MetadataOnly));
+        assert!(result
+            .attempts
+            .iter()
+            .any(|attempt| attempt.outcome.contains("metadata repaired")));
     }
 
     #[tokio::test]

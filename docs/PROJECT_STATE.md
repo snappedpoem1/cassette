@@ -31,12 +31,13 @@ Last updated: 2026-04-03
 - Audio playback via Symphonia decode + `cpal` output
 - Queue management (add, remove, reorder, clear)
 - Playlist CRUD
-- Now-playing context from Last.fm
+- Now-playing context from Last.fm plus Last.fm recent-scrobble sync into local artist/song/play-history tables
 - Synced/plain lyrics from LRCLIB
 
 ### Acquisition Pipeline (Director Engine)
 - Two-pass waterfall orchestration with per-provider semaphores
 - 7 acquisition strategies (`Standard`, `HighQualityOnly`, `ObscureFallbackHeavy`, `SingleTrackPriority`, `DiscographyBatch`, `RedownloadReplaceIfBetter`, `MetadataRepairOnly`)
+- `MetadataRepairOnly` now resolves matching local tracks from runtime DB identity fields (ISRC/MB recording/artist-title-album) and applies in-place metadata repair without byte acquisition
 - 6-factor candidate scoring (metadata confidence, duration match, codec quality, provider trust, validation result, file size)
 - Task-local cancellation via `CancellationToken` registry, with batch-wide cancel reserved for shutdown
 - Symphonia-based audio validation with truthful `audio_readable` / `header_readable` reporting and codec/container mismatch rejection
@@ -80,7 +81,8 @@ Current provider-role reset:
 | Service | Usage | Auth |
 |---------|-------|------|
 | MusicBrainz | Release search, parent album lookup, track listing, tag fixes | None |
-| Last.fm | Artist/album context for now-playing | Public API key |
+| Discogs | Metadata search/discography fallback (`database/search`, `artists/{id}/releases`) plus release-id/genre-style context enrichment | User token |
+| Last.fm | Artist/album context, track-duration lookup, and recent-scrobble history sync (`user.getRecentTracks`) | Public API key (+ username for history sync) |
 | LRCLIB | Synced/plain lyrics lookup | None |
 | Spotify | History import, search, discography seeds | Optional OAuth |
 
@@ -306,10 +308,10 @@ Skips albums already in `desired_tracks` to avoid duplicates. Respects MusicBrai
 - Frontend still keeps `get_download_jobs` as a catch-up and resume fallback even though push events are now primary
 - Dual schema: richer librarian/library model exists but isn't fully wired into the active runtime UI path
 - `cargo test --workspace` is a reliable gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure was isolated to the Tauri lib-test harness missing the desktop manifest; the pure `src-tauri` assertions now live in `src-tauri/tests/pure_logic.rs`.
-- `MetadataRepairOnly` strategy is still a stub
-- Discogs/Last.fm enrichers outside now-playing remain stubbed/no-op
-- Bandcamp source remains placeholder-only
-- Candidate persistence exists, but the app still does not reuse that memory for pre-acquisition review, exclusion decisions, or explicit user override lanes
+- `MetadataRepairOnly` currently depends on `runtime_db_path` and matching local-track identity evidence; requests without that context fail fast with explicit diagnostics
+- Discogs and Last.fm enrichment clients now have live API-backed implementations; runtime now uses Last.fm for now-playing plus explicit history sync, while a full automatic background enrichment queue worker is still pending
+- Bandcamp source now resolves Bandcamp URLs from desired-track payloads instead of hard-failing as a placeholder resolver
+- Candidate persistence now feeds the Downloads pre-acquisition review panel (timeline plus approve/reject), while exclusion decisions and richer explicit override lanes are still pending
 - Fingerprint accumulation is now bounded and incremental, not a full-library canonical backfill worker; large libraries will converge over repeated syncs rather than one sweep
 - `batch_download_cli` still uses the older album-history/manual workflow and has not been removed yet
 - `director/providers/` is the active acquisition path; `downloader/` is now only a legacy compatibility re-export for provider settings types

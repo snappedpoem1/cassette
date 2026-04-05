@@ -464,6 +464,7 @@ fn build_track_task(
             duration_secs: None,
             isrc: None,
             musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
             musicbrainz_release_id: None,
             canonical_artist_id: None,
             canonical_release_id: None,
@@ -507,6 +508,7 @@ fn request_from_track_task(
         duration_secs: task.target.duration_secs,
         isrc: task.target.isrc.clone(),
         musicbrainz_recording_id: task.target.musicbrainz_recording_id.clone(),
+        musicbrainz_release_group_id: task.target.musicbrainz_release_group_id.clone(),
         musicbrainz_release_id: task.target.musicbrainz_release_id.clone(),
         canonical_artist_id: task.target.canonical_artist_id,
         canonical_release_id: task.target.canonical_release_id,
@@ -524,11 +526,75 @@ fn request_from_track_task(
     }
 }
 
+fn validate_request_identity_contract(task: &TrackTask, request: &AcquisitionRequest) -> Result<(), String> {
+    let expected_source_album_id = task
+        .target
+        .source_album_id
+        .clone()
+        .or_else(|| task.target.musicbrainz_release_id.clone());
+    if let Some(expected) = expected_source_album_id {
+        if request.source_album_id.as_deref() != Some(expected.as_str()) {
+            return Err(format!(
+                "request contract violation for task {}: source_album_id was not preserved",
+                task.task_id
+            ));
+        }
+    }
+
+    if let Some(expected) = task.target.source_artist_id.as_deref() {
+        if request.source_artist_id.as_deref() != Some(expected) {
+            return Err(format!(
+                "request contract violation for task {}: source_artist_id was not preserved",
+                task.task_id
+            ));
+        }
+    }
+
+    if let Some(expected) = task.target.spotify_track_id.as_deref() {
+        if request.source_track_id.as_deref() != Some(expected) {
+            return Err(format!(
+                "request contract violation for task {}: source_track_id was not preserved",
+                task.task_id
+            ));
+        }
+    }
+
+    if let Some(expected) = task.target.musicbrainz_recording_id.as_deref() {
+        if request.musicbrainz_recording_id.as_deref() != Some(expected) {
+            return Err(format!(
+                "request contract violation for task {}: musicbrainz_recording_id was not preserved",
+                task.task_id
+            ));
+        }
+    }
+
+    if let Some(expected) = task.target.musicbrainz_release_group_id.as_deref() {
+        if request.musicbrainz_release_group_id.as_deref() != Some(expected) {
+            return Err(format!(
+                "request contract violation for task {}: musicbrainz_release_group_id was not preserved",
+                task.task_id
+            ));
+        }
+    }
+
+    if let Some(expected) = task.target.musicbrainz_release_id.as_deref() {
+        if request.musicbrainz_release_id.as_deref() != Some(expected) {
+            return Err(format!(
+                "request contract violation for task {}: musicbrainz_release_id was not preserved",
+                task.task_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 async fn queue_track_request(
     state: State<'_, AppState>,
     request: AcquisitionRequest,
 ) -> Result<String, String> {
     let task = request.to_track_task();
+    validate_request_identity_contract(&task, &request)?;
     let job = DownloadJob {
         id: task.task_id.clone(),
         query: format!(
@@ -552,24 +618,10 @@ async fn queue_track_request(
         .map_err(|error| error.to_string())?
         .insert(task.task_id.clone(), job);
 
-    let auto_note = format!(
-        "auto-approved on planner queue path for {} scope",
-        request.scope.as_str()
-    );
-    let submit_result = async {
-        let planned = crate::commands::planner::plan_acquisition(state.clone(), request).await?;
-        let _ = crate::commands::planner::approve_planned_request(
-            state.clone(),
-            planned.request.id,
-            Some(auto_note),
-        )
-        .await?;
-        Ok::<(), String>(())
-    }
-    .await;
+    let submit_result = crate::commands::planner::plan_acquisition(state.clone(), request).await;
 
     match submit_result {
-        Ok(()) => Ok(task.task_id),
+        Ok(_) => Ok(task.task_id),
         Err(error) => {
             if let Ok(mut jobs) = state.download_jobs.lock() {
                 jobs.remove(&task.task_id);
@@ -593,6 +645,7 @@ fn load_remote_provider_config(state: &AppState) -> Result<RemoteProviderConfig,
         spotify_client_id: read_setting(&db, "spotify_client_id").or_else(|| state.download_config.spotify_client_id.clone()),
         spotify_client_secret: read_setting(&db, "spotify_client_secret").or_else(|| state.download_config.spotify_client_secret.clone()),
         spotify_access_token: read_setting(&db, "spotify_access_token").or_else(|| state.download_config.spotify_access_token.clone()),
+        discogs_token: read_setting(&db, "discogs_token").or_else(|| state.download_config.discogs_token.clone()),
     })
 }
 
@@ -1178,6 +1231,10 @@ pub async fn start_backlog_run(
                         })
                         .to_string(),
                     );
+                    if let Err(error) = validate_request_identity_contract(task, &request) {
+                        errors.push(format!("{artist} - {title}: {error}"));
+                        continue;
+                    }
                     let request_row = match control_db.create_acquisition_request(&request).await {
                         Ok(row) => row,
                         Err(error) => {
@@ -1198,15 +1255,22 @@ pub async fn start_backlog_run(
                         )
                         .await;
                     if submitter.submit(task.clone()).await.is_ok() {
-                        let _ = control_db
-                            .update_acquisition_request_status_by_task_id(
-                                request_row.task_id.as_deref().unwrap_or_default(),
-                                AcquisitionRequestStatus::Submitted.as_str(),
-                                "director_submitted",
-                                Some("submitted to director"),
-                                None,
-                            )
-                            .await;
+                        if let Some(task_id) = request_row.task_id.as_deref() {
+                            let _ = control_db
+                                .update_acquisition_request_status_by_task_id(
+                                    task_id,
+                                    AcquisitionRequestStatus::Submitted.as_str(),
+                                    "director_submitted",
+                                    Some("submitted to director"),
+                                    None,
+                                )
+                                .await;
+                        } else {
+                            errors.push(format!(
+                                "{} - {}: missing task_id after request creation",
+                                artist, title
+                            ));
+                        }
                         total_tracks += 1;
                         submitted_any = true;
                     } else {
@@ -1290,6 +1354,7 @@ mod tests {
                 duration_secs: Some(180.0),
                 isrc: Some("US1234567890".to_string()),
                 musicbrainz_recording_id: Some("recording-1".to_string()),
+                musicbrainz_release_group_id: Some("release-group-1".to_string()),
                 musicbrainz_release_id: Some("release-1".to_string()),
                 canonical_artist_id: Some(3),
                 canonical_release_id: Some(7),
@@ -1324,6 +1389,16 @@ mod tests {
         assert_eq!(request.source_album_id.as_deref(), Some("release-1"));
         assert_eq!(request.source_artist_id.as_deref(), Some("spotify:artist:789"));
         assert!(request.request_signature.is_some());
+    }
+
+    #[test]
+    fn request_contract_validation_detects_identity_drops() {
+        let task = sample_task();
+        let mut request = request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
+        request.musicbrainz_release_group_id = None;
+
+        let result = validate_request_identity_contract(&task, &request);
+        assert!(result.is_err());
     }
 }
 

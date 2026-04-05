@@ -1,13 +1,13 @@
 use cassette_core::models::NowPlayingContext;
 
-pub const LASTFM_API_KEY: &str = "b25b959554ed76058ac220b7b2e0a026";
-
+#[allow(dead_code)]
 pub struct LastfmArtistInfo {
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub listeners: Option<u64>,
 }
 
+#[allow(dead_code)]
 pub struct LastfmAlbumInfo {
     pub summary: Option<String>,
     pub image_url: Option<String>,
@@ -26,6 +26,7 @@ pub fn base_now_playing_context(artist: &str, album: Option<String>) -> NowPlayi
     }
 }
 
+#[allow(dead_code)]
 pub fn strip_lastfm_html_suffix(text: &str) -> String {
     if let Some(idx) = text.find("<a href=") {
         text[..idx].trim().to_string()
@@ -34,6 +35,7 @@ pub fn strip_lastfm_html_suffix(text: &str) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn parse_lastfm_artist_info(json: &serde_json::Value) -> Option<LastfmArtistInfo> {
     let artist_obj = json.get("artist")?;
 
@@ -65,6 +67,7 @@ pub fn parse_lastfm_artist_info(json: &serde_json::Value) -> Option<LastfmArtist
     })
 }
 
+#[allow(dead_code)]
 pub fn parse_lastfm_album_info(json: &serde_json::Value) -> Option<LastfmAlbumInfo> {
     let album_obj = json.get("album")?;
 

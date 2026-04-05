@@ -66,6 +66,7 @@ pub fn save_config(state: State<'_, AppState>, config: DownloadConfig) {
 
     persist_optional_setting(&db, "discogs_token", &config.discogs_token, true);
     persist_optional_setting(&db, "lastfm_api_key", &config.lastfm_api_key, true);
+    persist_optional_setting(&db, "lastfm_username", &config.lastfm_username, false);
 
     persist_optional_setting(&db, "ytdlp_path", &config.ytdlp_path, false);
     persist_optional_setting(&db, "sevenzip_path", &config.sevenzip_path, false);
@@ -128,6 +129,8 @@ fn load_config(state: &AppState) -> DownloadConfig {
 
     config.discogs_token = read_optional_setting(&db, "discogs_token", config.discogs_token);
     config.lastfm_api_key = read_optional_setting(&db, "lastfm_api_key", config.lastfm_api_key);
+    config.lastfm_username =
+        read_optional_setting(&db, "lastfm_username", config.lastfm_username);
 
     config.ytdlp_path = read_optional_setting(&db, "ytdlp_path", config.ytdlp_path);
     config.sevenzip_path = read_optional_setting(&db, "sevenzip_path", config.sevenzip_path);

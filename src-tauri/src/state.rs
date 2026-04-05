@@ -330,10 +330,34 @@ pub(crate) fn build_runtime_provider_stack(
         .unwrap_or_else(|| download_config.staging_folder.clone());
 
     let remote_provider_config = load_remote_provider_config(db, download_config);
-    let slskd_connection = load_slskd_connection_config(db, download_config);
+    let slskd_url = read_setting(db, "slskd_url").or_else(|| download_config.slskd_url.clone());
+    let slskd_user = read_setting(db, "slskd_user").or_else(|| download_config.slskd_user.clone());
+    let slskd_pass = read_setting(db, "slskd_pass").or_else(|| download_config.slskd_pass.clone());
+    let slskd_connection = SlskdConnectionConfig {
+        url: slskd_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:5030".to_string()),
+        username: slskd_user.clone().unwrap_or_else(|| "slskd".to_string()),
+        password: slskd_pass.clone().unwrap_or_else(|| "slskd".to_string()),
+        api_key: read_setting(db, "slskd_api_key"),
+    };
+    let slskd_configured = [slskd_url.as_ref(), slskd_user.as_ref(), slskd_pass.as_ref()]
+        .into_iter()
+        .all(|value| value.map(|item| !item.trim().is_empty()).unwrap_or(false));
+
     let usenet_api_key = read_setting(db, "nzbgeek_api_key");
     let sabnzbd_url = read_setting(db, "sabnzbd_url");
     let sabnzbd_api_key = read_setting(db, "sabnzbd_api_key");
+    let usenet_configured = usenet_is_configured(
+        usenet_api_key.as_deref(),
+        sabnzbd_url.as_deref(),
+        sabnzbd_api_key.as_deref(),
+    );
+
+    let ytdlp_binary = read_setting(db, "ytdlp_path")
+        .or_else(|| download_config.ytdlp_path.clone())
+        .unwrap_or_else(|| "yt-dlp".to_string());
+    let sevenzip_binary = read_setting(db, "sevenzip_path").or_else(|| download_config.sevenzip_path.clone());
 
     let config = DirectorConfig {
         library_root: PathBuf::from(&library_root),
@@ -395,21 +419,27 @@ pub(crate) fn build_runtime_provider_stack(
     };
 
     let mut providers: Vec<Arc<dyn cassette_core::director::Provider>> = vec![
-        Arc::new(SlskdProvider::new(
-            slskd_connection,
-            vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
-        )),
         Arc::new(QobuzProvider::new(remote_provider_config.clone())),
         Arc::new(DeezerProvider::new(remote_provider_config.clone())),
-        Arc::new(UsenetProvider {
+        Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
+        Arc::new(YtDlpProvider::new(ytdlp_binary)),
+    ];
+
+    if slskd_configured {
+        providers.push(Arc::new(SlskdProvider::new(
+            slskd_connection,
+            vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
+        )));
+    }
+
+    if usenet_configured {
+        providers.push(Arc::new(UsenetProvider {
             api_key: usenet_api_key,
             sabnzbd_url,
             sabnzbd_api_key,
             scan_roots: vec![PathBuf::from(&staging_root), PathBuf::from(&library_root)],
-        }),
-        Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
-        Arc::new(YtDlpProvider::new("yt-dlp")),
-    ];
+        }));
+    }
 
     // Real-Debrid: only add if API key is configured
     let rd_key = read_setting(db, "real_debrid_key")
@@ -419,6 +449,7 @@ pub(crate) fn build_runtime_provider_stack(
         providers.push(Arc::new(RealDebridProvider::with_direct_search(
             key.clone(),
             false,
+            sevenzip_binary.clone(),
         )));
     }
 
@@ -430,7 +461,12 @@ pub(crate) fn build_runtime_provider_stack(
         .or_else(|| download_config.jackett_api_key.clone())
         .filter(|k| !k.trim().is_empty());
     if let (Some(jurl), Some(jkey), Some(ref rdkey)) = (jackett_url, jackett_api_key, &rd_key) {
-        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(jurl, jkey, rdkey.clone())));
+        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(
+            jurl,
+            jkey,
+            rdkey.clone(),
+            sevenzip_binary,
+        )));
     }
 
     (config, providers)
@@ -462,21 +498,8 @@ fn load_remote_provider_config(db: &Db, download_config: &DownloadConfig) -> Rem
             .or_else(|| download_config.spotify_client_secret.clone()),
         spotify_access_token: read_setting(db, "spotify_access_token")
             .or_else(|| download_config.spotify_access_token.clone()),
-    }
-}
-
-fn load_slskd_connection_config(db: &Db, download_config: &DownloadConfig) -> SlskdConnectionConfig {
-    SlskdConnectionConfig {
-        url: read_setting(db, "slskd_url")
-            .or_else(|| download_config.slskd_url.clone())
-            .unwrap_or_else(|| "http://localhost:5030".to_string()),
-        username: read_setting(db, "slskd_user")
-            .or_else(|| download_config.slskd_user.clone())
-            .unwrap_or_else(|| "slskd".to_string()),
-        password: read_setting(db, "slskd_pass")
-            .or_else(|| download_config.slskd_pass.clone())
-            .unwrap_or_else(|| "slskd".to_string()),
-        api_key: read_setting(db, "slskd_api_key"),
+        discogs_token: read_setting(db, "discogs_token")
+            .or_else(|| download_config.discogs_token.clone()),
     }
 }
 
@@ -486,6 +509,16 @@ fn read_setting(db: &Db, key: &str) -> Option<String> {
         .flatten()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn usenet_is_configured(
+    api_key: Option<&str>,
+    sabnzbd_url: Option<&str>,
+    sabnzbd_api_key: Option<&str>,
+) -> bool {
+    [api_key, sabnzbd_url, sabnzbd_api_key]
+        .into_iter()
+        .all(|value| value.map(|item| !item.trim().is_empty()).unwrap_or(false))
 }
 
 fn spawn_director_event_listener(

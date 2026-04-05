@@ -342,6 +342,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spotify_client_id: read_setting(&db, "spotify_client_id"),
         spotify_client_secret: read_setting(&db, "spotify_client_secret"),
         spotify_access_token: read_setting(&db, "spotify_access_token"),
+        discogs_token: read_setting(&db, "discogs_token"),
     };
 
     let slskd_connection = SlskdConnectionConfig {
@@ -350,6 +351,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         password: read_setting(&db, "slskd_pass").unwrap_or_else(|| "slskd".to_string()),
         api_key: read_setting(&db, "slskd_api_key"),
     };
+    let slskd_configured = [
+        read_setting(&db, "slskd_url"),
+        read_setting(&db, "slskd_user"),
+        read_setting(&db, "slskd_pass"),
+    ]
+    .iter()
+    .all(|value| value.as_ref().map(|item| !item.trim().is_empty()).unwrap_or(false));
 
     let config = DirectorConfig {
         library_root: PathBuf::from(&library_base),
@@ -409,18 +417,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rd_key = read_setting(&db, "real_debrid_key")
         .or_else(|| std::env::var("REAL_DEBRID_KEY").ok())
         .filter(|k| !k.trim().is_empty());
+    let ytdlp_binary = read_setting(&db, "ytdlp_path").unwrap_or_else(|| "yt-dlp".to_string());
+    let sevenzip_binary = read_setting(&db, "sevenzip_path");
 
     let mut providers: Vec<Arc<dyn Provider>> = vec![
-        Arc::new(SlskdProvider::new(
-            slskd_connection,
-            vec![PathBuf::from(&staging_folder), PathBuf::from(&library_base)],
-        )),
         Arc::new(QobuzProvider::new(remote_config.clone())),
         Arc::new(DeezerProvider::new(remote_config.clone())),
         Arc::new(LocalArchiveProvider::new(config.local_search_roots.clone())),
-        Arc::new(YtDlpProvider::new("yt-dlp")),
+        Arc::new(YtDlpProvider::new(ytdlp_binary)),
     ];
     let mut readiness = Vec::<ProviderReadiness>::new();
+    if slskd_configured {
+        providers.push(Arc::new(SlskdProvider::new(
+            slskd_connection,
+            vec![PathBuf::from(&staging_folder), PathBuf::from(&library_base)],
+        )));
+    } else {
+        readiness.push(ProviderReadiness {
+            provider_id: "slskd".to_string(),
+            display_name: "Soulseek / slskd".to_string(),
+            status: "unavailable".to_string(),
+            detail: "missing slskd_url/slskd_user/slskd_pass configuration".to_string(),
+        });
+    }
+
     let usenet_api_key = read_setting(&db, "nzbgeek_api_key");
     let usenet_sab_url = read_setting(&db, "sabnzbd_url");
     let usenet_sab_key = read_setting(&db, "sabnzbd_api_key");
@@ -447,6 +467,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         providers.push(Arc::new(RealDebridProvider::with_direct_search(
             key,
             false,
+            sevenzip_binary.clone(),
         )));
     } else {
         readiness.push(ProviderReadiness {

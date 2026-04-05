@@ -91,6 +91,7 @@ pub struct AcquisitionRequest {
     pub duration_secs: Option<f64>,
     pub isrc: Option<String>,
     pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_release_group_id: Option<String>,
     pub musicbrainz_release_id: Option<String>,
     pub canonical_artist_id: Option<i64>,
     pub canonical_release_id: Option<i64>,
@@ -124,7 +125,7 @@ impl AcquisitionRequest {
             .join(",");
 
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.scope.as_str(),
             normalize_component(self.source_track_id.as_deref().unwrap_or_default()),
             normalize_component(self.source_album_id.as_deref().unwrap_or_default()),
@@ -139,6 +140,11 @@ impl AcquisitionRequest {
             normalize_component(self.isrc.as_deref().unwrap_or_default()),
             normalize_component(
                 self.musicbrainz_recording_id
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
+            normalize_component(
+                self.musicbrainz_release_group_id
                     .as_deref()
                     .unwrap_or_default(),
             ),
@@ -190,6 +196,7 @@ impl AcquisitionRequest {
                 duration_secs: self.duration_secs,
                 isrc: self.isrc.clone(),
                 musicbrainz_recording_id: self.musicbrainz_recording_id.clone(),
+                musicbrainz_release_group_id: self.musicbrainz_release_group_id.clone(),
                 musicbrainz_release_id: self.musicbrainz_release_id.clone(),
                 canonical_artist_id: self.canonical_artist_id,
                 canonical_release_id: self.canonical_release_id,
@@ -233,6 +240,7 @@ mod tests {
             duration_secs: Some(42.0),
             isrc: Some("US1234567890".to_string()),
             musicbrainz_recording_id: Some("mb-recording".to_string()),
+            musicbrainz_release_group_id: Some("mb-release-group".to_string()),
             musicbrainz_release_id: Some("mb-release".to_string()),
             canonical_artist_id: Some(7),
             canonical_release_id: Some(9),
@@ -264,6 +272,10 @@ mod tests {
         assert_eq!(task.target.artist, "Artist");
         assert!(task.target.source_album_id.is_none());
         assert_eq!(task.target.musicbrainz_release_id.as_deref(), Some("mb-release"));
+        assert_eq!(
+            task.target.musicbrainz_release_group_id.as_deref(),
+            Some("mb-release-group")
+        );
         assert_eq!(task.desired_track_id, Some(11));
         assert_eq!(task.source_operation_id.as_deref(), Some("op-1"));
     }

@@ -72,6 +72,34 @@
     }
   }
 
+  async function approveRequest(requestId: number) {
+    try {
+      await api.approvePlannedRequest(requestId, 'approved from downloads review panel');
+      await loadRecentRequests();
+      const refreshed = recentRequests.find((request) => request.id === requestId);
+      if (refreshed) {
+        expandedRequestId = null;
+        await toggleRequest(refreshed);
+      }
+    } catch {
+      // no-op; timeline panel already carries request failure signal
+    }
+  }
+
+  async function rejectRequest(requestId: number) {
+    try {
+      await api.rejectPlannedRequest(requestId, 'rejected from downloads review panel');
+      await loadRecentRequests();
+      const refreshed = recentRequests.find((request) => request.id === requestId);
+      if (refreshed) {
+        expandedRequestId = null;
+        await toggleRequest(refreshed);
+      }
+    } catch {
+      // no-op; timeline panel already carries request failure signal
+    }
+  }
+
   async function toggleRequest(request: AcquisitionRequestListItem) {
     if (expandedRequestId === request.id) {
       expandedRequestId = null;
@@ -457,6 +485,23 @@
 
           {#if expandedRequestId === request.id}
             <div class="candidate-review-panel">
+              {#if request.status === 'reviewing'}
+                <div class="request-review-actions">
+                  <button
+                    class="btn btn-primary"
+                    style="font-size:0.75rem;padding:4px 10px;"
+                    on:click|stopPropagation={() => approveRequest(request.id)}>
+                    Approve
+                  </button>
+                  <button
+                    class="btn btn-secondary"
+                    style="font-size:0.75rem;padding:4px 10px;"
+                    on:click|stopPropagation={() => rejectRequest(request.id)}>
+                    Reject
+                  </button>
+                </div>
+              {/if}
+
               <div class="review-header">Timeline ({requestTimeline.length})</div>
               {#if requestTimeline.length === 0}
                 <div class="review-empty">No request events recorded.</div>
@@ -667,6 +712,7 @@
   border-top: none;
 }
 .review-loading, .review-empty { font-size: 0.8rem; color: var(--text-muted); padding: 8px 0; }
+.request-review-actions { display: flex; gap: 8px; margin-bottom: 10px; }
 .review-header { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
 .review-candidate {
   padding: 8px 10px;

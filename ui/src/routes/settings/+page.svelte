@@ -15,6 +15,7 @@
     loadDownloadConfig,
     saveDownloadConfig,
   } from '$lib/stores/downloads';
+  import { api } from '$lib/api/tauri';
   import type { DownloadConfig } from '$lib/api/tauri';
 
   onMount(async () => {
@@ -43,6 +44,7 @@
     genius_token: null,
     discogs_token: null,
     lastfm_api_key: null,
+    lastfm_username: null,
     ytdlp_path: null,
     sevenzip_path: null,
   };
@@ -52,6 +54,8 @@
   }
 
   let saved = false;
+  let lastfmSyncing = false;
+  let lastfmSyncMessage: string | null = null;
 
   async function handleSave() {
     await saveDownloadConfig(cfg);
@@ -59,6 +63,20 @@
     setTimeout(() => {
       saved = false;
     }, 2000);
+  }
+
+  async function syncLastfmHistory() {
+    lastfmSyncing = true;
+    lastfmSyncMessage = null;
+    try {
+      const inserted = await api.syncLastfmHistory(cfg.lastfm_username ?? undefined, 200);
+      lastfmSyncMessage = `Synced ${inserted} new Last.fm plays.`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Last.fm sync failed';
+      lastfmSyncMessage = message;
+    } finally {
+      lastfmSyncing = false;
+    }
   }
 
   async function pickFolder() {
@@ -342,6 +360,30 @@
             placeholder="********"
           />
         </div>
+
+        <div class="field-group">
+          <label class="field-label" for="lastfm-username">Last.fm Username</label>
+          <input
+            id="lastfm-username"
+            class="input"
+            bind:value={cfg.lastfm_username}
+            placeholder="your_lastfm_username"
+          />
+        </div>
+      </div>
+
+      <div class="roots-actions" style="margin-top:12px;">
+        <button class="btn btn-secondary" on:click={syncLastfmHistory} disabled={lastfmSyncing}>
+          {#if lastfmSyncing}
+            <div class="spinner" style="width:14px;height:14px;border-width:2px;"></div>
+            Syncing Last.fm...
+          {:else}
+            Sync Last.fm History
+          {/if}
+        </button>
+        {#if lastfmSyncMessage}
+          <span class="saved-confirm">{lastfmSyncMessage}</span>
+        {/if}
       </div>
     </section>
 

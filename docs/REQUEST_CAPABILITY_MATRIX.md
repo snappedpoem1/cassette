@@ -33,10 +33,10 @@ Status values:
 | Explain why a lower-trust provider was chosen | Could Support with Existing Building Blocks | Internal attempt waterfall exists; UI/API exposure is missing. |
 | Bulk acquire missing catalog for library artists | Could Support with Existing Building Blocks | Building blocks exist in Spotify/library queues and richer reconciliation DB, but they are not unified. |
 | Normalize tags after import using canonical metadata | Supported Today | MusicBrainz + Lofty tag-fix flow exists. |
-| Enrich artwork/label/catalog number/country/edition type | Blocked by Missing Integration | External sources exist, but active enrich pipeline is incomplete. |
+| Enrich artwork/label/catalog number/country/edition type | Could Support with Existing Building Blocks | Discogs and Last.fm integration paths exist; cover-art and deeper edition fidelity remain incomplete. |
 | Maintain one canonical release identity across sources | Blocked by Missing Data Model | No unified MBID/source-ID mapping store in active runtime path. |
 | Prove why this exact edition was chosen | Blocked by Missing Data Model | No edition object and no durable candidate comparison memory. |
 | Reuse prior user exclusions/preferences in future requests | Blocked by Missing Data Model | No preference/exclusion persistence model. |
 | Ask for manual confirmation before using yt-dlp or TPB/Real-Debrid fallback | Blocked by Missing UX Contract | Current waterfall is internal. |
 | Download only after candidate review and approval | Blocked by Missing Integration | Needs staged candidate set + approval command. |
-| Support "metadata repair only" as a real operation | Blocked by Missing Integration | Strategy exists but is explicitly stubbed. |
+| Support "metadata repair only" as a real operation | Supported Today | `MetadataRepairOnly` strategy is implemented in the Director pipeline. |

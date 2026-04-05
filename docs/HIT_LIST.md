@@ -22,6 +22,9 @@ New (2026-04-03):
 - [x] `torrent_album_cli --seed-sidecar` feeds failed albums into sidecar delta_queue for coordinator retry
 - [x] `cargo tauri build` produces `.msi` + `.exe` installer bundles
 - [x] `db_converge_cli --overwrite` re-proven against app-data DBs (`desired_tracks=4`, `delta_queue=11`, `acquisition_requests=0`)
+- [x] Album/artist projection IDs switched to deterministic BLAKE3-derived IDs (replaces seeded `DefaultHasher` behavior)
+- [x] Trust-spine now fails fast on native command failures and runs smoke in strict mode
+- [x] `MetadataRepairOnly` strategy now performs runtime DB-backed local metadata repair (no longer stubbed)
 
 Already proven:
 

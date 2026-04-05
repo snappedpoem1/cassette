@@ -1,27 +1,66 @@
+param(
+	[switch]$RunCleanroomLocal,
+	[ValidateSet("Sandbox", "DisposableProfile", "AppDataReset")]
+	[string]$CleanroomMode = "DisposableProfile"
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repoRoot
 
-Write-Host "[trust-spine] cargo check --workspace"
-cargo check --workspace
+function Invoke-Step {
+	param(
+		[string]$Label,
+		[scriptblock]$Action
+	)
 
-Write-Host "[trust-spine] targeted request-contract tests"
-cargo test -p cassette-core acquisition_request_ -- --nocapture
+	Write-Host "[trust-spine] $Label"
+	& $Action
+	if ($LASTEXITCODE -ne 0) {
+		throw "Step failed: $Label (exit code $LASTEXITCODE)"
+	}
+}
 
-Write-Host "[trust-spine] targeted audit-trace test"
-cargo test -p cassette-core explain_audit_trace_collects_operation_events_and_gatekeeper_rows -- --nocapture
+Invoke-Step -Label "cargo check --workspace" -Action {
+	cargo check --workspace
+}
 
-Write-Host "[trust-spine] cassette-core suite"
-cargo test -p cassette-core
+Invoke-Step -Label "targeted request-contract tests" -Action {
+	cargo test -p cassette-core acquisition_request_ -- --nocapture
+}
 
-Write-Host "[trust-spine] full workspace tests"
-cargo test --workspace
+Invoke-Step -Label "targeted audit-trace test" -Action {
+	cargo test -p cassette-core explain_audit_trace_collects_operation_events_and_gatekeeper_rows -- --nocapture
+}
 
-Write-Host "[trust-spine] ui build"
-Push-Location (Join-Path $repoRoot "ui")
-npm run build
-Pop-Location
+Invoke-Step -Label "cassette-core suite" -Action {
+	cargo test -p cassette-core
+}
 
-Write-Host "[trust-spine] desktop smoke"
-& (Join-Path $repoRoot "scripts\smoke_desktop.ps1")
+Invoke-Step -Label "full workspace tests" -Action {
+	cargo test --workspace
+}
+
+Invoke-Step -Label "ui build" -Action {
+	Push-Location (Join-Path $repoRoot "ui")
+	try {
+		npm run build
+		if ($LASTEXITCODE -ne 0) {
+			throw "npm run build failed with exit code $LASTEXITCODE"
+		}
+	}
+	finally {
+		Pop-Location
+	}
+}
+
+Invoke-Step -Label "desktop smoke" -Action {
+	& (Join-Path $repoRoot "scripts\smoke_desktop.ps1") -Strict
+}
+
+if ($RunCleanroomLocal) {
+	Invoke-Step -Label "clean-room local verification ($CleanroomMode)" -Action {
+		& (Join-Path $repoRoot "scripts\verify_cleanroom_local.ps1") -Mode $CleanroomMode
+	}
+}

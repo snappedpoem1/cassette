@@ -319,7 +319,7 @@ Acceptance:
 - [x] Rationale can be queried before acquire begins
 - [x] Review/policy APIs exist for approval, rejection, and rationale
 
-### [P1] [todo] Retire acquisition bypass lanes after planner cutover
+### [P1] [done] Retire acquisition bypass lanes after planner cutover
 
 Why:
 
@@ -414,7 +414,7 @@ Acceptance:
 
 ## P2
 
-### [P1] [in_progress] Add canonical release identity persistence and a stronger request contract
+### [P1] [done] Add canonical release identity persistence and a stronger request contract
 
 Why:
 
@@ -424,33 +424,37 @@ Why:
 
 Acceptance:
 
-- [ ] Request contract supports more than `artist + title + optional album`
+- [x] Request contract supports more than `artist + title + optional album`
 - [x] Runtime schema now includes canonical artist/release/recording and alias persistence surfaces (`canonical_artists`, `canonical_releases`, `canonical_recordings`, `source_aliases`)
-- [ ] MusicBrainz-backed artist/release-group/release/recording identity persistence plan is documented
-- [ ] Follow-on implementation scope is recorded in `WORKLIST.md`
+- [x] MusicBrainz-backed artist/release-group/release/recording identity persistence plan is documented (`docs/REQUEST_CONTRACT_IDENTITY_PLAN.md`)
+- [x] Follow-on implementation scope is recorded in `WORKLIST.md`
+- [x] Release-group identity is used as a first-class planner decision/rationale lane
+- [x] Command-boundary contract tests cover all request scopes and policy fields
 
-### [P2] [todo] Resolve `Album.id` stability
-
-Why:
-
-- `get_albums()` uses `ROW_NUMBER() OVER (...)` to synthesize an ID rather than a real
-  database primary key. Album IDs are not stable across queries if data changes.
-
-Acceptance:
-
-- [ ] Decision recorded in `DECISIONS.md`
-- [ ] Either a stable ID exists, or all callers are confirmed safe without one
-
-### [P2] [todo] Implement `MetadataRepairOnly` acquisition strategy
+### [P2] [done] Resolve `Album.id` stability
 
 Why:
 
-- `MetadataRepairOnly` is still explicitly stubbed in `director/engine.rs`.
-- This stays behind planner/identity work; it is not the next architectural step.
+- Album and artist IDs were generated with Rust `DefaultHasher`, which is seeded and not
+  stable across process restarts. This could invalidate UI selection state and request links.
 
 Acceptance:
 
-- [ ] Implemented and tested, or explicitly removed from the strategy enum
+- [x] Decision recorded in `DECISIONS.md`
+- [x] Deterministic stable IDs now exist for album/artist surfaces via BLAKE3-derived IDs
+- [x] Regression tests prove IDs are stable across DB reopen
+
+### [P2] [done] Implement `MetadataRepairOnly` acquisition strategy
+
+Why:
+
+- `MetadataRepairOnly` now resolves matching local tracks from runtime DB identity fields and
+  applies in-place metadata repair without acquisition.
+
+Acceptance:
+
+- [x] Implemented in Director engine with runtime DB-backed local track matching
+- [x] Tests cover missing runtime DB path, no-match failure, and successful repair path
 
 ### [P2] [todo] Document and test long-session desktop behavior
 
@@ -470,19 +474,19 @@ Acceptance:
 - [ ] Artwork fetch is tied to canonical release choice, not ad hoc provider metadata
 - [ ] Tag/embed flow documents when Cover Art Archive is used
 
-### [P2] [todo] Either implement Discogs and Last.fm enrichers for real or remove them from active config and UI
+### [P2] [todo] Prove and document Discogs and Last.fm enrichment behavior end-to-end
 
 Acceptance:
 
-- [ ] Stub enrichers are either promoted to real runtime behavior or demoted from active surfaces
-- [ ] Canonical docs do not imply enrichment readiness that runtime does not have
+- [ ] Canonical docs and reference docs consistently reflect current Discogs/Last.fm runtime behavior
+- [ ] Bounded end-to-end proof captured for enrichment outcomes in active flows
 
-### [P2] [todo] Reframe Bandcamp as purchase-provenance research or remove the placeholder surface
+### [P2] [todo] Clarify Bandcamp scope as payload URL resolver and decide next-step ownership
 
 Acceptance:
 
-- [ ] Placeholder ownership is explicit in docs and config surfaces
-- [ ] No active runtime path implies Bandcamp acquisition support today
+- [ ] Docs explicitly state Bandcamp currently resolves payload-provided URLs only
+- [ ] Follow-up decision recorded: expand to full provider path or keep resolver-only scope
 
 ### [P2] [done] Tighten metadata and enrichment operating story
 

@@ -2,7 +2,7 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-04-02
+**Last Updated**: 2026-04-03
 
 ---
 
@@ -637,6 +637,27 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Revisit Condition**:
 
 - Once planner-backed submission and review are the default UI/runtime path and the remaining bypass commands are either demoted or retired.
+
+---
+
+## Decision 32: Album/Artist Projection IDs Must Be Deterministic Across Restarts
+
+**Status**: approved (applied 2026-04-03)
+**Rationale**:
+
+- UI album/artist projections need stable IDs for selection state, deep links, and cache keys.
+- `DefaultHasher` values are not stable across process restarts because hashing state is seeded.
+- Album and artist projection IDs now derive from normalized key material via BLAKE3, then map to a positive 63-bit integer.
+
+**Tradeoffs**:
+
+- IDs remain synthetic rather than first-class relational keys
+- Hash collisions are still theoretically possible, though low probability for current scale
+- Any legacy cached IDs produced by `DefaultHasher` are invalidated once at upgrade
+
+**Revisit Condition**:
+
+- If album/release entities receive first-class persisted IDs in the canonical schema, migrate projection surfaces to those authoritative keys
 
 ---
 

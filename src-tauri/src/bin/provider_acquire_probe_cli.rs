@@ -51,6 +51,7 @@ fn remote_provider_config(db: &Db) -> RemoteProviderConfig {
         spotify_client_id: read_setting(db, "spotify_client_id").or(env.spotify_client_id),
         spotify_client_secret: read_setting(db, "spotify_client_secret").or(env.spotify_client_secret),
         spotify_access_token: read_setting(db, "spotify_access_token").or(env.spotify_access_token),
+        discogs_token: read_setting(db, "discogs_token").or(env.discogs_token),
     }
 }
 
@@ -145,6 +146,7 @@ fn parse_args() -> Result<(Vec<String>, TrackTask), String> {
             duration_secs: None,
             isrc: None,
             musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
             musicbrainz_release_id: None,
             canonical_artist_id: None,
             canonical_release_id: None,

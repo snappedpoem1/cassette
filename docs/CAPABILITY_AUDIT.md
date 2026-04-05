@@ -66,11 +66,11 @@ This document is intentionally not a feature wish list. It is a system truth map
 | `cassette-core::sources` | Metadata search/discography aggregation, slskd helpers, provider auth helpers | `Proven Working` | `crates/cassette-core/src/sources.rs` |
 | `cassette-core::metadata` | MusicBrainz-based tag-fix proposal and Lofty tag writing | `Proven Working` | `crates/cassette-core/src/metadata.rs:46-335` |
 | `cassette-core::librarian` + `orchestrator` + `gatekeeper` + `custodian` | Richer reconciliation, delta, validation, staging, invariant tracking | `Partially Wired` | modules exist; not active Tauri data spine |
-| `librarian/enrich/discogs.rs` | Discogs enricher | `Stub/Placeholder` | `crates/cassette-core/src/librarian/enrich/discogs.rs:15-19` |
-| `librarian/enrich/lastfm.rs` | Last.fm enricher | `Stub/Placeholder` | `crates/cassette-core/src/librarian/enrich/lastfm.rs:15-19` |
+| `librarian/enrich/discogs.rs` | Discogs enricher | `Implemented but Unverified` | `crates/cassette-core/src/librarian/enrich/discogs.rs` |
+| `librarian/enrich/lastfm.rs` | Last.fm enricher | `Implemented but Unverified` | `crates/cassette-core/src/librarian/enrich/lastfm.rs` |
 | `director/sources/provider_bridge.rs` and `director/sources/*` | Compatibility bridge from older source-provider abstraction to current providers | `Legacy/Compatibility Only` | `crates/cassette-core/src/director/sources/*`, validation path references |
 | `downloader/mod.rs` | Provider-settings compatibility surface | `Legacy/Compatibility Only` | no longer an active acquisition owner |
-| `BandcampSource` | Bandcamp resolver | `Stub/Placeholder` | explicit placeholder error in `crates/cassette-core/src/director/sources/bandcamp.rs` |
+| `BandcampSource` | Bandcamp resolver | `Implemented but Unverified` | resolves Bandcamp URLs from desired payload metadata in `crates/cassette-core/src/director/sources/bandcamp.rs` |
 
 ## Phase 2: External Capability Research
 
@@ -80,8 +80,8 @@ This document is intentionally not a feature wish list. It is a system truth map
 | --- | --- | --- | --- |
 | MusicBrainz | Search entities including `recording`, `release`, `release-group`; search supports Lucene query and `limit` 1-100. Source: [MusicBrainz Search API](https://musicbrainz.org/doc/MusicBrainz_API/Search). | `metadata.rs` searches releases and recordings, fetches release tracklists, and proposes tag fixes. | Repo uses only a subset of MB's strongest value. No persistent MBID spine in active app DB. |
 | Cover Art Archive | Artwork service keyed from MusicBrainz entities. Source: [Cover Art Archive API](https://musicbrainz.org/doc/Cover_Art_Archive/API). | Mentioned in docs/session logs, not actively integrated. | Best fit is downstream enrichment after canonical release selection. |
-| Discogs | Releases, masters, labels, formats, country, catalog numbers. Primary portal: [Discogs Developers](https://www.discogs.com/developers). | Stub only. | Good secondary enrich source; should not outrank MusicBrainz for canonical identity. |
-| Last.fm | Artist and album info endpoints expose tags, bios/wiki, stats, similar artists. Sources: [artist.getInfo](https://www.last.fm/api/show/artist.getInfo), [album.getInfo](https://www.last.fm/api/show/album.getInfo). | Player context fetches artist/album info. Enricher stub exists separately. | Good for user-facing context, not canonical release identity. |
+| Discogs | Releases, masters, labels, formats, country, catalog numbers. Primary portal: [Discogs Developers](https://www.discogs.com/developers). | Used in shared metadata search/discography fallback and in librarian enrichment context. | Good secondary enrich source; should not outrank MusicBrainz for canonical identity. |
+| Last.fm | Artist and album info endpoints expose tags, bios/wiki, stats, similar artists. Sources: [artist.getInfo](https://www.last.fm/api/show/artist.getInfo), [album.getInfo](https://www.last.fm/api/show/album.getInfo). | Used for player context, track-duration enrichment, and recent-track history sync. | Good for user-facing context and listening-history recovery, not canonical release identity. |
 | LRCLIB | Free lyrics service used through `https://lrclib.net/api/get`. Public root: [LRCLIB](https://lrclib.net/). | Player fetches lyrics. | Official API documentation was not directly discoverable in this pass, so broader capability claims remain `Weak Inference`. |
 
 ### Search and Library Metadata APIs
@@ -137,8 +137,8 @@ See `REQUEST_CAPABILITY_MATRIX.md` for the full matrix. The short version:
 | One artist discography | `Proven` at coarse metadata level, not at precise edition policy level |
 | Selected albums only | `Could Support with Existing Building Blocks`, but lacks first-class request grammar |
 | Exclude live/remaster/deluxe | `Blocked by Missing UX Contract` and `Blocked by Missing Data Model` |
-| Validate before download | `Partially Wired`; internal validation exists, but not as a user-visible preflight decision gate |
-| Show candidates before acquisition | `Blocked by Missing Integration` |
+| Validate before download | `Partially Wired`; pre-acquisition review plus approve/reject is now user-visible, but deeper validation rationale and policy controls are still limited |
+| Show candidates before acquisition | `Partially Wired`; request candidate/timeline review is exposed in Downloads, but there is no full query-level candidate explorer yet |
 | Reuse prior metadata/search results | `Blocked by Missing Data Model` in the active app path |
 | Prove why a result was chosen | `Partially Wired` internally, not surfaced or persisted richly enough |
 

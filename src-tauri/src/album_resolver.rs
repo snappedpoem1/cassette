@@ -136,6 +136,7 @@ pub async fn resolve_album_track_tasks(
                 },
                 isrc: None,
                 musicbrainz_recording_id: None,
+                musicbrainz_release_group_id: None,
                 musicbrainz_release_id: musicbrainz_release_id.clone(),
                 canonical_artist_id: None,
                 canonical_release_id: None,

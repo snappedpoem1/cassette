@@ -20,9 +20,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
 
+const EDITION_MARKERS: &[&str] = &[
+    "deluxe",
+    "expanded",
+    "anniversary",
+    "collector",
+    "special edition",
+    "bonus",
+    "remaster",
+    "live",
+];
+
 #[derive(Debug, Serialize)]
 pub struct PlannedAcquisitionResult {
     pub request: AcquisitionRequestRow,
+    pub identity_lane: PlannerIdentityLane,
     pub provider_order: Vec<String>,
     pub cached_provider_ids: Vec<String>,
     pub summary: Option<StoredCandidateSetSummary>,
@@ -30,9 +42,23 @@ pub struct PlannedAcquisitionResult {
     pub candidate_review: Vec<CandidateReviewItem>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PlannerIdentityLane {
+    pub scope: String,
+    pub musicbrainz_release_group_id: Option<String>,
+    pub musicbrainz_release_id: Option<String>,
+    pub musicbrainz_recording_id: Option<String>,
+    pub canonical_artist_id: Option<i64>,
+    pub canonical_release_id: Option<i64>,
+    pub quality_policy: Option<String>,
+    pub edition_policy: Option<String>,
+    pub confirmation_policy: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RequestRationale {
     pub request: AcquisitionRequestRow,
+    pub identity_lane: PlannerIdentityLane,
     pub timeline: Vec<cassette_core::librarian::models::AcquisitionRequestEvent>,
     pub candidate_set: Option<StoredCandidateSetSummary>,
     pub provider_searches: Vec<StoredProviderSearchRecord>,
@@ -107,8 +133,14 @@ pub async fn plan_acquisition(
         (config, providers, cached_rows)
     };
 
-    let (plan, provider_searches, candidate_records, cached_provider_ids) =
-        search_planner_candidates(&config, &providers, &task, &cached_rows).await?;
+    let (plan, provider_searches, candidate_records, cached_provider_ids) = search_planner_candidates(
+        &config,
+        &providers,
+        &task,
+        &cached_rows,
+        request.edition_policy.as_deref(),
+    )
+    .await?;
 
     {
         let db = state.db.lock().map_err(|error| error.to_string())?;
@@ -138,6 +170,7 @@ pub async fn plan_acquisition(
                     "cached_provider_ids": cached_provider_ids,
                     "candidate_count": candidate_records.len(),
                     "provider_count": provider_searches.len(),
+                    "identity_lane": planner_identity_lane_from_request(&request),
                 })
                 .to_string(),
             ),
@@ -227,6 +260,7 @@ pub async fn get_request_rationale(
         .map_err(|error| error.to_string())?;
 
     Ok(RequestRationale {
+        identity_lane: planner_identity_lane_from_row(&request),
         request,
         timeline,
         candidate_set,
@@ -409,6 +443,7 @@ fn track_task_from_request_row(request: &AcquisitionRequestRow) -> Result<TrackT
             duration_secs: request.duration_secs,
             isrc: request.isrc.clone(),
             musicbrainz_recording_id: request.musicbrainz_recording_id.clone(),
+            musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone(),
             musicbrainz_release_id: request.musicbrainz_release_id.clone(),
             canonical_artist_id: request.canonical_artist_id,
             canonical_release_id: request.canonical_release_id,
@@ -469,6 +504,7 @@ async fn load_planned_acquisition_result(
     };
 
     Ok(PlannedAcquisitionResult {
+        identity_lane: planner_identity_lane_from_row(&request),
         request,
         provider_order,
         cached_provider_ids,
@@ -478,11 +514,40 @@ async fn load_planned_acquisition_result(
     })
 }
 
+fn planner_identity_lane_from_request(request: &AcquisitionRequest) -> PlannerIdentityLane {
+    PlannerIdentityLane {
+        scope: request.scope.as_str().to_string(),
+        musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone(),
+        musicbrainz_release_id: request.musicbrainz_release_id.clone(),
+        musicbrainz_recording_id: request.musicbrainz_recording_id.clone(),
+        canonical_artist_id: request.canonical_artist_id,
+        canonical_release_id: request.canonical_release_id,
+        quality_policy: request.quality_policy.clone(),
+        edition_policy: request.edition_policy.clone(),
+        confirmation_policy: request.confirmation_policy.as_str().to_string(),
+    }
+}
+
+fn planner_identity_lane_from_row(request: &AcquisitionRequestRow) -> PlannerIdentityLane {
+    PlannerIdentityLane {
+        scope: request.scope.clone(),
+        musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone(),
+        musicbrainz_release_id: request.musicbrainz_release_id.clone(),
+        musicbrainz_recording_id: request.musicbrainz_recording_id.clone(),
+        canonical_artist_id: request.canonical_artist_id,
+        canonical_release_id: request.canonical_release_id,
+        quality_policy: request.quality_policy.clone(),
+        edition_policy: request.edition_policy.clone(),
+        confirmation_policy: request.confirmation_policy.clone(),
+    }
+}
+
 async fn search_planner_candidates(
     config: &cassette_core::director::DirectorConfig,
     providers: &[Arc<dyn Provider>],
     task: &cassette_core::director::TrackTask,
     cached_rows: &[StoredProviderResponseCache],
+    edition_policy: Option<&str>,
 ) -> Result<(StrategyPlan, Vec<ProviderSearchRecord>, Vec<CandidateRecord>, Vec<String>), String> {
     let planner = StrategyPlanner;
     let descriptors = providers
@@ -511,21 +576,29 @@ async fn search_planner_candidates(
 
         if let Some(cached_row) = cached_map.get(provider_id) {
             if cache_is_fresh(cached_row.updated_at.as_str(), config.provider_response_cache_max_age_secs) {
-                let cached_candidates =
-                    decode_cached_candidates(cached_row, &descriptor, provider_order_index);
+                let cached_candidates = decode_cached_candidates(cached_row, &descriptor, provider_order_index);
                 let cached_count = cached_candidates.len();
+                let (filtered_candidates, filtered_count) = apply_edition_policy_filter_to_records(
+                    cached_candidates,
+                    edition_policy,
+                    task.target.album.as_deref(),
+                );
                 cached_provider_ids.push(provider_id.clone());
                 provider_searches.push(ProviderSearchRecord {
                     provider_id: descriptor.id.clone(),
                     provider_display_name: descriptor.display_name.clone(),
                     provider_trust_rank: descriptor.trust_rank,
                     provider_order_index,
-                    outcome: format!("cache_hit:{}", cached_row.outcome),
-                    candidate_count: cached_count,
+                    outcome: if filtered_count > 0 {
+                        format!("cache_hit:{}:edition_filtered", cached_row.outcome)
+                    } else {
+                        format!("cache_hit:{}", cached_row.outcome)
+                    },
+                    candidate_count: cached_count.saturating_sub(filtered_count),
                     error: None,
                     retryable: false,
                 });
-                candidate_records.extend(cached_candidates);
+                candidate_records.extend(filtered_candidates);
                 continue;
             }
         }
@@ -546,24 +619,35 @@ async fn search_planner_candidates(
 
         match provider.search(task, &plan).await {
             Ok(candidates) => {
+                let (filtered_candidates, filtered_count) = apply_edition_policy_filter(
+                    candidates,
+                    edition_policy,
+                    task.target.album.as_deref(),
+                );
                 provider_searches.push(ProviderSearchRecord {
                     provider_id: descriptor.id.clone(),
                     provider_display_name: descriptor.display_name.clone(),
                     provider_trust_rank: descriptor.trust_rank,
                     provider_order_index,
-                    outcome: if candidates.is_empty() {
-                        "no_results".to_string()
+                    outcome: if filtered_candidates.is_empty() {
+                        if filtered_count > 0 {
+                            "no_results_after_policy_filter".to_string()
+                        } else {
+                            "no_results".to_string()
+                        }
+                    } else if filtered_count > 0 {
+                        "planned_search_edition_filtered".to_string()
                     } else {
                         "planned_search".to_string()
                     },
-                    candidate_count: candidates.len(),
+                    candidate_count: filtered_candidates.len(),
                     error: None,
                     retryable: false,
                 });
                 candidate_records.extend(candidate_records_from_candidates(
                     &descriptor,
                     provider_order_index,
-                    candidates,
+                    filtered_candidates,
                     "planned",
                 ));
             }
@@ -583,6 +667,127 @@ async fn search_planner_candidates(
     }
 
     Ok((plan, provider_searches, candidate_records, cached_provider_ids))
+}
+
+fn apply_edition_policy_filter(
+    candidates: Vec<ProviderSearchCandidate>,
+    edition_policy: Option<&str>,
+    requested_album: Option<&str>,
+) -> (Vec<ProviderSearchCandidate>, usize) {
+    let Some(policy) = edition_policy
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+    else {
+        return (candidates, 0);
+    };
+
+    let requested_album_has_edition_markers = requested_album
+        .map(contains_edition_marker)
+        .unwrap_or(false);
+    let requested_album_has_live_marker = requested_album
+        .map(contains_live_marker)
+        .unwrap_or(false);
+
+    let mut kept = Vec::with_capacity(candidates.len());
+    let mut filtered = 0usize;
+    for candidate in candidates {
+        let candidate_album = candidate.album.as_deref();
+        let candidate_has_edition_markers = candidate_album.map(contains_edition_marker).unwrap_or(false);
+        let candidate_has_live_marker = candidate_album.map(contains_live_marker).unwrap_or(false);
+
+        let reject = match policy.as_str() {
+            "standard_only" => {
+                if requested_album_has_edition_markers {
+                    false
+                } else {
+                    candidate_has_edition_markers
+                }
+            }
+            "no_live" => {
+                if requested_album_has_live_marker {
+                    false
+                } else {
+                    candidate_has_live_marker
+                }
+            }
+            _ => false,
+        };
+
+        if reject {
+            filtered += 1;
+        } else {
+            kept.push(candidate);
+        }
+    }
+
+    (kept, filtered)
+}
+
+fn apply_edition_policy_filter_to_records(
+    candidates: Vec<CandidateRecord>,
+    edition_policy: Option<&str>,
+    requested_album: Option<&str>,
+) -> (Vec<CandidateRecord>, usize) {
+    let Some(policy) = edition_policy
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+    else {
+        return (candidates, 0);
+    };
+
+    let requested_album_has_edition_markers = requested_album
+        .map(contains_edition_marker)
+        .unwrap_or(false);
+    let requested_album_has_live_marker = requested_album
+        .map(contains_live_marker)
+        .unwrap_or(false);
+
+    let mut kept = Vec::with_capacity(candidates.len());
+    let mut filtered = 0usize;
+    for candidate in candidates {
+        let candidate_album = candidate.candidate.album.as_deref();
+        let candidate_has_edition_markers = candidate_album.map(contains_edition_marker).unwrap_or(false);
+        let candidate_has_live_marker = candidate_album.map(contains_live_marker).unwrap_or(false);
+
+        let reject = match policy.as_str() {
+            "standard_only" => {
+                if requested_album_has_edition_markers {
+                    false
+                } else {
+                    candidate_has_edition_markers
+                }
+            }
+            "no_live" => {
+                if requested_album_has_live_marker {
+                    false
+                } else {
+                    candidate_has_live_marker
+                }
+            }
+            _ => false,
+        };
+
+        if reject {
+            filtered += 1;
+        } else {
+            kept.push(candidate);
+        }
+    }
+
+    (kept, filtered)
+}
+
+fn contains_edition_marker(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    EDITION_MARKERS
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+fn contains_live_marker(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("live")
 }
 
 fn candidate_records_from_candidates(
@@ -656,8 +861,13 @@ fn provider_error_outcome(error: &ProviderError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_is_fresh, parse_acquisition_strategy, parse_track_task_source};
-    use cassette_core::director::models::{AcquisitionStrategy, TrackTaskSource};
+    use super::{
+        apply_edition_policy_filter,
+        cache_is_fresh, parse_acquisition_strategy, parse_track_task_source,
+        planner_identity_lane_from_request,
+    };
+    use cassette_core::acquisition::{AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy};
+    use cassette_core::director::models::{AcquisitionStrategy, ProviderSearchCandidate, TrackTaskSource};
     use chrono::Utc;
 
     #[test]
@@ -684,5 +894,110 @@ mod tests {
 
         let manual = parse_track_task_source("manual").expect("manual source");
         assert!(matches!(manual, TrackTaskSource::Manual));
+    }
+
+    #[test]
+    fn planner_identity_lane_includes_release_group_and_policy_fields() {
+        let request = AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::Album,
+            source: TrackTaskSource::Manual,
+            source_name: "manual".to_string(),
+            source_track_id: Some("spotify:track:1".to_string()),
+            source_album_id: Some("spotify:album:1".to_string()),
+            source_artist_id: Some("spotify:artist:1".to_string()),
+            artist: "Artist".to_string(),
+            album: Some("Album".to_string()),
+            title: "Song".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2024),
+            duration_secs: Some(180.0),
+            isrc: Some("US1234567890".to_string()),
+            musicbrainz_recording_id: Some("mb-recording-1".to_string()),
+            musicbrainz_release_group_id: Some("mb-release-group-1".to_string()),
+            musicbrainz_release_id: Some("mb-release-1".to_string()),
+            canonical_artist_id: Some(10),
+            canonical_release_id: Some(20),
+            strategy: AcquisitionStrategy::Standard,
+            quality_policy: Some("lossless_preferred".to_string()),
+            excluded_providers: vec!["yt_dlp".to_string()],
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::ManualReview,
+            desired_track_id: Some(33),
+            source_operation_id: Some("op-1".to_string()),
+            task_id: Some("task-1".to_string()),
+            request_signature: Some("sig-1".to_string()),
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: None,
+        };
+
+        let lane = planner_identity_lane_from_request(&request);
+        assert_eq!(lane.scope, "album");
+        assert_eq!(
+            lane.musicbrainz_release_group_id.as_deref(),
+            Some("mb-release-group-1")
+        );
+        assert_eq!(lane.musicbrainz_release_id.as_deref(), Some("mb-release-1"));
+        assert_eq!(lane.quality_policy.as_deref(), Some("lossless_preferred"));
+        assert_eq!(lane.edition_policy.as_deref(), Some("standard_only"));
+        assert_eq!(lane.confirmation_policy, "manual_review");
+    }
+
+    #[test]
+    fn edition_policy_standard_only_filters_edition_variants() {
+        let candidates = vec![
+            ProviderSearchCandidate {
+                provider_id: "p".to_string(),
+                provider_candidate_id: "1".to_string(),
+                artist: "Artist".to_string(),
+                title: "Song".to_string(),
+                album: Some("Album".to_string()),
+                duration_secs: Some(180.0),
+                extension_hint: None,
+                bitrate_kbps: None,
+                cover_art_url: None,
+                metadata_confidence: 0.9,
+            },
+            ProviderSearchCandidate {
+                provider_id: "p".to_string(),
+                provider_candidate_id: "2".to_string(),
+                artist: "Artist".to_string(),
+                title: "Song".to_string(),
+                album: Some("Album (Deluxe Edition)".to_string()),
+                duration_secs: Some(180.0),
+                extension_hint: None,
+                bitrate_kbps: None,
+                cover_art_url: None,
+                metadata_confidence: 0.9,
+            },
+        ];
+
+        let (kept, filtered) = apply_edition_policy_filter(candidates, Some("standard_only"), Some("Album"));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(filtered, 1);
+        assert_eq!(kept[0].provider_candidate_id, "1");
+    }
+
+    #[test]
+    fn edition_policy_no_live_keeps_requested_live_album() {
+        let candidates = vec![
+            ProviderSearchCandidate {
+                provider_id: "p".to_string(),
+                provider_candidate_id: "1".to_string(),
+                artist: "Artist".to_string(),
+                title: "Song".to_string(),
+                album: Some("Album (Live)".to_string()),
+                duration_secs: Some(180.0),
+                extension_hint: None,
+                bitrate_kbps: None,
+                cover_art_url: None,
+                metadata_confidence: 0.9,
+            },
+        ];
+
+        let (kept, filtered) = apply_edition_policy_filter(candidates, Some("no_live"), Some("Album Live"));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(filtered, 0);
     }
 }

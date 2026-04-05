@@ -51,6 +51,29 @@ impl LibrarianDb {
         for sql in migrations::MIGRATIONS {
             sqlx::query(sql).execute(&self.pool).await?;
         }
+        self.ensure_column_exists(
+            "acquisition_requests",
+            "musicbrainz_release_group_id",
+            "TEXT",
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_column_exists(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let pragma = format!("PRAGMA table_info({table})");
+        let rows = sqlx::query(&pragma).fetch_all(&self.pool).await?;
+        let exists = rows.iter().any(|row| {
+            row.try_get::<String, _>("name")
+                .map(|name| name.eq_ignore_ascii_case(column))
+                .unwrap_or(false)
+        });
+
+        if !exists {
+            let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+            sqlx::query(&alter).execute(&self.pool).await?;
+        }
+
         Ok(())
     }
 
@@ -237,7 +260,7 @@ impl LibrarianDb {
                     self.upsert_canonical_release(
                         artist_id.expect("checked is_some"),
                         album,
-                        None,
+                        request.musicbrainz_release_group_id.as_deref(),
                         request.musicbrainz_release_id.as_deref(),
                         None,
                         request.year.map(i64::from),
@@ -267,16 +290,17 @@ impl LibrarianDb {
                 scope, source_name, source_track_id, source_album_id, source_artist_id,
                 artist, album, title, normalized_artist, normalized_album, normalized_title,
                 track_number, disc_number, year, duration_secs, isrc,
-                musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                     musicbrainz_recording_id, musicbrainz_release_group_id, musicbrainz_release_id,
+                     canonical_artist_id, canonical_release_id,
                 strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
                 desired_track_id, source_operation_id, task_id, request_signature, status, raw_payload_json
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9, ?10, ?11,
                 ?12, ?13, ?14, ?15, ?16,
-                ?17, ?18, ?19, ?20,
-                ?21, ?22, ?23, ?24, ?25,
-                ?26, ?27, ?28, ?29, ?30, ?31
+                     ?17, ?18, ?19, ?20, ?21,
+                     ?22, ?23, ?24, ?25, ?26,
+                     ?27, ?28, ?29, ?30, ?31, ?32
              )",
         )
         .bind(request.scope.as_str())
@@ -296,6 +320,7 @@ impl LibrarianDb {
         .bind(request.duration_secs)
         .bind(request.isrc.as_deref())
         .bind(request.musicbrainz_recording_id.as_deref())
+        .bind(request.musicbrainz_release_group_id.as_deref())
         .bind(request.musicbrainz_release_id.as_deref())
         .bind(artist_id)
         .bind(release_id)
@@ -401,7 +426,8 @@ impl LibrarianDb {
                 "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
                         artist, album, title, normalized_artist, normalized_album, normalized_title,
                         track_number, disc_number, year, duration_secs, isrc,
-                        musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    musicbrainz_recording_id, musicbrainz_release_group_id, musicbrainz_release_id,
+                    canonical_artist_id, canonical_release_id,
                         strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
                         desired_track_id, source_operation_id, task_id, request_signature, status,
                         raw_payload_json, created_at, updated_at
@@ -419,7 +445,8 @@ impl LibrarianDb {
                 "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
                         artist, album, title, normalized_artist, normalized_album, normalized_title,
                         track_number, disc_number, year, duration_secs, isrc,
-                        musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    musicbrainz_recording_id, musicbrainz_release_group_id, musicbrainz_release_id,
+                    canonical_artist_id, canonical_release_id,
                         strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
                         desired_track_id, source_operation_id, task_id, request_signature, status,
                         raw_payload_json, created_at, updated_at
@@ -443,7 +470,8 @@ impl LibrarianDb {
             "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
                     artist, album, title, normalized_artist, normalized_album, normalized_title,
                     track_number, disc_number, year, duration_secs, isrc,
-                    musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    musicbrainz_recording_id, musicbrainz_release_group_id, musicbrainz_release_id,
+                    canonical_artist_id, canonical_release_id,
                     strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
                     desired_track_id, source_operation_id, task_id, request_signature, status,
                     raw_payload_json, created_at, updated_at
@@ -465,7 +493,8 @@ impl LibrarianDb {
             "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
                     artist, album, title, normalized_artist, normalized_album, normalized_title,
                     track_number, disc_number, year, duration_secs, isrc,
-                    musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    musicbrainz_recording_id, musicbrainz_release_group_id, musicbrainz_release_id,
+                    canonical_artist_id, canonical_release_id,
                     strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
                     desired_track_id, source_operation_id, task_id, request_signature, status,
                     raw_payload_json, created_at, updated_at
@@ -487,7 +516,8 @@ impl LibrarianDb {
             "SELECT id, scope, source_name, source_track_id, source_album_id, source_artist_id,
                     artist, album, title, normalized_artist, normalized_album, normalized_title,
                     track_number, disc_number, year, duration_secs, isrc,
-                    musicbrainz_recording_id, musicbrainz_release_id, canonical_artist_id, canonical_release_id,
+                    musicbrainz_recording_id, musicbrainz_release_group_id, musicbrainz_release_id,
+                    canonical_artist_id, canonical_release_id,
                     strategy, quality_policy, excluded_providers_json, edition_policy, confirmation_policy,
                     desired_track_id, source_operation_id, task_id, request_signature, status,
                     raw_payload_json, created_at, updated_at
@@ -811,11 +841,11 @@ impl LibrarianDb {
         }
 
         for root in roots {
-            let status = sqlx::query_scalar::<_, Option<String>>(
+            let status = sqlx::query_scalar::<_, String>(
                 "SELECT status FROM scan_checkpoints WHERE root_path = ?1 LIMIT 1",
             )
             .bind(root)
-            .fetch_one(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
             if status.as_deref() != Some("completed") {
                 return Ok(false);
@@ -1318,6 +1348,7 @@ mod tests {
             duration_secs: Some(42.0),
             isrc: Some("US1234567890".to_string()),
             musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: Some("mb-release-group-1".to_string()),
             musicbrainz_release_id: Some("mb-release-1".to_string()),
             canonical_artist_id: None,
             canonical_release_id: None,
@@ -1384,5 +1415,83 @@ mod tests {
             .expect("requests should load");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].id, row.id);
+    }
+
+    #[tokio::test]
+    async fn acquisition_request_contract_persists_all_scopes_and_confirmation_policies() {
+        let db = test_db().await;
+        let scopes = [
+            AcquisitionScope::Track,
+            AcquisitionScope::Album,
+            AcquisitionScope::Artist,
+            AcquisitionScope::Discography,
+            AcquisitionScope::SelectedAlbums,
+        ];
+        let confirmation_policies = [
+            ConfirmationPolicy::Automatic,
+            ConfirmationPolicy::Advisory,
+            ConfirmationPolicy::ManualReview,
+        ];
+
+        let mut index = 0usize;
+        for scope in scopes {
+            for policy in confirmation_policies {
+                index += 1;
+                let mut request = sample_request();
+                request.scope = scope;
+                request.confirmation_policy = policy;
+                request.task_id = Some(format!("task-contract-{index}"));
+                request.request_signature = Some(format!("sig-contract-{index}"));
+                request.musicbrainz_release_group_id = Some(format!("mb-release-group-{index}"));
+                request.musicbrainz_release_id = Some(format!("mb-release-{index}"));
+                request.musicbrainz_recording_id = Some(format!("mb-recording-{index}"));
+                request.quality_policy = Some("lossless_preferred".to_string());
+                request.edition_policy = Some("standard_only".to_string());
+                request.excluded_providers = vec!["yt_dlp".to_string(), "usenet".to_string()];
+
+                let row = db
+                    .create_acquisition_request(&request)
+                    .await
+                    .expect("request should persist");
+
+                assert_eq!(row.scope, scope.as_str());
+                assert_eq!(row.confirmation_policy, policy.as_str());
+                assert_eq!(
+                    row.musicbrainz_release_group_id.as_deref(),
+                    Some(format!("mb-release-group-{index}").as_str())
+                );
+                assert_eq!(
+                    row.musicbrainz_release_id.as_deref(),
+                    Some(format!("mb-release-{index}").as_str())
+                );
+                assert_eq!(
+                    row.musicbrainz_recording_id.as_deref(),
+                    Some(format!("mb-recording-{index}").as_str())
+                );
+                assert_eq!(row.quality_policy.as_deref(), Some("lossless_preferred"));
+                assert_eq!(row.edition_policy.as_deref(), Some("standard_only"));
+                assert_eq!(row.status, "pending");
+
+                let excluded: Vec<String> = serde_json::from_str(
+                    row.excluded_providers_json
+                        .as_deref()
+                        .expect("excluded providers should persist as json"),
+                )
+                .expect("excluded providers json should parse");
+                assert_eq!(excluded, vec!["yt_dlp".to_string(), "usenet".to_string()]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn has_completed_checkpoints_returns_false_when_checkpoint_missing() {
+        let db = test_db().await;
+
+        let completed = db
+            .has_completed_checkpoints(&["C:/missing-root".to_string()])
+            .await
+            .expect("checkpoint lookup should not error");
+
+        assert!(!completed);
     }
 }

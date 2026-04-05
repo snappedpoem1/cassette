@@ -23,6 +23,8 @@ pub struct NormalizedTrack {
     #[serde(default)]
     pub musicbrainz_recording_id: Option<String>,
     #[serde(default)]
+    pub musicbrainz_release_group_id: Option<String>,
+    #[serde(default)]
     pub musicbrainz_release_id: Option<String>,
     #[serde(default)]
     pub canonical_artist_id: Option<i64>,

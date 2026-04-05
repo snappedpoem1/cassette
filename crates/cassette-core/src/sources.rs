@@ -42,6 +42,7 @@ pub struct RemoteProviderConfig {
     pub spotify_client_id: Option<String>,
     pub spotify_client_secret: Option<String>,
     pub spotify_access_token: Option<String>,
+    pub discogs_token: Option<String>,
 }
 
 impl RemoteProviderConfig {
@@ -58,6 +59,7 @@ impl RemoteProviderConfig {
             spotify_client_id: std::env::var("SPOTIFY_CLIENT_ID").ok(),
             spotify_client_secret: std::env::var("SPOTIFY_CLIENT_SECRET").ok(),
             spotify_access_token: std::env::var("SPOTIFY_ACCESS_TOKEN").ok(),
+            discogs_token: std::env::var("DISCOGS_TOKEN").ok(),
         }
     }
 }
@@ -103,6 +105,13 @@ pub async fn search_metadata(
         }
         Err(error) => errors.push(format!("Spotify: {error}")),
     }
+    match discogs_search(provider_config, query).await {
+        Ok(result) => {
+            artists.extend(result.artists);
+            albums.extend(result.albums);
+        }
+        Err(error) => errors.push(format!("Discogs: {error}")),
+    }
 
     if artists.is_empty() && albums.is_empty() && !errors.is_empty() {
         return Err(errors.join(" | "));
@@ -125,6 +134,9 @@ pub async fn get_artist_discography(
         return Ok(result);
     }
     if let Ok(result) = spotify_discography(provider_config, artist, artist_mbid.clone()).await {
+        return Ok(result);
+    }
+    if let Ok(result) = discogs_discography(provider_config, artist, artist_mbid.clone()).await {
         return Ok(result);
     }
 
@@ -454,6 +466,148 @@ pub async fn spotify_discography(
     })
 }
 
+pub async fn discogs_search(
+    provider_config: &RemoteProviderConfig,
+    query: &str,
+) -> Result<DownloadMetadataSearchResult, String> {
+    let Some(token) = present(&provider_config.discogs_token) else {
+        return Ok(DownloadMetadataSearchResult::default());
+    };
+    let client = discogs_client(token)?;
+
+    let artist_response = client
+        .get("https://api.discogs.com/database/search")
+        .query(&[
+            ("q", query),
+            ("type", "artist"),
+            ("per_page", "8"),
+            ("page", "1"),
+        ])
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let album_response = client
+        .get("https://api.discogs.com/database/search")
+        .query(&[
+            ("q", query),
+            ("type", "release"),
+            ("per_page", "12"),
+            ("page", "1"),
+        ])
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if !artist_response.status().is_success() && !album_response.status().is_success() {
+        return Err(format!(
+            "artist HTTP {}, release HTTP {}",
+            artist_response.status(),
+            album_response.status()
+        ));
+    }
+
+    let artists_body = artist_response
+        .json::<Value>()
+        .await
+        .unwrap_or_else(|_| Value::Null);
+    let albums_body = album_response
+        .json::<Value>()
+        .await
+        .unwrap_or_else(|_| Value::Null);
+
+    Ok(DownloadMetadataSearchResult {
+        artists: artists_body
+            .get("results")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(discogs_artist_from_value)
+                    .filter(|artist| !artist.name.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        albums: albums_body
+            .get("results")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(discogs_album_from_search_value)
+                    .filter(|album| !album.title.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+pub async fn discogs_discography(
+    provider_config: &RemoteProviderConfig,
+    artist: &str,
+    artist_mbid: Option<String>,
+) -> Result<DownloadArtistDiscography, String> {
+    let Some(token) = present(&provider_config.discogs_token) else {
+        return Err("Discogs token missing.".to_string());
+    };
+    let client = discogs_client(token)?;
+
+    let search = client
+        .get("https://api.discogs.com/database/search")
+        .query(&[
+            ("q", artist),
+            ("type", "artist"),
+            ("per_page", "5"),
+            ("page", "1"),
+        ])
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !search.status().is_success() {
+        return Err(format!("HTTP {}", search.status()));
+    }
+    let search_body = search.json::<Value>().await.map_err(|error| error.to_string())?;
+    let Some(found_artist) = search_body
+        .get("results")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .map(discogs_artist_from_value)
+    else {
+        return Err("No Discogs artist match found.".to_string());
+    };
+
+    let releases = client
+        .get(format!("https://api.discogs.com/artists/{}/releases", found_artist.id))
+        .query(&[("per_page", "100"), ("page", "1"), ("sort", "year"), ("sort_order", "asc")])
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !releases.status().is_success() {
+        return Err(format!("HTTP {}", releases.status()));
+    }
+
+    let releases_body = releases.json::<Value>().await.map_err(|error| error.to_string())?;
+    let albums = releases_body
+        .get("releases")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(discogs_album_from_release_value)
+                .filter(|album| !album.title.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(DownloadArtistDiscography {
+        artist: DownloadArtistResult {
+            artist_mbid,
+            ..found_artist
+        },
+        albums,
+    })
+}
+
 pub async fn qobuz_user_auth_token(
     provider_config: &RemoteProviderConfig,
 ) -> Result<Option<String>, String> {
@@ -545,6 +699,26 @@ pub fn deezer_client(provider_config: &RemoteProviderConfig) -> Result<reqwest::
     headers.insert(
         reqwest::header::ORIGIN,
         reqwest::header::HeaderValue::from_static("https://www.deezer.com"),
+    );
+
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn discogs_client(token: &str) -> Result<reqwest::Client, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    let auth_header = reqwest::header::HeaderValue::from_str(&format!("Discogs token={token}"))
+        .map_err(|error| error.to_string())?;
+    headers.insert(reqwest::header::AUTHORIZATION, auth_header);
+    headers.insert(
+        reqwest::header::USER_AGENT,
+        reqwest::header::HeaderValue::from_static("Cassette/0.1 (+local)"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/json"),
     );
 
     reqwest::Client::builder()
@@ -836,6 +1010,101 @@ fn spotify_album_from_value(value: &Value) -> DownloadAlbumResult {
             .and_then(Value::as_str)
             .map(ToString::to_string),
         source: "spotify".to_string(),
+        ..DownloadAlbumResult::default()
+    }
+}
+
+fn discogs_artist_from_value(value: &Value) -> DownloadArtistResult {
+    let id = string_field(value, "id");
+    let name = value
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("artist").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string();
+    let tags = value
+        .get("style")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    DownloadArtistResult {
+        id,
+        name,
+        tags,
+        image_url: value.get("thumb").and_then(Value::as_str).map(ToString::to_string),
+        source: "discogs".to_string(),
+        ..DownloadArtistResult::default()
+    }
+}
+
+fn discogs_album_from_search_value(value: &Value) -> DownloadAlbumResult {
+    let release_type = value
+        .get("format")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .find(|name| {
+                    let normalized = name.to_ascii_lowercase();
+                    normalized.contains("album")
+                        || normalized.contains("single")
+                        || normalized.contains("ep")
+                        || normalized.contains("compilation")
+                        || normalized.contains("live")
+                })
+        })
+        .map(ToString::to_string)
+        .or_else(|| value.get("type").and_then(Value::as_str).map(ToString::to_string));
+
+    DownloadAlbumResult {
+        id: string_field(value, "id"),
+        title: value
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        artist: value
+            .get("artist")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        year: value.get("year").and_then(Value::as_i64).map(|year| year as i32),
+        release_type,
+        cover_url: value.get("cover_image").and_then(Value::as_str).map(ToString::to_string),
+        source: "discogs".to_string(),
+        discogs_id: value.get("id").and_then(Value::as_i64),
+        ..DownloadAlbumResult::default()
+    }
+}
+
+fn discogs_album_from_release_value(value: &Value) -> DownloadAlbumResult {
+    DownloadAlbumResult {
+        id: string_field(value, "id"),
+        title: value
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        artist: value
+            .get("artist")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        year: value.get("year").and_then(Value::as_i64).map(|year| year as i32),
+        release_type: value
+            .get("type")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        source: "discogs".to_string(),
+        discogs_id: value.get("id").and_then(Value::as_i64),
         ..DownloadAlbumResult::default()
     }
 }

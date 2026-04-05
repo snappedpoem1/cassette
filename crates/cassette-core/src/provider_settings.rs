@@ -34,6 +34,7 @@ pub struct DownloadConfig {
     pub genius_token: Option<String>,
     pub discogs_token: Option<String>,
     pub lastfm_api_key: Option<String>,
+    pub lastfm_username: Option<String>,
     // Tools
     pub ytdlp_path: Option<String>,
     pub sevenzip_path: Option<String>,
@@ -72,6 +73,7 @@ impl DownloadConfig {
             genius_token: std::env::var("GENIUS_TOKEN").ok(),
             discogs_token: std::env::var("DISCOGS_TOKEN").ok(),
             lastfm_api_key: std::env::var("LASTFM_API_KEY").ok(),
+            lastfm_username: std::env::var("LASTFM_USERNAME").ok(),
             ytdlp_path: std::env::var("YTDLP_PATH").ok(),
             sevenzip_path: std::env::var("SEVENZIP_PATH").ok(),
         }
@@ -144,23 +146,13 @@ impl DownloadConfig {
                 Some(vec![("access token", &self.spotify_access_token)]),
             ),
             Self::build_status(
-                "discogs",
-                "Discogs",
-                vec![],
-                Some(vec![("token", &self.discogs_token)]),
-            ),
-            Self::build_status(
                 "lastfm",
                 "Last.fm",
                 vec![],
-                Some(vec![("API key", &self.lastfm_api_key)]),
-            ),
-            // ── Enrichment ───────────────────────────────────────────────
-            Self::build_status(
-                "genius",
-                "Genius",
-                vec![("access token", &self.genius_token)],
-                None,
+                Some(vec![
+                    ("API key", &self.lastfm_api_key),
+                    ("username", &self.lastfm_username),
+                ]),
             ),
             // ── Tools ────────────────────────────────────────────────────
             Self::build_status(

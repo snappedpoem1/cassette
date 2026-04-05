@@ -19,7 +19,7 @@ Use this checklist before calling a Windows release candidate shippable.
 - [ ] `cargo check --workspace`
 - [ ] `cargo test --workspace`
 - [ ] `Set-Location ui; npm install; npm run build; Set-Location ..`
-- [ ] `.\scripts\smoke_desktop.ps1`
+- [ ] `.\scripts\smoke_desktop.ps1 -Strict`
 - [ ] `.\scripts\verify_trust_spine.ps1`
 - [ ] `.\scripts\perf_baseline_capture.ps1 -Runs 3 -WarmupRuns 1`
 - [ ] `.\scripts\perf_regression_gate.ps1 -CandidateResultPath artifacts\perf\run-<timestamp>\results.json`
@@ -32,14 +32,19 @@ Use this checklist before calling a Windows release candidate shippable.
   - [ ] `target/release/bundle/nsis/Cassette_0.1.0_x64-setup.exe`
 - [ ] Confirm `default-run = "cassette"` is present in `src-tauri/Cargo.toml`
 
-## Clean-Machine Install Gate (Windows)
+## Clean-Room Install Gate (Windows)
 
-- [ ] Start from a machine without previous Cassette app-data
-- [ ] Install from `.msi` or `.exe` bundle
+- [ ] Choose one isolation path:
+  - [ ] Separate Windows machine
+  - [ ] Windows Sandbox on the same machine
+  - [ ] Disposable local Windows user profile on the same machine
+- [ ] Install from `.msi` or `.exe` bundle inside the chosen clean-room path
 - [ ] Launch app once and confirm bootstrap created:
   - [ ] `%APPDATA%/dev.cassette.app/cassette.db`
   - [ ] `%APPDATA%/dev.cassette.app/cassette_librarian.db`
+- [ ] Run `./scripts/verify_cleanroom_local.ps1 -Mode <Sandbox|DisposableProfile>`
 - [ ] Confirm first-run settings bootstrap (`library_base`, `staging_folder`, provider defaults)
+- [ ] If true isolation is unavailable, run app-data reset fallback on the same machine and record this as lower-confidence proof in release notes
 
 ## Unified Datastore Convergence Gate
 
