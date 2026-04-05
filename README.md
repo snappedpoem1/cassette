@@ -99,6 +99,7 @@ Canonical project docs live in [`docs/`](docs/):
 
 - `PROJECT_INDEX.md` - project map, status, architecture
 - `PROJECT_STATE.md` - current runtime capabilities and verified state
+- `GIT_SETUP.md` - Git remote/tracking/identity setup and verification checklist
 - `TODO.md` - living task list
 - `DECISIONS.md` - architectural rationale
 - `AGENT_CODEX.md` - agent operating manual
