@@ -37,9 +37,11 @@ pub fn queue_tracks(state: State<'_, AppState>, track_ids: Vec<i64>, start_index
     if let Some(item) = queue.get(start) {
         if let Some(ref track) = item.track {
             state.player.load(track.path.clone());
+            state.player.play();
             let mut ps = state.playback_state.lock().unwrap();
             ps.current_track = Some(track.clone());
             ps.queue_position = start;
+            ps.is_playing = true;
             let _ = state.db.lock().unwrap().increment_play_count(track.id);
         }
     }

@@ -567,6 +567,7 @@ export const api = {
   getConfig: () => invoke<DownloadConfig>('get_config'),
   getProviderStatuses: () => invoke<ProviderStatus[]>('get_provider_statuses'),
   saveConfig: (config: DownloadConfig) => invoke<void>('save_config', { config }),
+  persistEffectiveConfig: () => invoke<void>('persist_effective_config'),
 
   // Background backlog downloader
   startBacklogRun: (batchSize?: number, limit?: number) =>

@@ -2,11 +2,25 @@
   import { page } from '$app/stores';
   import { trackCount, isScanning, scanProgress } from '$lib/stores/library';
 
-  const navLinks = [
-    { href: '/', label: 'Library', icon: 'Music' },
-    { href: '/downloads', label: 'Downloads', icon: 'Fetch' },
-    { href: '/settings', label: 'Settings', icon: 'Config' },
+  const coreLinks = [
+    { href: '/', label: 'Library', icon: 'LIB' },
+    { href: '/downloads', label: 'Downloads', icon: 'DL' },
+    { href: '/playlists', label: 'Playlists', icon: 'PL' },
+    { href: '/artists', label: 'Artists', icon: 'AR' },
   ];
+
+  const utilityLinks = [
+    { href: '/import', label: 'Import', icon: 'IM' },
+    { href: '/tools', label: 'Tools', icon: 'TL' },
+    { href: '/settings', label: 'Settings', icon: 'CFG' },
+  ];
+
+  function isActive(href: string, pathname: string): boolean {
+    if (href === '/') {
+      return pathname === '/';
+    }
+    return pathname === href || pathname.startsWith(`${href}/`);
+  }
 </script>
 
 <nav class="sidebar">
@@ -16,8 +30,21 @@
   </div>
 
   <ul class="nav-list">
-    {#each navLinks as link}
-      {@const active = $page.url.pathname === link.href}
+    {#each coreLinks as link}
+      {@const active = isActive(link.href, $page.url.pathname)}
+      <li>
+        <a href={link.href} class="nav-link" class:active>
+          <span class="nav-icon">{link.icon}</span>
+          <span>{link.label}</span>
+        </a>
+      </li>
+    {/each}
+  </ul>
+
+  <div class="nav-section-title">Utilities</div>
+  <ul class="nav-list nav-list-utilities">
+    {#each utilityLinks as link}
+      {@const active = isActive(link.href, $page.url.pathname)}
       <li>
         <a href={link.href} class="nav-link" class:active>
           <span class="nav-icon">{link.icon}</span>
@@ -97,6 +124,20 @@
     flex-direction: column;
     gap: 2px;
     flex: 1;
+  }
+
+  .nav-list-utilities {
+    flex: 0;
+    margin-bottom: 8px;
+  }
+
+  .nav-section-title {
+    margin: 8px 14px 4px;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 700;
   }
 
   .nav-link {

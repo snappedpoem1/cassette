@@ -1,6 +1,6 @@
 # Cassette Hit List
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
 This is the short-form execution board for the current mission.
 For full context and acceptance details, see `TODO.md` and `PROJECT_STATE.md`.
@@ -56,6 +56,8 @@ Already proven:
 - [x] `cargo tauri build` produces `.msi` + `.exe` — packaging is buildable — **DONE 2026-04-03**: `default-run = "cassette"` added to `src-tauri/Cargo.toml`
 - [x] Install/build steps documented for clean environment; release checklist updated — **DONE 2026-04-03**: `docs/CLEAN_MACHINE_CHECKLIST.md` + `docs/RELEASE_CHECKLIST.md`
 - [x] Formalize performance baselines and regression budgets — **DONE 2026-04-03**: `scripts/perf_baseline_capture.ps1`, `scripts/perf_regression_gate.ps1`, `docs/perf/BUDGETS.json`, `docs/perf/BASELINE.latest.json`
+- [x] Deliver modular desktop UX modernization (Winamp-inspired + concept-3 direction, no Lyra surfaces) with Windows command palette, minimized player mode, and taskbar integration
+- [x] Stabilization pass landed for playback auto-start, duplicate handling (including handle-all), tools metadata/ingest clarity, Spotify completeness detection, and artist variant grouping
 - [ ] Reuse persisted provenance and candidate memory in runtime behavior
 - [ ] Capture one fresh live recovery/resume proof with the coordinator path as part of async hardening
 

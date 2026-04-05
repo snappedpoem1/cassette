@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { api } from '$lib/api/tauri';
-  import type { OrganizeReport, DuplicateGroup, TagFix } from '$lib/api/tauri';
+  import type { OrganizeReport, DuplicateGroup, TagFix, Artist, Album } from '$lib/api/tauri';
 
   // ── State ──────────────────────────────────────────────────────────────────
   let activeSection: 'organize' | 'duplicates' | 'metadata' | 'maintenance' = 'organize';
@@ -9,15 +10,22 @@
   let organizeReport: OrganizeReport | null = null;
   let organizing = false;
   let organizeError: string | null = null;
+  let organizeNotice: string | null = null;
+  let organizeSkippedPreview: string[] = [];
+  let organizeErrorPreview: string[] = [];
 
   // Duplicates
   let duplicates: DuplicateGroup[] = [];
   let scanningDupes = false;
   let dupeNotice: string | null = null;
+  let resolvingAllDupes = false;
 
   // Metadata
   let metaArtist = '';
   let metaAlbum = '';
+  let allArtists: Artist[] = [];
+  let allAlbums: Album[] = [];
+  let artistAlbums: Album[] = [];
   let tagFixes: TagFix[] = [];
   let fetchingFixes = false;
   let fixNotice: string | null = null;
@@ -25,15 +33,47 @@
   // Maintenance
   let pruneCount: number | null = null;
   let ingestCount: number | null = null;
+  let ingestNotice: string | null = null;
+  let ingestedPreview: string[] = [];
   let pruning = false;
   let ingesting = false;
+
+  onMount(async () => {
+    try {
+      [allArtists, allAlbums] = await Promise.all([api.getArtists(), api.getAlbums()]);
+    } catch {
+      allArtists = [];
+      allAlbums = [];
+    }
+  });
+
+  $: {
+    if (!metaArtist.trim()) {
+      artistAlbums = [];
+      if (metaAlbum) {
+        metaAlbum = '';
+      }
+    } else {
+      artistAlbums = allAlbums.filter((album) => album.artist === metaArtist);
+      if (metaAlbum && !artistAlbums.some((album) => album.title === metaAlbum)) {
+        metaAlbum = '';
+      }
+    }
+  }
+
+  const DUPLICATE_SORT = (a: DuplicateGroup, b: DuplicateGroup) =>
+    a.key.localeCompare(b.key);
 
   // ── Actions ────────────────────────────────────────────────────────────────
   async function previewOrganize() {
     organizing = true;
     organizeError = null;
+    organizeNotice = null;
     try {
       organizeReport = await api.organizeLibrary(true);
+      organizeSkippedPreview = [];
+      organizeErrorPreview = [];
+      organizeNotice = `Preview found ${organizeReport.moved.length} move(s) and ${organizeReport.skipped} already in place.`;
     } catch (e) { organizeError = String(e); }
     organizing = false;
   }
@@ -41,8 +81,12 @@
   async function executeOrganize() {
     organizing = true;
     organizeError = null;
+    organizeNotice = null;
     try {
       organizeReport = await api.organizeLibrary(false);
+      organizeSkippedPreview = [];
+      organizeErrorPreview = organizeReport.errors.slice(0, 10);
+      organizeNotice = `Applied ${organizeReport.moved.length} move(s). ${organizeReport.skipped} skipped.`;
     } catch (e) { organizeError = String(e); }
     organizing = false;
   }
@@ -51,7 +95,7 @@
     scanningDupes = true;
     dupeNotice = null;
     try {
-      duplicates = await api.findDuplicates();
+      duplicates = (await api.findDuplicates()).sort(DUPLICATE_SORT);
       dupeNotice = duplicates.length === 0 ? 'No duplicates found.' : null;
     } catch (e) { dupeNotice = String(e); }
     scanningDupes = false;
@@ -61,13 +105,41 @@
     const best = group.tracks.find(t => t.is_best);
     if (!best) return;
     const removeIds = group.tracks.filter(t => !t.is_best).map(t => t.id);
-    await api.resolveDuplicate(best.id, removeIds, true);
-    duplicates = duplicates.filter(g => g.key !== group.key);
-    dupeNotice = `Resolved. ${removeIds.length} duplicate(s) removed.`;
+    try {
+      await api.resolveDuplicate(best.id, removeIds, true);
+      duplicates = duplicates.filter(g => g.key !== group.key);
+      dupeNotice = `Resolved. ${removeIds.length} duplicate(s) removed.`;
+    } catch (e) {
+      dupeNotice = String(e);
+    }
+  }
+
+  async function resolveAllDupes() {
+    resolvingAllDupes = true;
+    dupeNotice = null;
+    let removed = 0;
+    try {
+      for (const group of duplicates) {
+        const best = group.tracks.find((track) => track.is_best);
+        if (!best) continue;
+        const removeIds = group.tracks.filter((track) => !track.is_best).map((track) => track.id);
+        await api.resolveDuplicate(best.id, removeIds, true);
+        removed += removeIds.length;
+      }
+      duplicates = [];
+      dupeNotice = `Resolved all groups. Removed ${removed} duplicate file(s).`;
+    } catch (e) {
+      dupeNotice = String(e);
+    } finally {
+      resolvingAllDupes = false;
+    }
   }
 
   async function fetchTagFixes() {
-    if (!metaArtist.trim() || !metaAlbum.trim()) return;
+    if (!metaArtist.trim() || !metaAlbum.trim()) {
+      fixNotice = 'Pick an artist and album first.';
+      return;
+    }
     fetchingFixes = true;
     fixNotice = null;
     try {
@@ -99,6 +171,10 @@
     try {
       const files = await api.ingestStaging();
       ingestCount = files.length;
+      ingestedPreview = files.slice(0, 8);
+      ingestNotice = files.length === 0
+        ? 'No audio files found in staging.'
+        : `Ingested ${files.length} file(s) from staging into your library.`;
     } catch (e) { ingestCount = null; }
     ingesting = false;
   }
@@ -145,6 +221,10 @@
           <div class="tool-error">{organizeError}</div>
         {/if}
 
+        {#if organizeNotice}
+          <div class="tool-notice">{organizeNotice}</div>
+        {/if}
+
         {#if organizeReport}
           <div class="tool-stats">
             <span class="stat">{organizeReport.moved.length} to move</span>
@@ -168,6 +248,14 @@
               {/if}
             </div>
           {/if}
+
+          {#if organizeErrorPreview.length > 0}
+            <div class="tool-mini-list" style="margin-top:12px;">
+              {#each organizeErrorPreview as msg}
+                <div class="tool-mini-item">{msg}</div>
+              {/each}
+            </div>
+          {/if}
         {/if}
       </div>
 
@@ -181,6 +269,11 @@
           <button class="btn btn-primary" on:click={scanDuplicates} disabled={scanningDupes}>
             {scanningDupes ? 'Scanning...' : 'Scan for Duplicates'}
           </button>
+          {#if duplicates.length > 0}
+            <button class="btn btn-ghost" on:click={resolveAllDupes} disabled={resolvingAllDupes}>
+              {resolvingAllDupes ? 'Resolving...' : `Handle All (${duplicates.length} groups)`}
+            </button>
+          {/if}
         </div>
 
         {#if dupeNotice}
@@ -222,8 +315,18 @@
           Look up an album on MusicBrainz and fix tags (title, artist, track numbers, year) to match the canonical release.
         </div>
         <div class="tool-actions" style="gap:8px;">
-          <input class="input" type="text" placeholder="Artist" bind:value={metaArtist} style="max-width:200px;" />
-          <input class="input" type="text" placeholder="Album" bind:value={metaAlbum} style="max-width:200px;" />
+          <select class="input" bind:value={metaArtist} style="max-width:240px;">
+            <option value="">Artist...</option>
+            {#each allArtists as artist}
+              <option value={artist.name}>{artist.name}</option>
+            {/each}
+          </select>
+          <select class="input" bind:value={metaAlbum} style="max-width:260px;" disabled={!metaArtist}>
+            <option value="">Album...</option>
+            {#each artistAlbums as album}
+              <option value={album.title}>{album.title}</option>
+            {/each}
+          </select>
           <button class="btn btn-primary" on:click={fetchTagFixes} disabled={fetchingFixes}>
             {fetchingFixes ? 'Looking up...' : 'Check Tags'}
           </button>
@@ -279,6 +382,16 @@
             </button>
             {#if ingestCount !== null}
               <div class="tool-card-result">{ingestCount} file{ingestCount === 1 ? '' : 's'} ingested.</div>
+            {/if}
+            {#if ingestNotice}
+              <div class="tool-card-result">{ingestNotice}</div>
+            {/if}
+            {#if ingestedPreview.length > 0}
+              <div class="tool-mini-list">
+                {#each ingestedPreview as filePath}
+                  <div class="tool-mini-item">{shortPath(filePath)}</div>
+                {/each}
+              </div>
             {/if}
           </div>
         </div>
@@ -373,4 +486,22 @@
 .tool-card-title { font-weight: 600; font-size: 0.95rem; }
 .tool-card-desc { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; }
 .tool-card-result { font-size: 0.8rem; color: var(--accent-bright); }
+
+.tool-mini-list {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.tool-mini-item {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.tool-mini-item:first-child {
+  border-top: none;
+}
 </style>

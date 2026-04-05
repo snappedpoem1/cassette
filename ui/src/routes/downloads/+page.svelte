@@ -377,37 +377,49 @@
     {:else}
       <div class="job-list">
         {#each $downloadJobs as job}
-          <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div
-            class="job-row"
-            class:job-expandable={['Done', 'Failed', 'Cancelled'].includes(job.status)}
-            on:click={() => { if (['Done', 'Failed', 'Cancelled'].includes(job.status)) toggleReview(job.id); }}
-            on:keydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ['Done', 'Failed', 'Cancelled'].includes(job.status)) { e.preventDefault(); toggleReview(job.id); } }}
-            role={['Done', 'Failed', 'Cancelled'].includes(job.status) ? 'button' : undefined}
-            tabindex={['Done', 'Failed', 'Cancelled'].includes(job.status) ? 0 : undefined}
-          >
-            <div class="job-info">
-              <div class="job-title">{job.title}</div>
-              <div class="job-artist">{job.artist}{job.album ? ` · ${job.album}` : ''}</div>
-            </div>
-            <div class="job-right">
-              {#if job.status === 'Downloading'}
-                <div class="job-progress">
-                  <div class="seek-bar" style="width:120px;">
-                    <div class="seek-fill" style="width:{job.progress * 100}%"></div>
+          {@const expandable = ['Done', 'Failed', 'Cancelled'].includes(job.status)}
+          {#if expandable}
+            <button class="job-row job-expandable" type="button" on:click={() => toggleReview(job.id)}>
+              <div class="job-info">
+                <div class="job-title">{job.title}</div>
+                <div class="job-artist">{job.artist}{job.album ? ` · ${job.album}` : ''}</div>
+              </div>
+              <div class="job-right">
+                {#if job.status === 'Downloading'}
+                  <div class="job-progress">
+                    <div class="seek-bar" style="width:120px;">
+                      <div class="seek-fill" style="width:{job.progress * 100}%"></div>
+                    </div>
+                    <span class="job-pct">{Math.round(job.progress * 100)}%</span>
                   </div>
-                  <span class="job-pct">{Math.round(job.progress * 100)}%</span>
-                </div>
-              {/if}
-              <span class="badge {statusColors[job.status] ?? 'badge-muted'}">{job.status}</span>
-              {#if job.provider}<span class="job-provider">{job.provider}</span>{/if}
-              {#if !['Done', 'Failed', 'Cancelled'].includes(job.status)}
+                {/if}
+                <span class="badge {statusColors[job.status] ?? 'badge-muted'}">{job.status}</span>
+                {#if job.provider}<span class="job-provider">{job.provider}</span>{/if}
+              </div>
+            </button>
+          {:else}
+            <div class="job-row">
+              <div class="job-info">
+                <div class="job-title">{job.title}</div>
+                <div class="job-artist">{job.artist}{job.album ? ` · ${job.album}` : ''}</div>
+              </div>
+              <div class="job-right">
+                {#if job.status === 'Downloading'}
+                  <div class="job-progress">
+                    <div class="seek-bar" style="width:120px;">
+                      <div class="seek-fill" style="width:{job.progress * 100}%"></div>
+                    </div>
+                    <span class="job-pct">{Math.round(job.progress * 100)}%</span>
+                  </div>
+                {/if}
+                <span class="badge {statusColors[job.status] ?? 'badge-muted'}">{job.status}</span>
+                {#if job.provider}<span class="job-provider">{job.provider}</span>{/if}
                 <button class="btn btn-secondary job-cancel" on:click|stopPropagation={() => cancelJob(job.id)}>
                   Cancel
                 </button>
-              {/if}
+              </div>
             </div>
-          </div>
+          {/if}
           {#if job.error}
             <div class="job-error">{job.error}</div>
           {/if}
@@ -688,8 +700,10 @@
 .job-list { padding: 8px 1.5rem; display: flex; flex-direction: column; gap: 6px; }
 .job-row {
   display: flex; align-items: center; gap: 12px;
+  width: 100%;
   padding: 10px 14px; border-radius: var(--radius-sm);
   background: var(--bg-card); border: 1px solid var(--border);
+  text-align: left;
 }
 .job-info  { flex: 1; overflow: hidden; }
 .job-title  { font-weight: 600; font-size: 0.9rem; }

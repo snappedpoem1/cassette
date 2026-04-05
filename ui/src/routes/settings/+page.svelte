@@ -14,6 +14,7 @@
     providerStatuses,
     loadDownloadConfig,
     saveDownloadConfig,
+    persistEffectiveDownloadConfig,
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
   import type { DownloadConfig } from '$lib/api/tauri';
@@ -54,6 +55,7 @@
   }
 
   let saved = false;
+  let persistingEffective = false;
   let lastfmSyncing = false;
   let lastfmSyncMessage: string | null = null;
 
@@ -63,6 +65,19 @@
     setTimeout(() => {
       saved = false;
     }, 2000);
+  }
+
+  async function persistEffectiveSecrets() {
+    persistingEffective = true;
+    try {
+      await persistEffectiveDownloadConfig();
+      saved = true;
+      setTimeout(() => {
+        saved = false;
+      }, 2000);
+    } finally {
+      persistingEffective = false;
+    }
   }
 
   async function syncLastfmHistory() {
@@ -417,6 +432,9 @@
     </section>
 
     <div class="save-row">
+      <button class="btn btn-ghost" on:click={persistEffectiveSecrets} disabled={persistingEffective}>
+        {persistingEffective ? 'Persisting secrets...' : 'Persist Loaded Secrets'}
+      </button>
       <button class="btn btn-primary" on:click={handleSave}>Save Settings</button>
       {#if saved}
         <span class="saved-confirm">Saved</span>

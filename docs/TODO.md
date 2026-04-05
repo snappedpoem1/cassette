@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.  
 **Rule**: If a task is not in this file, it is not committed project scope yet.  
-**Last Updated**: 2026-04-03
+**Last Updated**: 2026-04-05
 
 Short execution board: see `HIT_LIST.md`.
 
@@ -223,6 +223,25 @@ Acceptance:
 - [x] Release checklist updated (`docs/RELEASE_CHECKLIST.md`)
 - [x] Trust-spine verification script exists (`scripts/verify_trust_spine.ps1`)
 - [x] `cargo tauri build` produces `.msi` and `.exe` installers — `default-run = "cassette"` added to `src-tauri/Cargo.toml` (2026-04-03)
+
+### [P1] [done] Deliver modular desktop UX modernization (Winamp-inspired, concept-3 visual direction, no Lyra surfaces)
+
+Why:
+
+- Current UX hardening needs a single coherent target style and interaction model, not route-by-route tweaks.
+- The redesigned shell must remain operationally dense while improving discoverability, keyboard-first flow, and Windows desktop integration.
+
+Acceptance:
+
+- [x] Iteration-1 implementation artifact created: `docs/UX_MODERNIZATION_ITERATION_01.md`
+- [x] A modular UI shell exists with reusable boundaries for navigation, player, command palette, and feature panels
+- [x] Visual language follows the Winamp-inspired plus concept-3 direction across Library, Downloads, and Settings
+- [x] Lyra assistant surfaces and prompt language are removed from the active desktop UX path
+- [x] Windows command system is implemented with centralized command registry and shortcut mappings for top actions
+- [x] Minimized player mode exists as a persistent compact presence with restore behavior
+- [x] Windows taskbar integration is wired for playback controls and correct minimize/restore behavior
+- [x] Keyboard-first accessibility and focus visibility are preserved in redesigned flows
+- [x] Route-level refactors keep desktop integration logic outside page components
 
 ### [P1] [done] Formalize performance baseline and regression budget
 
@@ -456,7 +475,7 @@ Acceptance:
 - [x] Implemented in Director engine with runtime DB-backed local track matching
 - [x] Tests cover missing runtime DB path, no-match failure, and successful repair path
 
-### [P2] [todo] Document and test long-session desktop behavior
+### [P2] [review] Document and test long-session desktop behavior
 
 Why:
 
@@ -464,8 +483,8 @@ Why:
 
 Acceptance:
 
-- [ ] Soak-test procedure documented
-- [ ] Known leaks, stalls, or recovery pain points recorded if found
+- [x] Soak-test procedure documented (`docs/SOAK_TEST_PROCEDURE.md`)
+- [x] Baseline evidence run captured and known pain points recorded (`docs/SOAK_EVIDENCE.md`)
 
 ### [P2] [todo] Integrate Cover Art Archive after canonical release selection
 

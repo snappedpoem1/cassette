@@ -88,16 +88,14 @@ pub fn resolve_duplicate(
             if let Ok(Some(track)) = db.get_track_by_id(*id) {
                 let path = std::path::Path::new(&track.path);
                 if path.exists() {
-                    if let Err(e) = std::fs::remove_file(path) {
-                        tracing::warn!("[resolve_duplicate] failed to delete {}: {e}", path.display());
-                    }
+                    std::fs::remove_file(path)
+                        .map_err(|e| format!("failed to delete file {}: {e}", path.display()))?;
                 }
             }
         }
 
-        if let Err(e) = db.delete_track(*id) {
-            tracing::warn!("[resolve_duplicate] failed to delete track {id} from DB: {e}");
-        }
+        db.delete_track(*id)
+            .map_err(|e| format!("failed to delete track {id} from DB: {e}"))?;
         removed += 1;
     }
 

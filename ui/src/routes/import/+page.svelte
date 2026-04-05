@@ -10,9 +10,11 @@
   let error: string | null = null;
   let selectedAlbums = new Set<number>();
   let queuedCount: number | null = null;
+  let queuedTrackEstimate: number | null = null;
   let filterMode: 'missing' | 'all' = 'missing';
   let minPlays = 3;
   let persistedStatus: SpotifyImportStatus | null = null;
+  let selectedMissing = 0;
 
   onMount(async () => {
     try {
@@ -76,10 +78,21 @@
     if (toQueue.length === 0) return;
     try {
       queuedCount = await api.queueSpotifyAlbums(toQueue);
+      queuedTrackEstimate = toQueue.reduce((sum, album) => sum + Math.max(1, album.play_count), 0);
       selectedAlbums = new Set();
     } catch (e) {
       error = String(e);
     }
+  }
+
+  function selectedMissingCount(): number {
+    if (!importResult) return 0;
+    let count = 0;
+    for (const idx of selectedAlbums) {
+      const album = importResult.albums[idx];
+      if (album && !album.in_library) count += 1;
+    }
+    return count;
   }
 
   function msToHours(ms: number): string {
@@ -96,6 +109,8 @@
         return true;
       })
     : [];
+
+  $: selectedMissing = selectedMissingCount();
 </script>
 
 <svelte:head><title>Import · Cassette</title></svelte:head>
@@ -110,6 +125,14 @@
       <div class="source-label">Spotify Extended Streaming History</div>
       <div class="source-desc">
         Select the folder containing your <code>Streaming_History_Audio_*.json</code> files from Spotify's data export.
+      </div>
+      <div class="source-help">
+        <strong>How this works:</strong>
+        <ul>
+          <li>1. Load your Spotify export JSON files.</li>
+          <li>2. Review albums marked <em>Missing</em>.</li>
+          <li>3. Queue selected albums for acquisition in Downloads.</li>
+        </ul>
       </div>
       {#if persistedStatus}
         <div class="source-desc">
@@ -130,7 +153,14 @@
   {/if}
 
   {#if queuedCount !== null}
-    <div class="dl-notice">{queuedCount} album{queuedCount === 1 ? '' : 's'} queued for download.</div>
+    <div class="dl-notice">
+      {queuedCount} album{queuedCount === 1 ? '' : 's'} queued for download
+      {#if queuedTrackEstimate !== null}
+        (about {queuedTrackEstimate} track request{queuedTrackEstimate === 1 ? '' : 's'}).
+      {:else}
+        .
+      {/if}
+    </div>
   {/if}
 
   {#if importResult}
@@ -168,9 +198,9 @@
       <div class="action-row">
         <button class="btn btn-ghost" on:click={selectAllVisible}>Select All ({filtered.filter(a => !a.in_library).length})</button>
         <button class="btn btn-ghost" on:click={deselectAll}>Deselect</button>
-        {#if selectedAlbums.size > 0}
+        {#if selectedMissing > 0}
           <button class="btn btn-primary" on:click={queueSelected}>
-            Queue {selectedAlbums.size} Album{selectedAlbums.size === 1 ? '' : 's'}
+            Queue {selectedMissing} Album{selectedMissing === 1 ? '' : 's'}
           </button>
         {/if}
       </div>
@@ -242,6 +272,28 @@
 .source-label { font-weight: 600; font-size: 0.95rem; }
 .source-desc { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; }
 .source-desc code { background: var(--bg-active); padding: 2px 5px; border-radius: 3px; font-size: 0.78rem; }
+
+.source-help {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-card));
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.source-help strong {
+  color: var(--text-primary);
+}
+
+.source-help ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
+.source-help li {
+  margin: 2px 0;
+}
 
 .import-error {
   margin: 0 1.5rem 0.75rem; padding: 8px 12px; border-radius: var(--radius-sm);

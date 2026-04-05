@@ -2,6 +2,25 @@
 
 All notable changes to the Cassette project.
 
+## [Unreleased] - 2026-04-05
+
+### Desktop UX Modernization
+- Added a modular desktop shell with topbar quick actions, command palette integration, minimized player mode, and taskbar/tray controls
+- Added centralized frontend command registry and shortcut handling for navigation/playback/window actions
+- Added taskbar playback progress projection and compact-player persistence in frontend shell stores
+
+### Playback and Library Operations Stabilization
+- Fixed queue replacement to auto-start playback and set playback state immediately
+- Hardened duplicate detection by using album-artist fallback and title-aware grouping keys, with stable duplicate-group sort order
+- Hardened duplicate resolution to fail loudly when file or DB deletion fails instead of silently swallowing errors
+
+### Metadata, Import, and Settings Usability
+- Added guided metadata-repair selection (artist/album dropdown workflow) and clearer organize/ingest result messaging in Tools
+- Added a `Handle All` duplicate action in Tools for batch duplicate cleanup
+- Added `persist_effective_config` command and settings action to persist effective loaded secrets/config into runtime settings
+- Improved Spotify extended-history album completeness logic by comparing observed distinct streamed tracks against local track counts to reduce false in-library positives
+- Added artist-name variant grouping in Artists view to reduce split artist buckets from punctuation/spelling variants
+
 ## [Unreleased] - 2026-03-30
 
 ### Integrated Acquisition Loop

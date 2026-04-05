@@ -47,6 +47,11 @@ export async function saveDownloadConfig(config: DownloadConfig) {
   await loadDownloadConfig();
 }
 
+export async function persistEffectiveDownloadConfig() {
+  await api.persistEffectiveConfig();
+  await loadDownloadConfig();
+}
+
 export async function searchMetadata(query: string) {
   isSearchingMetadata.set(true);
   try {

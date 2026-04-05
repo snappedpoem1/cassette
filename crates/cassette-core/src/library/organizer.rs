@@ -219,17 +219,19 @@ pub fn find_duplicates(tracks: &[Track]) -> Vec<DuplicateGroup> {
     let mut groups: HashMap<String, Vec<&Track>> = HashMap::new();
 
     for track in tracks {
+        let artist = preferred_album_artist(track);
         let key = format!(
-            "{}::{}::{}::{}",
-            normalize(&track.album_artist),
+            "{}::{}::{}::{}::{}",
+            normalize(artist),
             normalize(&track.album),
             track.disc_number.unwrap_or(1),
             track.track_number.unwrap_or(0),
+            normalize(&track.title),
         );
         groups.entry(key).or_default().push(track);
     }
 
-    groups.into_iter()
+    let mut duplicates = groups.into_iter()
         .filter(|(_, group)| group.len() > 1)
         .map(|(key, group)| {
             let best_idx = pick_best_quality(&group);
@@ -256,7 +258,10 @@ pub fn find_duplicates(tracks: &[Track]) -> Vec<DuplicateGroup> {
 
             DuplicateGroup { key, tracks, recommendation }
         })
-        .collect()
+    .collect::<Vec<_>>();
+
+    duplicates.sort_by(|a, b| a.key.cmp(&b.key));
+    duplicates
 }
 
 /// Pick the best quality track from a group:
@@ -279,6 +284,14 @@ fn pick_best_quality(tracks: &[&Track]) -> usize {
         })
         .map(|(i, _)| i)
         .unwrap_or(0)
+}
+
+fn preferred_album_artist(track: &Track) -> &str {
+    if !track.album_artist.trim().is_empty() {
+        track.album_artist.as_str()
+    } else {
+        track.artist.as_str()
+    }
 }
 
 /// Move completed downloads from staging to library

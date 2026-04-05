@@ -28,11 +28,16 @@ pub fn parse_spotify_history(
     // Check which albums are already in the library
     let db = state.db.lock().unwrap();
     let library_albums: Vec<_> = db.get_albums().unwrap_or_default();
-    let library_set: HashMap<(String, String), bool> = library_albums
+    let library_track_counts: HashMap<(String, String), usize> = library_albums
         .iter()
-        .map(|a| ((a.artist.to_lowercase(), a.title.to_lowercase()), true))
+        .map(|a| {
+            (
+                (a.artist.to_lowercase(), a.title.to_lowercase()),
+                a.track_count.max(0) as usize,
+            )
+        })
         .collect();
-    let albums = summarize_spotify_albums(&all_entries, &library_set);
+    let albums = summarize_spotify_albums(&all_entries, &library_track_counts);
 
     let history_rows = albums
         .iter()

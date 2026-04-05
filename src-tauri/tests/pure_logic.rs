@@ -100,18 +100,21 @@ fn spotify_history_parser_summarizes_and_sorts() {
   {
     "master_metadata_album_artist_name": "The National",
     "master_metadata_album_album_name": "Boxer",
+        "master_metadata_track_name": "Fake Empire",
     "ms_played": 200000,
     "skipped": false
   },
   {
     "master_metadata_album_artist_name": "The National",
     "master_metadata_album_album_name": "Boxer",
+        "master_metadata_track_name": "Mistaken for Strangers",
     "ms_played": 100000,
     "skipped": true
   },
   {
     "master_metadata_album_artist_name": "Interpol",
     "master_metadata_album_album_name": "Turn on the Bright Lights",
+        "master_metadata_track_name": "Untitled",
     "ms_played": 250000,
     "skipped": false
   }
@@ -124,9 +127,9 @@ fn spotify_history_parser_summarizes_and_sorts() {
     let entries = spotify_history::parse_spotify_entries(&files).expect("entries should parse");
     assert_eq!(entries.len(), 3);
 
-    let mut library_set = HashMap::new();
-    library_set.insert(("the national".to_string(), "boxer".to_string()), true);
-    let albums = spotify_history::summarize_spotify_albums(&entries, &library_set);
+    let mut library_track_counts = HashMap::new();
+    library_track_counts.insert(("the national".to_string(), "boxer".to_string()), 2usize);
+    let albums = spotify_history::summarize_spotify_albums(&entries, &library_track_counts);
 
     assert_eq!(albums.len(), 2);
     assert_eq!(albums[0].artist, "The National");
@@ -154,12 +157,14 @@ fn spotify_import_pipeline_persists_to_db() {
   {
     "master_metadata_album_artist_name": "Frightened Rabbit",
     "master_metadata_album_album_name": "The Midnight Organ Fight",
+        "master_metadata_track_name": "The Modern Leper",
     "ms_played": 123000,
     "skipped": false
   },
   {
     "master_metadata_album_artist_name": "Frightened Rabbit",
     "master_metadata_album_album_name": "The Midnight Organ Fight",
+        "master_metadata_track_name": "The Twist",
     "ms_played": 110000,
     "skipped": true
   }
@@ -172,8 +177,8 @@ fn spotify_import_pipeline_persists_to_db() {
 
     let files = spotify_history::collect_spotify_history_files(&dir).expect("history files should be found");
     let entries = spotify_history::parse_spotify_entries(&files).expect("entries should parse");
-    let library_set = HashMap::new();
-    let albums = spotify_history::summarize_spotify_albums(&entries, &library_set);
+    let library_track_counts = HashMap::new();
+    let albums = spotify_history::summarize_spotify_albums(&entries, &library_track_counts);
 
     let rows = albums
         .iter()
@@ -277,4 +282,94 @@ fn batch_downloader_uses_shared_spotify_credential_resolver() {
     let source = include_str!("../src/bin/batch_download_cli.rs");
     assert!(source.contains("resolve_album_track_tasks_from_spotify_credentials("));
     assert!(!source.contains("resolve_album_track_tasks_with_metadata("));
+}
+
+#[test]
+fn desktop_setup_registers_media_shortcuts_and_tray_menu() {
+    let source = include_str!("../src/lib.rs");
+
+    assert!(source.contains("register_media_shortcuts(app)"));
+    assert!(source.contains("register_tray_menu(app)"));
+    assert!(source.contains("with_shortcuts([\"MediaPlayPause\", \"MediaTrackNext\", \"MediaTrackPrevious\"])"));
+    assert!(source.contains("TrayIconBuilder::with_id(\"cassette-tray\")"));
+}
+
+#[test]
+fn tray_show_paths_restore_main_window_focus() {
+    let source = include_str!("../src/lib.rs");
+
+    assert!(source.contains("\"show\""));
+    assert!(source.contains("window.unminimize()"));
+    assert!(source.contains("window.show()"));
+    assert!(source.contains("window.set_focus()"));
+    assert!(source.contains("TrayIconEvent::Click"));
+    assert!(source.contains("MouseButton::Left"));
+    assert!(source.contains("MouseButtonState::Up"));
+}
+
+#[test]
+fn command_palette_keyboard_contract_is_present() {
+    let source = include_str!("../../ui/src/lib/components/CommandPalette.svelte");
+
+    assert!(source.contains("event.ctrlKey || event.metaKey"));
+    assert!(source.contains("event.key.toLowerCase() === 'k'"));
+    assert!(source.contains("if (event.key === 'Escape')"));
+    assert!(source.contains("if (event.key === 'Enter')"));
+    assert!(source.contains("handleGlobalShortcut(event)"));
+}
+
+#[test]
+fn command_shortcuts_protect_editable_targets() {
+    let source = include_str!("../../ui/src/lib/stores/commands.ts");
+
+    assert!(source.contains("function isEditableTarget"));
+    assert!(source.contains("target.isContentEditable"));
+    assert!(source.contains("tag === 'input' || tag === 'textarea' || tag === 'select'"));
+    assert!(source.contains("if (isEditableTarget(event.target))"));
+    assert!(source.contains("return false;"));
+}
+
+#[test]
+fn route_components_do_not_import_desktop_window_or_core_apis() {
+    let layout = include_str!("../../ui/src/routes/+layout.svelte");
+    let library = include_str!("../../ui/src/routes/+page.svelte");
+    let downloads = include_str!("../../ui/src/routes/downloads/+page.svelte");
+    let settings = include_str!("../../ui/src/routes/settings/+page.svelte");
+
+    for source in [layout, library, downloads, settings] {
+        assert!(!source.contains("@tauri-apps/api/window"));
+        assert!(!source.contains("@tauri-apps/api/core"));
+    }
+}
+
+#[test]
+fn spotify_intake_and_album_queue_use_canonical_operator_story() {
+    let import_commands = include_str!("../src/commands/import.rs");
+    let download_commands = include_str!("../src/commands/downloads.rs");
+
+    assert!(import_commands.contains("import_desired_spotify_json"));
+    assert!(import_commands.contains("queue_album_tracks("));
+    assert!(import_commands.contains("TrackTaskSource::SpotifyLibrary"));
+    assert!(download_commands.contains("plan_acquisition(state.clone(), request).await"));
+}
+
+#[test]
+fn planner_identity_lane_carries_release_group_and_edition_policy() {
+    let planner_commands = include_str!("../src/commands/planner.rs");
+
+    assert!(planner_commands.contains("musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone()"));
+    assert!(planner_commands.contains("musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone(),"));
+    assert!(planner_commands.contains("edition_policy: request.edition_policy.clone()"));
+    assert!(planner_commands.contains("apply_edition_policy_filter_to_records"));
+}
+
+#[test]
+fn queue_boundary_enforces_richer_identity_contract() {
+    let download_commands = include_str!("../src/commands/downloads.rs");
+
+    assert!(download_commands.contains("validate_request_identity_contract(&task, &request)?"));
+    assert!(download_commands.contains("request contract violation for task"));
+    assert!(download_commands.contains("source_track_id was not preserved"));
+    assert!(download_commands.contains("source_album_id was not preserved"));
+    assert!(download_commands.contains("musicbrainz_release_group_id was not preserved"));
 }

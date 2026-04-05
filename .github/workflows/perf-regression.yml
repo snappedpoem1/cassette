@@ -1,0 +1,51 @@
+name: Perf Regression
+
+on:
+  workflow_dispatch:
+
+jobs:
+  perf:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          Push-Location ui
+          npm ci
+          Pop-Location
+
+      - name: Capture baseline candidate
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/perf_baseline_capture.ps1 -Runs 3 -WarmupRuns 1
+
+      - name: Find latest perf result
+        id: perf_file
+        shell: pwsh
+        run: |
+          $latest = Get-ChildItem -Path "artifacts/perf" -Recurse -Filter "results.json" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $latest) { throw "No perf results.json found" }
+          "result_path=$($latest.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Run perf regression gate
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/perf_regression_gate.ps1 -CandidateResultPath "${{ steps.perf_file.outputs.result_path }}"
+
+      - name: Upload perf artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-artifacts
+          path: artifacts/perf/**

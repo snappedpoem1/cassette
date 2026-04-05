@@ -1,6 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
 import { listen } from '@tauri-apps/api/event';
 import { api, type PlaybackState, type NowPlayingContext } from '$lib/api/tauri';
+import { browser } from '$app/environment';
+import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,39 @@ export const progressPct = derived(
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastTrackId: number | null = null;
+let lastTaskbarSignature: string | null = null;
+
+async function syncTaskbarPlaybackProgress(state: PlaybackState): Promise<void> {
+  if (!browser) {
+    return;
+  }
+
+  const progress =
+    state.duration_secs > 0
+      ? Math.max(0, Math.min(100, Math.round((state.position_secs / state.duration_secs) * 100)))
+      : 0;
+
+  const signature = `${state.current_track?.id ?? 'none'}:${state.is_playing}:${progress}`;
+  if (signature === lastTaskbarSignature) {
+    return;
+  }
+  lastTaskbarSignature = signature;
+
+  try {
+    const window = getCurrentWindow();
+    if (!state.current_track) {
+      await window.setProgressBar({ status: ProgressBarStatus.None });
+      return;
+    }
+
+    await window.setProgressBar({
+      status: state.is_playing ? ProgressBarStatus.Normal : ProgressBarStatus.Paused,
+      progress,
+    });
+  } catch {
+    // noop when taskbar integration is unavailable
+  }
+}
 
 export function startPlayerPoll() {
   if (pollTimer) return;
@@ -44,6 +79,7 @@ export function startPlayerPoll() {
     try {
       const state = await api.getPlaybackState();
       playbackState.set(state);
+      void syncTaskbarPlaybackProgress(state);
 
       const track = state.current_track;
       if (track && track.id !== lastTrackId) {

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
@@ -7,6 +7,7 @@ pub struct SpotifyStreamEntry {
     pub ms_played: Option<u64>,
     pub master_metadata_album_artist_name: Option<String>,
     pub master_metadata_album_album_name: Option<String>,
+    pub master_metadata_track_name: Option<String>,
     #[serde(default)]
     pub skipped: Option<bool>,
 }
@@ -71,9 +72,14 @@ pub fn parse_spotify_entries(json_files: &[PathBuf]) -> Result<Vec<SpotifyStream
 
 pub fn summarize_spotify_albums(
     all_entries: &[SpotifyStreamEntry],
-    library_set: &HashMap<(String, String), bool>,
+    library_track_counts: &HashMap<(String, String), usize>,
 ) -> Vec<SpotifyAlbumSummary> {
-    let mut album_map: HashMap<(String, String), SpotifyAlbumSummary> = HashMap::new();
+    struct Aggregate {
+        summary: SpotifyAlbumSummary,
+        distinct_tracks: HashSet<String>,
+    }
+
+    let mut album_map: HashMap<(String, String), Aggregate> = HashMap::new();
 
     for entry in all_entries {
         let artist = match &entry.master_metadata_album_artist_name {
@@ -88,30 +94,46 @@ pub fn summarize_spotify_albums(
         let skipped = entry.skipped.unwrap_or(false);
 
         let key = (artist.to_lowercase(), album.to_lowercase());
-        let summary = album_map.entry(key).or_insert_with(|| SpotifyAlbumSummary {
-            artist: artist.clone(),
-            album: album.clone(),
-            total_ms: 0,
-            play_count: 0,
-            skip_count: 0,
-            in_library: false,
+        let aggregate = album_map.entry(key).or_insert_with(|| Aggregate {
+            summary: SpotifyAlbumSummary {
+                artist: artist.clone(),
+                album: album.clone(),
+                total_ms: 0,
+                play_count: 0,
+                skip_count: 0,
+                in_library: false,
+            },
+            distinct_tracks: HashSet::new(),
         });
-        summary.total_ms += ms;
+        aggregate.summary.total_ms += ms;
         if skipped {
-            summary.skip_count += 1;
+            aggregate.summary.skip_count += 1;
         } else {
-            summary.play_count += 1;
+            aggregate.summary.play_count += 1;
+        }
+        if let Some(track_name) = &entry.master_metadata_track_name {
+            let normalized = normalize_key_component(track_name);
+            if !normalized.is_empty() {
+                aggregate.distinct_tracks.insert(normalized);
+            }
         }
     }
 
     let mut albums: Vec<SpotifyAlbumSummary> = album_map
-        .into_values()
-        .map(|mut s| {
-            s.in_library = library_set.contains_key(&(s.artist.to_lowercase(), s.album.to_lowercase()));
-            s
+        .into_iter()
+        .map(|(key, mut aggregate)| {
+            let local_track_count = library_track_counts.get(&key).copied().unwrap_or(0);
+            let observed_streamed_tracks = aggregate.distinct_tracks.len();
+            let minimum_expected = observed_streamed_tracks.max(1);
+            aggregate.summary.in_library = local_track_count >= minimum_expected;
+            aggregate.summary
         })
         .collect();
 
     albums.sort_by(|a, b| b.total_ms.cmp(&a.total_ms));
     albums
+}
+
+fn normalize_key_component(value: &str) -> String {
+    value.trim().to_lowercase()
 }

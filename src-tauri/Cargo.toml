@@ -26,7 +26,7 @@ cassette-core = { path = "../crates/cassette-core" }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.10.3", features = [] }
+tauri = { version = "2.10.3", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

@@ -25,51 +25,14 @@ pub fn get_config(state: State<'_, AppState>) -> DownloadConfig {
 #[tauri::command]
 pub fn save_config(state: State<'_, AppState>, config: DownloadConfig) {
     let db = state.db.lock().unwrap();
+    persist_config(&db, &config, true);
+}
 
-    persist_string_setting(&db, "library_base", &config.library_base);
-    persist_string_setting(&db, "staging_folder", &config.staging_folder);
-
-    persist_optional_setting(&db, "slskd_url", &config.slskd_url, false);
-    persist_optional_setting(&db, "slskd_user", &config.slskd_user, false);
-    persist_optional_setting(&db, "slskd_pass", &config.slskd_pass, true);
-
-    persist_optional_setting(&db, "real_debrid_key", &config.real_debrid_key, true);
-
-    persist_optional_setting(&db, "qobuz_email", &config.qobuz_email, false);
-    persist_optional_setting(&db, "qobuz_password", &config.qobuz_password, true);
-
-    persist_optional_setting(&db, "deezer_arl", &config.deezer_arl, true);
-
-    persist_optional_setting(&db, "spotify_client_id", &config.spotify_client_id, false);
-    persist_optional_setting(
-        &db,
-        "spotify_client_secret",
-        &config.spotify_client_secret,
-        true,
-    );
-    persist_optional_setting(
-        &db,
-        "spotify_access_token",
-        &config.spotify_access_token,
-        true,
-    );
-    persist_optional_setting(&db, "genius_token", &config.genius_token, true);
-
-    persist_optional_setting(&db, "jackett_url", &config.jackett_url, false);
-    persist_optional_setting(&db, "jackett_api_key", &config.jackett_api_key, true);
-
-    persist_optional_setting(&db, "slskd_downloads_dir", &config.slskd_downloads_dir, false);
-
-    persist_optional_setting(&db, "nzbgeek_api_key", &config.nzbgeek_api_key, true);
-    persist_optional_setting(&db, "sabnzbd_url", &config.sabnzbd_url, false);
-    persist_optional_setting(&db, "sabnzbd_api_key", &config.sabnzbd_api_key, true);
-
-    persist_optional_setting(&db, "discogs_token", &config.discogs_token, true);
-    persist_optional_setting(&db, "lastfm_api_key", &config.lastfm_api_key, true);
-    persist_optional_setting(&db, "lastfm_username", &config.lastfm_username, false);
-
-    persist_optional_setting(&db, "ytdlp_path", &config.ytdlp_path, false);
-    persist_optional_setting(&db, "sevenzip_path", &config.sevenzip_path, false);
+#[tauri::command]
+pub fn persist_effective_config(state: State<'_, AppState>) {
+    let effective = load_config(&state);
+    let db = state.db.lock().unwrap();
+    persist_config(&db, &effective, false);
 }
 
 #[tauri::command]
@@ -209,4 +172,51 @@ fn persist_optional_setting(db: &Db, key: &str, value: &Option<String>, preserve
     }
 
     let _ = db.set_setting(key, trimmed);
+}
+
+fn persist_config(db: &Db, config: &DownloadConfig, preserve_mask: bool) {
+    persist_string_setting(db, "library_base", &config.library_base);
+    persist_string_setting(db, "staging_folder", &config.staging_folder);
+
+    persist_optional_setting(db, "slskd_url", &config.slskd_url, false);
+    persist_optional_setting(db, "slskd_user", &config.slskd_user, false);
+    persist_optional_setting(db, "slskd_pass", &config.slskd_pass, preserve_mask);
+
+    persist_optional_setting(db, "real_debrid_key", &config.real_debrid_key, preserve_mask);
+
+    persist_optional_setting(db, "qobuz_email", &config.qobuz_email, false);
+    persist_optional_setting(db, "qobuz_password", &config.qobuz_password, preserve_mask);
+
+    persist_optional_setting(db, "deezer_arl", &config.deezer_arl, preserve_mask);
+
+    persist_optional_setting(db, "spotify_client_id", &config.spotify_client_id, false);
+    persist_optional_setting(
+        db,
+        "spotify_client_secret",
+        &config.spotify_client_secret,
+        preserve_mask,
+    );
+    persist_optional_setting(
+        db,
+        "spotify_access_token",
+        &config.spotify_access_token,
+        preserve_mask,
+    );
+    persist_optional_setting(db, "genius_token", &config.genius_token, preserve_mask);
+
+    persist_optional_setting(db, "jackett_url", &config.jackett_url, false);
+    persist_optional_setting(db, "jackett_api_key", &config.jackett_api_key, preserve_mask);
+
+    persist_optional_setting(db, "slskd_downloads_dir", &config.slskd_downloads_dir, false);
+
+    persist_optional_setting(db, "nzbgeek_api_key", &config.nzbgeek_api_key, preserve_mask);
+    persist_optional_setting(db, "sabnzbd_url", &config.sabnzbd_url, false);
+    persist_optional_setting(db, "sabnzbd_api_key", &config.sabnzbd_api_key, preserve_mask);
+
+    persist_optional_setting(db, "discogs_token", &config.discogs_token, preserve_mask);
+    persist_optional_setting(db, "lastfm_api_key", &config.lastfm_api_key, preserve_mask);
+    persist_optional_setting(db, "lastfm_username", &config.lastfm_username, false);
+
+    persist_optional_setting(db, "ytdlp_path", &config.ytdlp_path, false);
+    persist_optional_setting(db, "sevenzip_path", &config.sevenzip_path, false);
 }

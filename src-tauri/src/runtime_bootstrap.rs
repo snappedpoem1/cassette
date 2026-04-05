@@ -2,6 +2,27 @@ use anyhow::Result;
 use cassette_core::{db::Db, librarian::db::LibrarianDb};
 use std::path::{Path, PathBuf};
 
+fn run_bootstrap_future<T, E>(
+    future: impl std::future::Future<Output = std::result::Result<T, E>>,
+) -> Result<T>
+where
+    E: Into<anyhow::Error>,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async { future.await.map_err(Into::into) })
+        })
+    } else {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async { future.await.map_err(Into::into) })
+    }
+}
+
 pub fn control_db_path_for_runtime(db_path: &Path) -> PathBuf {
     db_path
         .parent()
@@ -12,11 +33,8 @@ pub fn control_db_path_for_runtime(db_path: &Path) -> PathBuf {
 pub fn open_runtime_and_control_db(db_path: &Path) -> Result<(Db, LibrarianDb)> {
     let db = Db::open(db_path)?;
     let control_db_path = control_db_path_for_runtime(db_path);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let control_db = runtime.block_on(async { LibrarianDb::connect(&control_db_path).await })?;
-    runtime.block_on(async { converge_canonical_identity(&db, &control_db).await })?;
+    let control_db = run_bootstrap_future(async { LibrarianDb::connect(&control_db_path).await })?;
+    run_bootstrap_future(async { converge_canonical_identity(&db, &control_db).await })?;
     Ok((db, control_db))
 }
 

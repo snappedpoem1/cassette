@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-03
+Last updated: 2026-04-05
 
 ## Architecture
 
@@ -25,14 +25,25 @@ Last updated: 2026-04-03
 - `tag_rescue_cli` now applies a staged repair ladder for missing/zero track numbers: embedded tags, filename prefixes, then conservative album-pattern inference
 - `tag_rescue_cli` can emit a machine-readable repair report with repaired rows, unresolved rows, and repair-source classification
 - Organizer canonical path generation now preserves a valid existing non-zero filename track prefix when DB `track_number` is zero or missing
+- Duplicate grouping now normalizes album-artist fallback (`album_artist` then `artist`) and includes title in grouping key, reducing false duplicate clusters for mixed-artist albums
+- Duplicate resolution now fails loudly on file/DB delete failures instead of silently warning while reporting success
 - Offline cleanup tooling includes grouped manifest builders, safe apply scripts, and rollback-oriented remediation helpers under `scripts/`
 
 ### Playback
 - Audio playback via Symphonia decode + `cpal` output
 - Queue management (add, remove, reorder, clear)
+- Queue replacement now auto-starts playback (`queue_tracks` loads and plays the selected start track and marks playback state as playing)
 - Playlist CRUD
 - Now-playing context from Last.fm plus Last.fm recent-scrobble sync into local artist/song/play-history tables
 - Synced/plain lyrics from LRCLIB
+
+### Desktop UX Stabilization (2026-04-05)
+
+- Settings now exposes a persist-loaded-secrets action that writes effective in-memory/env-loaded provider credentials into runtime settings (`persist_effective_config`)
+- Tools route now includes guided metadata correction via artist/album dropdowns and clearer organize/ingest outcome messaging
+- Duplicates route now supports deterministic sort order plus a `Handle All` action for batch duplicate cleanup
+- Artists route now groups name variants with normalized artist keys to reduce split-folder behavior from punctuation/spelling style drift
+- Spotify extended-history album summary now uses observed distinct track coverage versus local album track count to reduce false `in_library` positives on incomplete local albums
 
 ### Acquisition Pipeline (Director Engine)
 - Two-pass waterfall orchestration with per-provider semaphores

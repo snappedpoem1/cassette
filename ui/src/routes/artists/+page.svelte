@@ -5,17 +5,97 @@
   import { formatDuration, coverSrc } from '$lib/utils';
   import type { Artist, Album, Track } from '$lib/api/tauri';
 
-  let selectedArtist: Artist | null = null;
+  interface ArtistCluster {
+    key: string;
+    primaryName: string;
+    aliases: string[];
+    members: Artist[];
+    albumCount: number;
+    trackCount: number;
+  }
+
+  let selectedArtist: ArtistCluster | null = null;
   let artistAlbums: Album[] = [];
   let selectedAlbum: Album | null = null;
   let albumTracks: Track[] = [];
 
-  async function selectArtist(artist: Artist) {
-    selectedArtist = artist;
+  const PUNCT_OR_SYMBOL = /[.,'"`’()\[\]{}!?/\\+_-]/g;
+  const FEAT_SUFFIX = /\b(feat|featuring|ft|with)\b.*$/i;
+
+  function normalizeArtistKey(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/&/g, ' and ')
+      .replace(FEAT_SUFFIX, '')
+      .replace(PUNCT_OR_SYMBOL, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function pickPrimaryName(names: string[]): string {
+    return names.slice().sort((a, b) => {
+      const len = a.length - b.length;
+      return len !== 0 ? len : a.localeCompare(b);
+    })[0] ?? names[0] ?? 'Unknown Artist';
+  }
+
+  function compareAlbums(a: Album, b: Album): number {
+    const yearA = a.year ?? Number.MAX_SAFE_INTEGER;
+    const yearB = b.year ?? Number.MAX_SAFE_INTEGER;
+    if (yearA !== yearB) {
+      return yearA - yearB;
+    }
+    return a.title.localeCompare(b.title);
+  }
+
+  function compareClusters(a: ArtistCluster, b: ArtistCluster): number {
+    if (a.primaryName !== b.primaryName) {
+      return a.primaryName.localeCompare(b.primaryName);
+    }
+    return b.trackCount - a.trackCount;
+  }
+
+  $: artistClusters = (() => {
+    const byKey = new Map<string, Artist[]>();
+    for (const artist of $artists) {
+      const key = normalizeArtistKey(artist.name);
+      if (!key) continue;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(artist);
+    }
+
+    return Array.from(byKey.entries())
+      .map(([key, members]) => {
+        const aliases = members.map((m) => m.name).sort((a, b) => a.localeCompare(b));
+        const albumCount = members.reduce((sum, m) => sum + m.album_count, 0);
+        const trackCount = members.reduce((sum, m) => sum + m.track_count, 0);
+        return {
+          key,
+          primaryName: pickPrimaryName(aliases),
+          aliases,
+          members,
+          albumCount,
+          trackCount,
+        } as ArtistCluster;
+      })
+      .sort(compareClusters);
+  })();
+
+  async function selectArtist(cluster: ArtistCluster) {
+    selectedArtist = cluster;
     selectedAlbum = null;
     albumTracks = [];
+
+    const memberNames = new Set(cluster.members.map((member) => member.name));
     const all = await api.getAlbums();
-    artistAlbums = all.filter((a) => a.artist === artist.name || a.artist.includes(artist.name));
+    artistAlbums = all
+      .filter((album) => {
+        if (memberNames.has(album.artist)) {
+          return true;
+        }
+        return normalizeArtistKey(album.artist) === cluster.key;
+      })
+      .sort(compareAlbums);
   }
 
   async function selectAlbum(album: Album) {
@@ -51,7 +131,7 @@
 
   {#if !selectedArtist}
     <!-- Artist grid -->
-    {#if $artists.length === 0}
+    {#if artistClusters.length === 0}
       <div class="empty-state">
         <div class="empty-icon">🎤</div>
         <div class="empty-title">No artists yet</div>
@@ -59,23 +139,26 @@
       </div>
     {:else}
       <div class="artist-grid">
-        {#each $artists as artist}
+        {#each artistClusters as cluster}
           <!-- svelte-ignore a11y-no-static-element-interactions -->
           <div
             class="artist-card"
             role="button"
             tabindex="0"
-            on:click={() => selectArtist(artist)}
+            on:click={() => selectArtist(cluster)}
             on:keydown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                selectArtist(artist);
+                selectArtist(cluster);
               }
             }}
           >
-            <div class="artist-avatar">{artist.name[0]?.toUpperCase() ?? '?'}</div>
-            <div class="artist-name">{artist.name}</div>
-            <div class="artist-meta">{artist.album_count} albums · {artist.track_count} tracks</div>
+            <div class="artist-avatar">{cluster.primaryName[0]?.toUpperCase() ?? '?'}</div>
+            <div class="artist-name">{cluster.primaryName}</div>
+            <div class="artist-meta">{cluster.albumCount} albums · {cluster.trackCount} tracks</div>
+            {#if cluster.aliases.length > 1}
+              <div class="artist-variants">{cluster.aliases.length} name variants</div>
+            {/if}
           </div>
         {/each}
       </div>
@@ -113,6 +196,9 @@
             <div class="album-info">
               <div class="album-title">{album.title}</div>
               <div class="album-meta">{album.year ?? ''} · {album.track_count} tracks</div>
+              {#if album.artist !== selectedArtist?.primaryName}
+                <div class="album-alias">{album.artist}</div>
+              {/if}
             </div>
           </div>
         {/each}
@@ -127,7 +213,7 @@
         <div class="track-row" on:dblclick={() => queueTracks(albumTracks, i)}>
           <span class="track-num">{track.track_number ?? i + 1}</span>
           <div class="track-title">{track.title}</div>
-          <div class="track-artist">{track.artist !== selectedArtist?.name ? track.artist : ''}</div>
+          <div class="track-artist">{normalizeArtistKey(track.artist) !== selectedArtist?.key ? track.artist : ''}</div>
           <span class="track-duration">{formatDuration(track.duration_secs)}</span>
           <span class="track-format">{track.format.toUpperCase()}</span>
         </div>
@@ -167,6 +253,13 @@
 }
 .artist-name { font-weight: 600; font-size: 0.85rem; word-break: break-word; }
 .artist-meta { font-size: 0.72rem; color: var(--text-muted); }
+.artist-variants { font-size: 0.68rem; color: var(--accent-bright); }
+
+.album-alias {
+  margin-top: 2px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
 
 .track-list { padding: 8px; }
 </style>
