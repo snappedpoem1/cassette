@@ -278,17 +278,17 @@
 }
 .back-btn:hover { color: var(--text-primary); }
 .album-detail-art {
-  width: 160px; height: 160px; flex-shrink: 0;
+  width: 84px; height: 84px; flex-shrink: 0;
   border-radius: var(--radius); overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
 }
 .album-detail-art img { width: 100%; height: 100%; object-fit: cover; }
 .album-detail-art-ph {
   width: 100%; height: 100%;
-  background: var(--bg-active);
-  display: flex; align-items: center; justify-content: center; font-size: 3rem;
+  background: var(--bg-card);
+  display: flex; align-items: center; justify-content: center; font-size: 2.5rem;
 }
-.album-detail-info h1 { font-size: 1.6rem; }
+.album-detail-info h1 { font-size: 1.3rem; font-weight: 800; color: #deeaf8; }
 .album-detail-artist { color: var(--text-secondary); font-size: 1rem; margin-top: 4px; }
 .album-detail-meta   { color: var(--text-muted); font-size: 0.85rem; margin-top: 4px; }
 
