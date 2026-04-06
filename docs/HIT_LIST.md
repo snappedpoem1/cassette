@@ -94,6 +94,8 @@ Already proven:
 - [x] Finish release-group identity threading and prevent identity collapse at all active queue boundaries — **DONE 2026-04-06**: request signatures now include `musicbrainz_release_group_id`, and source-alias persistence now stores `musicbrainz.release_group_id` across planner/director request boundaries with regression tests.
 - [x] Complete planner-stage cutover for all remaining runtime/operator lanes — **DONE 2026-04-06**: `plan_and_submit` live in coordinator binary; proof run confirmed planner path executes without crash (`engine_pipeline_cli --resume --limit 5 --skip-organize-subset --skip-post-sync`, no pending delta_queue work at proof time). See `PROJECT_STATE.md` for proof artifact.
 - [x] Prove and document Discogs and Last.fm enrichment behavior end-to-end — **DONE 2026-04-06**: `enrich_probe_cli` ran against live runtime DB; both clients implemented, credentials not configured at proof time (0 tracks probed, binary reported cleanly). Proof recorded in `PROJECT_STATE.md`.
+- [x] Add adaptive provider orchestrator nudge with bounded floor guarantees — **DONE 2026-04-06**: recent finalized provider memory now nudges waterfall ordering conservatively (trust_rank floor <= 10 protected) with debug reorder evidence.
+- [x] Add dead-letter command center with replay path — **DONE 2026-04-06**: grouped dead-letter summary shipped to Downloads with per-item retry routed through planner approval (`dead_letter_replay` lineage).
 - [x] Clarify Bandcamp scope as payload URL resolver and record next-step ownership — **DONE 2026-04-06**: Bandcamp remains resolver-only for payload URLs and ownership scope is recorded in `DECISIONS.md` Decision 33.
 
 ---

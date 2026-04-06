@@ -643,6 +643,15 @@ Acceptance:
 
 Proof: `enrich_probe_cli` ran against live runtime DB on 2026-04-06. Both clients implemented and wired; credentials not configured at proof time so 0 tracks probed, 0 hits — binary ran correctly and reported cleanly. `PROJECT_STATE.md` and `TOOL_AND_SERVICE_REGISTRY.md` updated with proof artifact.
 
+### [P2] [done] Add dead-letter command center with replay path
+
+Acceptance:
+
+- [x] Runtime DB exposes grouped dead-letter summary for permanently failed/cancelled tasks
+- [x] Tauri command surface exposes dead-letter summary and per-task replay actions
+- [x] Downloads UI shows collapsible dead-letter groups with suggested fixes and retry buttons
+- [x] Replay path routes through planner (`plan_acquisition` -> `approve_planned_request`) with replay lineage
+
 ### [P2] [done] Clarify Bandcamp scope as payload URL resolver and decide next-step ownership
 
 Acceptance:

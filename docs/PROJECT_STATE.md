@@ -62,6 +62,7 @@ Last updated: 2026-04-06
 - Trust Ledger v1 now derives plain-language request reason cards from existing acquisition timeline rows, Director terminal history, candidate review evidence, operation events, and gatekeeper audit rows instead of introducing a second persistence layer
 - Downloads request lineage now carries trust summary plus correlated operation-event/gatekeeper evidence context, and Home surfaces recent trust pressure through reason-code strips/distribution summaries
 - Downloads request rows now surface edition-intelligence hints (`musicbrainz_release_group_id`, `edition_policy`) alongside trust/queue state so planner identity choices stay visible after submission
+- Dead-Letter Command Center now groups permanently failed/cancelled director tasks by failure class below the Blocked lane, shows plain-language recovery hints, and supports per-item replay through the planner approval path with `dead_letter_replay` lineage
 - Settings now exposes Policy Profiles (`playback_first`, `balanced_auto`, `aggressive_overnight`) and applying a profile hot-reloads Director config in-place with deterministic, logged runtime behavior changes
 
 ### Acquisition Pipeline (Director Engine)
