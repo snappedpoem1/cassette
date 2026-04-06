@@ -13,7 +13,8 @@
     AcquisitionRequestEvent,
     AcquisitionRequestListItem,
     CandidateReviewItem,
-    DownloadAlbumResult
+    DownloadAlbumResult,
+    RequestLineage,
   } from '$lib/api/tauri';
 
   let searchInput = '';
@@ -29,7 +30,7 @@
   let expandedRequestId: number | null = null;
   let requestTimeline: AcquisitionRequestEvent[] = [];
   let requestCandidates: CandidateReviewItem[] = [];
-  let requestLineage: any = null;
+  let requestLineage: RequestLineage | null = null;
 
   async function toggleReview(taskId: string) {
     if (expandedJob === taskId) {
