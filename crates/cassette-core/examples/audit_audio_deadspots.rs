@@ -117,7 +117,12 @@ fn analyze_track(path: &Path, config: &DeadspotConfig) -> Result<Option<TrackSta
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| e.to_string())?;
 
     let mut format = probed.format;
@@ -375,10 +380,7 @@ async fn main() -> Result<(), String> {
                         .reasons
                         .iter()
                         .any(|r| r.contains("silent placeholder"));
-                    let has_deadspot = found
-                        .reasons
-                        .iter()
-                        .any(|r| r.contains("long silent run"));
+                    let has_deadspot = found.reasons.iter().any(|r| r.contains("long silent run"));
 
                     if is_placeholder {
                         write.probable_silent_placeholders += 1;

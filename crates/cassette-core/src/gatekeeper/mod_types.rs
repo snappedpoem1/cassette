@@ -15,9 +15,17 @@ pub struct IngressOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AdmissionDecision {
-    Admitted { canonical_path: PathBuf, confidence: f32 },
-    Quarantined { reason: QuarantineReason, manual_review_required: bool },
-    Rejected { reason: String },
+    Admitted {
+        canonical_path: PathBuf,
+        confidence: f32,
+    },
+    Quarantined {
+        reason: QuarantineReason,
+        manual_review_required: bool,
+    },
+    Rejected {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,9 +108,16 @@ impl QuarantineReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NextAction {
     None,
-    TriggerEnrichment { local_file_id: i64, track_id: Option<i64> },
-    RetryLater { reason: String },
-    ManualReview { reason: String },
+    TriggerEnrichment {
+        local_file_id: i64,
+        track_id: Option<i64>,
+    },
+    RetryLater {
+        reason: String,
+    },
+    ManualReview {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

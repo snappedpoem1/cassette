@@ -7,6 +7,11 @@
 **Codebase Shape**: Rust workspace + Tauri 2 + SvelteKit + SQLite
 **Last Updated**: 2026-03-30
 
+Scope note:
+
+- Cassette is a single-owner personal project.
+- Treat all readiness language as personal reliability confidence, not productization or commercial launch planning.
+
 ---
 
 ## What Cassette Is

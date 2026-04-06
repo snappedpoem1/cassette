@@ -12,7 +12,10 @@ pub fn summarize(outcomes: Vec<IngressOutcome>) -> BatchIngestOutcome {
             AdmissionDecision::Admitted { .. } => admitted += 1,
             AdmissionDecision::Quarantined { reason, .. } => {
                 quarantined += 1;
-                if matches!(reason, crate::gatekeeper::mod_types::QuarantineReason::DuplicateDetected) {
+                if matches!(
+                    reason,
+                    crate::gatekeeper::mod_types::QuarantineReason::DuplicateDetected
+                ) {
                     duplicates_detected += 1;
                 }
             }

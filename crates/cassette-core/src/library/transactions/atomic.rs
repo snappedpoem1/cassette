@@ -5,16 +5,14 @@ use std::future::Future;
 use std::pin::Pin;
 
 impl LibraryManager {
-    pub async fn execute_atomic<T, F>(
-        &self,
-        operation_id: &str,
-        f: F,
-    ) -> Result<T>
+    pub async fn execute_atomic<T, F>(&self, operation_id: &str, f: F) -> Result<T>
     where
         T: Send,
         F: for<'a> FnOnce(
             &'a mut SqliteConnection,
-        ) -> Pin<Box<dyn Future<Output = std::result::Result<T, sqlx::Error>> + Send + 'a>>,
+        ) -> Pin<
+            Box<dyn Future<Output = std::result::Result<T, sqlx::Error>> + Send + 'a>,
+        >,
     {
         let mut tx = self.db_pool.begin().await?;
         let result = {

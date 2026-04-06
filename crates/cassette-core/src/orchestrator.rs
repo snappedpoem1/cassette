@@ -16,6 +16,6 @@ pub use error::{OrchestratorError, Result};
 pub use reconciliation::engine::reconcile_desired_against_local;
 pub use sequencing::full_sync::run_full_library_sync_with_manager;
 pub use types::{
-	DeltaQueueEntry, FullSyncOutcome, LocalFileMatch, MatchMethod, ReconciliationResult,
-	ReconciliationStatus, TrackReconciliation,
+    DeltaQueueEntry, FullSyncOutcome, LocalFileMatch, MatchMethod, ReconciliationResult,
+    ReconciliationStatus, TrackReconciliation,
 };

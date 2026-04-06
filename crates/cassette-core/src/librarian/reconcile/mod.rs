@@ -16,7 +16,10 @@ pub async fn reconcile_desired_state(db: &LibrarianDb) -> Result<usize> {
     for item in desired {
         let outcome = match_desired_track(db, &item).await?;
         let matched_file = if let Some(track_id) = outcome.matched_track_id {
-            db.list_local_files_for_track(track_id).await?.into_iter().next()
+            db.list_local_files_for_track(track_id)
+                .await?
+                .into_iter()
+                .next()
         } else {
             None
         };

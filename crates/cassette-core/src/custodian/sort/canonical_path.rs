@@ -35,7 +35,9 @@ pub fn canonical_metadata_from_report(path: &Path, report: &ValidationReport) ->
         .to_string();
 
     let lofty = lofty::probe::Probe::open(path).and_then(|p| p.read()).ok();
-    let tag = lofty.as_ref().and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
+    let tag = lofty
+        .as_ref()
+        .and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
 
     CanonicalMetadata {
         artist: tag.and_then(|t| t.artist()).map(|v| v.to_string()),

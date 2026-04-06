@@ -23,7 +23,12 @@ fn compute_fingerprint_blocking(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| GatekeeperError::FingerprintFailed(e.to_string()))?;
 
     let mut format = probed.format;

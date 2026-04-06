@@ -1,6 +1,6 @@
 # Clean Machine Checklist
 
-Last updated: 2026-04-03
+Last updated: 2026-04-06
 
 Use this before claiming Cassette is shippable on a fresh Windows machine.
 
@@ -13,7 +13,6 @@ Use this before claiming Cassette is shippable on a fresh Windows machine.
 
 Optional but expected for the current machine-proven acquisition setup:
 
-- `slskd` running on `http://localhost:5030`
 - `yt-dlp` available on `PATH`
 - `7-Zip` at `C:\Program Files\7-Zip\7z.exe` for torrent/Real-Debrid archive extraction
 - Provider credentials in app settings, `.env`, or external config files as documented in `PROJECT_STATE.md`
@@ -58,6 +57,11 @@ That script currently proves:
 - `npm run build`
 - `.\scripts\smoke_desktop.ps1 -Strict`
 
+`smoke_desktop.ps1` now validates managed `slskd` readiness by running
+`cargo run -p cassette --bin slskd_runtime_probe_cli -- --json`, which reuses the same
+runtime startup contract Cassette uses for bundled `slskd.exe` instead of checking port `5030`
+in isolation.
+
 Optional integrated run (includes local clean-room bootstrap checks):
 
 ```powershell
@@ -87,4 +91,3 @@ Required fix: `default-run = "cassette"` in `src-tauri/Cargo.toml`. Without this
 
 - `cargo test --workspace` is now part of the trustworthy clean-machine gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure came from the Tauri lib-test harness starting without the desktop manifest; pure command/bootstrap tests now live in `src-tauri/tests/pure_logic.rs` instead of the Tauri-linked lib harness.
 - Full clean-machine proof can be satisfied by either a second machine or a same-machine clean-room run (Windows Sandbox or disposable local profile). If only app-data reset fallback is used, record it as lower-confidence evidence in release notes.
-- `slskd localhost:5030` is machine/runtime dependent; in the latest trust-spine run on 2026-04-03 this check reported `False`, so provider-specific smoke expectations should be treated as environment-sensitive unless slskd is actively running.

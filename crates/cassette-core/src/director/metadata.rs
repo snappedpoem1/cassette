@@ -1,20 +1,21 @@
 use crate::director::error::MetadataError;
 use crate::director::models::{CandidateSelection, TrackTask};
 use lofty::picture::{MimeType, Picture, PictureType};
-use lofty::tag::{ItemKey, ItemValue, Tag, TagItem};
 use lofty::prelude::{Accessor, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::TagExt;
+use lofty::tag::{ItemKey, ItemValue, Tag, TagItem};
 
 pub async fn apply_metadata(
     task: TrackTask,
     selection: CandidateSelection,
 ) -> Result<(), MetadataError> {
     let path = selection.temp_path.clone();
-    let cover_art = match selection.cover_art_url.as_deref() {
-        Some(url) => download_cover_art(url).await,
-        None => None,
-    };
+    let cover_art = download_cover_art_candidates(cover_art_candidates(
+        selection.cover_art_url.as_deref(),
+        task.target.musicbrainz_release_id.as_deref(),
+    ))
+    .await;
 
     tokio::task::spawn_blocking(move || apply_metadata_blocking(task, selection, cover_art))
         .await
@@ -95,6 +96,42 @@ fn apply_metadata_blocking(
         })
 }
 
+fn cover_art_candidates(
+    provider_cover_art_url: Option<&str>,
+    musicbrainz_release_id: Option<&str>,
+) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(url) = provider_cover_art_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        urls.push(url.to_string());
+    }
+
+    if let Some(release_id) = musicbrainz_release_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.contains(':'))
+    {
+        urls.push(format!(
+            "https://coverartarchive.org/release/{release_id}/front-500"
+        ));
+        urls.push(format!(
+            "https://coverartarchive.org/release/{release_id}/front"
+        ));
+    }
+
+    urls
+}
+
+async fn download_cover_art_candidates(urls: Vec<String>) -> Option<Vec<u8>> {
+    for url in urls {
+        if let Some(bytes) = download_cover_art(&url).await {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
 async fn download_cover_art(url: &str) -> Option<Vec<u8>> {
     let response = reqwest::Client::new().get(url).send().await.ok()?;
     if !response.status().is_success() {
@@ -121,4 +158,27 @@ fn build_cover_picture(bytes: Vec<u8>) -> Option<Picture> {
     mime.map(|mime_type| {
         Picture::new_unchecked(PictureType::CoverFront, Some(mime_type), None, bytes)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cover_art_candidates;
+
+    #[test]
+    fn cover_art_candidates_fall_back_to_cover_art_archive_for_musicbrainz_releases() {
+        let urls = cover_art_candidates(None, Some("mb-release-123"));
+        assert_eq!(
+            urls,
+            vec![
+                "https://coverartarchive.org/release/mb-release-123/front-500".to_string(),
+                "https://coverartarchive.org/release/mb-release-123/front".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn cover_art_candidates_skip_cover_art_archive_for_non_musicbrainz_release_ids() {
+        let urls = cover_art_candidates(Some("https://example.com/cover.jpg"), Some("spotify:123"));
+        assert_eq!(urls, vec!["https://example.com/cover.jpg".to_string()]);
+    }
 }

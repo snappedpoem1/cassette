@@ -20,9 +20,11 @@ pub async fn generate_delta_queue_managed(
     let mut deltas = Vec::new();
     for (index, reconcile) in reconciliation.reconciliations.iter().enumerate() {
         let (action_type, priority, reason) = match &reconcile.status {
-            ReconciliationStatus::ExactMatch => {
-                (DeltaActionType::NoAction, 0, "Exact match in library".to_string())
-            }
+            ReconciliationStatus::ExactMatch => (
+                DeltaActionType::NoAction,
+                0,
+                "Exact match in library".to_string(),
+            ),
             ReconciliationStatus::HighConfidenceMatch => {
                 if reconcile
                     .matched_local_file
@@ -36,13 +38,20 @@ pub async fn generate_delta_queue_managed(
                         "Quality below floor; upgrade recommended".to_string(),
                     )
                 } else {
-                    (DeltaActionType::NoAction, 0, "Acceptable quality match".to_string())
+                    (
+                        DeltaActionType::NoAction,
+                        0,
+                        "Acceptable quality match".to_string(),
+                    )
                 }
             }
             ReconciliationStatus::FuzzyMatch => (
                 DeltaActionType::ManualReview,
                 2,
-                format!("Fuzzy match ({:.0}% confidence)", reconcile.confidence * 100.0),
+                format!(
+                    "Fuzzy match ({:.0}% confidence)",
+                    reconcile.confidence * 100.0
+                ),
             ),
             ReconciliationStatus::DuplicateFound { better_candidate } => (
                 DeltaActionType::DuplicateReview,
@@ -88,8 +97,7 @@ pub async fn generate_delta_queue_managed(
 
         let id = sqlx::query_scalar::<_, i64>("SELECT last_insert_rowid()")
             .fetch_one(manager.db_pool())
-            .await?
-            as u64;
+            .await? as u64;
 
         let delta = DeltaQueueEntry {
             id,

@@ -19,7 +19,21 @@ export interface Track {
   format: string;
   file_size: number;
   cover_art_path: string | null;
+  isrc: string | null;
+  musicbrainz_recording_id: string | null;
+  musicbrainz_release_id: string | null;
+  canonical_artist_id: number | null;
+  canonical_release_id: number | null;
+  quality_tier: string | null;
+  content_hash: string | null;
   added_at: string;
+}
+
+export interface TrackIdentityContext {
+  musicbrainz_release_group_id: string | null;
+  canonical_release_type: string | null;
+  edition_bucket: string | null;
+  edition_markers: string[];
 }
 
 export interface Album {
@@ -165,12 +179,26 @@ export interface DownloadConfig {
   sevenzip_path: string | null;
 }
 
+export type PolicyProfile = 'playback_first' | 'balanced_auto' | 'aggressive_overnight';
+
 export interface ProviderStatus {
   id: string;
   label: string;
   configured: boolean;
   summary: string;
   missing_fields: string[];
+}
+
+export interface SlskdRuntimeStatus {
+  running: boolean;
+  ready: boolean;
+  spawned_by_app: boolean;
+  binary_found: boolean;
+  binary_path: string | null;
+  app_dir: string | null;
+  downloads_dir: string | null;
+  url: string;
+  message: string | null;
 }
 
 export interface DownloadArtistResult {
@@ -240,6 +268,16 @@ export interface SpotifyImportResult {
 export interface SpotifyImportStatus {
   album_rows: number;
   last_imported_at: string | null;
+}
+
+export interface SpotifyAlbumHistory {
+  artist: string;
+  album: string;
+  total_ms: number;
+  play_count: number;
+  skip_count: number;
+  in_library: boolean;
+  imported_at: string;
 }
 
 export interface FileMove {
@@ -366,14 +404,54 @@ export interface AcquisitionRequestListItem {
   title: string;
   status: string;
   strategy: string;
+  musicbrainz_release_group_id?: string | null;
+  edition_policy?: string | null;
   task_id: string | null;
   request_signature: string;
   selected_provider: string | null;
   failure_class: string | null;
   final_path: string | null;
   execution_disposition: string | null;
+  trust_stage: string;
+  trust_reason_code: string;
+  trust_detail: string;
   updated_at: string;
   created_at: string;
+}
+
+export interface TrustLedgerSummary {
+  stage: string;
+  reason_code: string;
+  headline: string;
+  detail: string;
+  evidence_count: number;
+}
+
+export interface TrustReasonDistributionEntry {
+  reason_code: string;
+  label: string;
+  count: number;
+  stage: string;
+}
+
+export interface TrustLedgerOperationEvent {
+  operation_id: string;
+  module: string;
+  phase: string;
+  event_type: string;
+  timestamp: string | null;
+  event_data: string | null;
+}
+
+export interface TrustLedgerGatekeeperAudit {
+  operation_id: string;
+  timestamp: string;
+  file_path: string;
+  decision: string;
+  desired_track_id: number | null;
+  matched_local_file_id: number | null;
+  duration_ms: number;
+  notes: string;
 }
 
 export interface AcquisitionRequestEvent {
@@ -419,11 +497,14 @@ export interface TaskExecutionSummary {
 }
 
 export interface RequestLineage {
-  request: unknown;
+  request: AcquisitionRequest;
   timeline: unknown[];
   execution: TaskExecutionSummary | null;
   provenance: string | null;
   candidate_review: unknown[];
+  operation_events: TrustLedgerOperationEvent[];
+  gatekeeper_audit: TrustLedgerGatekeeperAudit[];
+  trust: TrustLedgerSummary;
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -435,6 +516,8 @@ export const api = {
   removeLibraryRoot: (path: string) => invoke<void>('remove_library_root', { path }),
   scanLibrary: () => invoke<number>('scan_library'),
   getTracks: (limit = 500, offset = 0) => invoke<Track[]>('get_tracks', { limit, offset }),
+  getTrackIdentityContext: (trackId: number) =>
+    invoke<TrackIdentityContext | null>('get_track_identity_context', { track_id: trackId }),
   searchTracks: (query: string) => invoke<Track[]>('search_tracks', { query }),
   getAlbums: () => invoke<Album[]>('get_albums'),
   getAlbumTracks: (artist: string, album: string) =>
@@ -553,14 +636,20 @@ export const api = {
     invoke<CandidateReviewItem[]>('get_request_candidate_review', { requestId }),
   getRequestLineage: (requestId: number) =>
     invoke<RequestLineage>('get_request_lineage', { requestId }),
+  getTrustReasonDistribution: (limit?: number) =>
+    invoke<TrustReasonDistributionEntry[]>('get_trust_reason_distribution', { limit }),
 
   // Import
   parseSpotifyHistory: (path: string) =>
     invoke<SpotifyImportResult>('parse_spotify_history', { path }),
+  importSpotifyDesiredTracks: (path: string) =>
+    invoke<number>('import_spotify_desired_tracks', { path }),
   queueSpotifyAlbums: (albums: SpotifyAlbumSummary[]) =>
     invoke<number>('queue_spotify_albums', { albums }),
   getSpotifyImportStatus: () =>
     invoke<SpotifyImportStatus>('get_spotify_import_status'),
+  getMissingSpotifyAlbums: (limit?: number) =>
+    invoke<SpotifyAlbumHistory[]>('get_missing_spotify_albums', { limit }),
 
   // Library Organization
   organizeLibrary: (dryRun?: boolean) =>
@@ -582,8 +671,14 @@ export const api = {
   // Settings
   getSetting: (key: string) => invoke<string | null>('get_setting', { key }),
   setSetting: (key: string, value: string) => invoke<void>('set_setting', { key, value }),
+  getPolicyProfile: () => invoke<PolicyProfile>('get_policy_profile'),
+  setPolicyProfile: (profile: PolicyProfile) =>
+    invoke<PolicyProfile>('set_policy_profile', { profile }),
   getConfig: () => invoke<DownloadConfig>('get_config'),
   getProviderStatuses: () => invoke<ProviderStatus[]>('get_provider_statuses'),
+  getSlskdRuntimeStatus: () => invoke<SlskdRuntimeStatus>('get_slskd_runtime_status'),
+  restartSlskdRuntime: () => invoke<SlskdRuntimeStatus>('restart_slskd_runtime'),
+  stopSlskdRuntime: () => invoke<SlskdRuntimeStatus>('stop_slskd_runtime'),
   saveConfig: (config: DownloadConfig) => invoke<void>('save_config', { config }),
   persistEffectiveConfig: () => invoke<void>('persist_effective_config'),
 

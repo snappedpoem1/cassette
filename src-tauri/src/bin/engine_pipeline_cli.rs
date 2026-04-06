@@ -1,6 +1,3 @@
-use cassette_lib::album_resolver::{
-    resolve_album_track_tasks_from_remote_config,
-};
 use cassette_core::db::{Db, TrackPathUpdate};
 use cassette_core::director::models::FinalizedTrackDisposition;
 use cassette_core::director::providers::{
@@ -12,12 +9,13 @@ use cassette_core::director::{
     NormalizedTrack, Provider, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
     TrackTask, TrackTaskSource,
 };
-use cassette_core::librarian::{LibrarianConfig, ScanMode, run_librarian_sync};
+use cassette_core::librarian::{run_librarian_sync, LibrarianConfig, ScanMode};
 use cassette_core::library::organizer;
 use cassette_core::orchestrator::delta::adapter::{ClaimedDownloadRow, DeltaQueueAdapter};
 use cassette_core::sources::{RemoteProviderConfig, SlskdConnectionConfig};
-use sqlx::Row;
+use cassette_lib::album_resolver::resolve_album_track_tasks_from_remote_config;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,7 +41,9 @@ fn sqlite_pool_connections_default() -> u32 {
     u32::try_from(target).unwrap_or(8)
 }
 
-async fn pending_non_download_summary(pool: &sqlx::SqlitePool) -> Result<Option<String>, sqlx::Error> {
+async fn pending_non_download_summary(
+    pool: &sqlx::SqlitePool,
+) -> Result<Option<String>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT action_type, COUNT(*) AS row_count
          FROM delta_queue
@@ -217,7 +217,12 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
         read_setting(db, "slskd_pass"),
     ]
     .iter()
-    .all(|value| value.as_ref().map(|item| !item.trim().is_empty()).unwrap_or(false));
+    .all(|value| {
+        value
+            .as_ref()
+            .map(|item| !item.trim().is_empty())
+            .unwrap_or(false)
+    });
     let usenet_api_key = read_setting(db, "nzbgeek_api_key");
     let sabnzbd_url = read_setting(db, "sabnzbd_url");
     let sabnzbd_api_key = read_setting(db, "sabnzbd_api_key");
@@ -251,14 +256,38 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
             quarantine_failures: true,
         },
         provider_policies: vec![
-            ProviderPolicy { provider_id: "qobuz".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "deezer".to_string(), max_concurrency: 4 },
-            ProviderPolicy { provider_id: "slskd".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "usenet".to_string(), max_concurrency: 1 },
-            ProviderPolicy { provider_id: "local_archive".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "yt_dlp".to_string(), max_concurrency: 2 },
-            ProviderPolicy { provider_id: "jackett".to_string(), max_concurrency: 3 },
-            ProviderPolicy { provider_id: "real_debrid".to_string(), max_concurrency: 3 },
+            ProviderPolicy {
+                provider_id: "qobuz".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "deezer".to_string(),
+                max_concurrency: 4,
+            },
+            ProviderPolicy {
+                provider_id: "slskd".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "usenet".to_string(),
+                max_concurrency: 1,
+            },
+            ProviderPolicy {
+                provider_id: "local_archive".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "yt_dlp".to_string(),
+                max_concurrency: 2,
+            },
+            ProviderPolicy {
+                provider_id: "jackett".to_string(),
+                max_concurrency: 3,
+            },
+            ProviderPolicy {
+                provider_id: "real_debrid".to_string(),
+                max_concurrency: 3,
+            },
         ],
         staging_root: PathBuf::from(&staging_root),
         ..DirectorConfig::default()
@@ -300,12 +329,14 @@ fn build_director(db: &Db, runtime_db_path: PathBuf) -> DirectorHandle {
     let jackett_url = read_setting(db, "jackett_url").filter(|u| !u.trim().is_empty());
     let jackett_api_key = read_setting(db, "jackett_api_key").filter(|k| !k.trim().is_empty());
     if let (Some(jurl), Some(jkey), Some(ref rdkey)) = (jackett_url, jackett_api_key, &rd_key) {
-        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(
-            jurl,
-            jkey,
-            rdkey.clone(),
-            sevenzip_binary,
-        )));
+        providers.push(Arc::new(
+            cassette_core::director::providers::JackettProvider::new(
+                jurl,
+                jkey,
+                rdkey.clone(),
+                sevenzip_binary,
+            ),
+        ));
     }
 
     Director::new(config, providers).start()
@@ -341,7 +372,8 @@ fn task_from_claim(
             claim.desired.track_title.to_ascii_lowercase()
         ),
         source: match claim.desired.source_name.to_ascii_lowercase().as_str() {
-            "spotify" => TrackTaskSource::SpotifyLibrary,
+            "spotify" | "spotify_library" => TrackTaskSource::SpotifyLibrary,
+            "spotify_history" => TrackTaskSource::SpotifyHistory,
             _ => TrackTaskSource::Manual,
         },
         desired_track_id: Some(claim.desired.id),
@@ -380,7 +412,12 @@ fn album_bundle_sizes(claims: &[ClaimedDownloadRow]) -> HashMap<String, usize> {
         let key = format!(
             "{}::{}",
             claim.desired.artist_name.to_ascii_lowercase(),
-            claim.desired.album_title.clone().unwrap_or_default().to_ascii_lowercase()
+            claim
+                .desired
+                .album_title
+                .clone()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
         );
         *counts.entry(key).or_insert(0) += 1;
     }
@@ -449,18 +486,38 @@ fn is_unfetchable_track(title: &str) -> bool {
     let t = title.to_ascii_lowercase();
     // Substring patterns
     let contains_patterns = [
-        "skit", "interlude", " intro", " outro", " instrumental",
-        " reprise", " spoken", " narration", " monologue",
-        " slow version", " live version", " acoustic version",
-        " self titled demo", " demo", " revised", " dub",
+        "skit",
+        "interlude",
+        " intro",
+        " outro",
+        " instrumental",
+        " reprise",
+        " spoken",
+        " narration",
+        " monologue",
+        " slow version",
+        " live version",
+        " acoustic version",
+        " self titled demo",
+        " demo",
+        " revised",
+        " dub",
         "endless nameless",
-        "public service announcement", "drill sergeant", "bong hit",
-        "mad flava", "heavy flow",
+        "public service announcement",
+        "drill sergeant",
+        "bong hit",
+        "mad flava",
+        "heavy flow",
     ];
     // Suffix-only patterns (track title ends with these)
     let suffix_patterns = [
-        "intro", "outro", "skit", "interlude", "instrumental",
-        "reprise", " arto",
+        "intro",
+        "outro",
+        "skit",
+        "interlude",
+        "instrumental",
+        "reprise",
+        " arto",
     ];
     contains_patterns.iter().any(|p| t.contains(p))
         || suffix_patterns.iter().any(|p| t.ends_with(p))
@@ -637,19 +694,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut results = handle_director.subscribe_results();
 
         let remote_provider_config = load_remote_provider_config(&db);
-        let (albums_attempted, tracks_submitted, errors) =
-            run_spotify_backlog(
-                &db,
-                &handle_director,
-                &remote_provider_config,
-                spotify_min_plays,
-                limit,
-            )
-                .await?;
+        let (albums_attempted, tracks_submitted, errors) = run_spotify_backlog(
+            &db,
+            &handle_director,
+            &remote_provider_config,
+            spotify_min_plays,
+            limit,
+        )
+        .await?;
 
         println!(
             "spotify-backlog: albums_attempted={} tracks_submitted={} errors={}",
-            albums_attempted, tracks_submitted, errors.len()
+            albums_attempted,
+            tracks_submitted,
+            errors.len()
         );
         for err in &errors {
             eprintln!("  backlog-error: {err}");
@@ -663,7 +721,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             db.delete_director_pending_task(&result.task_id)?;
             if let Some(finalized) = &result.finalized {
                 finalized_spotify.insert(finalized.path.to_string_lossy().to_string());
-                if let Ok(mut track) = cassette_core::library::read_track_metadata(&finalized.path) {
+                if let Ok(mut track) = cassette_core::library::read_track_metadata(&finalized.path)
+                {
                     cassette_core::library::enrich_track_with_director_result(&mut track, &result);
                     db.upsert_track(&track)?;
                 }
@@ -709,14 +768,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         skip_post_sync,
         skip_organize_subset
     );
-    let outcome = run_librarian_sync(
-        &pool,
-        &librarian_config,
-        desired_state_path,
-        false,
-        &handle,
-    )
-    .await?;
+    let outcome =
+        run_librarian_sync(&pool, &librarian_config, desired_state_path, false, &handle).await?;
     println!("{}", outcome.summary);
 
     let queue = DeltaQueueAdapter::new(pool.clone());
@@ -796,7 +849,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut post_sync_config = librarian_config.clone();
         post_sync_config.scan_mode = ScanMode::DeltaOnly;
         post_sync_config.skip_scan = false;
-        let post_outcome = run_librarian_sync(&pool, &post_sync_config, None, true, &handle).await?;
+        let post_outcome =
+            run_librarian_sync(&pool, &post_sync_config, None, true, &handle).await?;
         println!("{}", post_outcome.summary);
     }
 

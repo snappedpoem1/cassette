@@ -1,0 +1,210 @@
+<h2>Visual Direction</h2>
+<p class="subtitle">Which design direction should we take the Cassette UI? Both keep the same dark theme and layout structure — the difference is richness and warmth.</p>
+
+<div class="cards" style="gap:24px;">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)" style="flex:1;min-width:340px;">
+    <div class="card-image" style="background:#0d1117;padding:0;overflow:hidden;border-radius:8px 8px 0 0;height:420px;position:relative;">
+      <!-- Mockup A: Current style refined -->
+      <div style="background:#0d1117;height:100%;display:flex;flex-direction:column;font-family:system-ui,sans-serif;">
+        <!-- topbar -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #1e2633;background:#0d1117;">
+          <span style="color:#f7b45c;font-size:11px;font-weight:700;letter-spacing:.1em;">CASSETTE // DESKTOP</span>
+          <div style="display:flex;gap:14px;">
+            <span style="color:#6b7a90;font-size:10px;letter-spacing:.08em;">LIBRARY</span>
+            <span style="color:#6b7a90;font-size:10px;letter-spacing:.08em;">DOWNLOADS</span>
+            <span style="color:#6b7a90;font-size:10px;letter-spacing:.08em;">SETTINGS</span>
+          </div>
+        </div>
+        <div style="display:flex;flex:1;overflow:hidden;">
+          <!-- sidebar -->
+          <div style="width:80px;background:#0b0f17;border-right:1px solid #1e2633;padding:10px 0;display:flex;flex-direction:column;gap:2px;">
+            <div style="padding:8px 10px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;">
+              <span style="font-size:8px;color:#4a5568;letter-spacing:.08em;">LIB</span>
+              <span style="font-size:9px;color:#6b7a90;">Library</span>
+            </div>
+            <div style="padding:8px 10px;background:#1a2235;border-radius:4px;margin:0 4px;">
+              <span style="font-size:9px;color:#f7b45c;">Albums</span>
+            </div>
+            <div style="padding:8px 10px;"><span style="font-size:9px;color:#6b7a90;">Playlists</span></div>
+          </div>
+          <!-- main -->
+          <div style="flex:1;padding:12px;overflow:hidden;">
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+              <div style="background:#111827;border-radius:6px;overflow:hidden;">
+                <div style="height:70px;background:linear-gradient(135deg,#1a2a3a,#0f1929);display:flex;align-items:center;justify-content:center;font-size:18px;">💿</div>
+                <div style="padding:6px;">
+                  <div style="font-size:9px;color:#e2e8f0;font-weight:600;">Album Title</div>
+                  <div style="font-size:8px;color:#4a5568;margin-top:2px;">Artist Name</div>
+                </div>
+              </div>
+              <div style="background:#111827;border-radius:6px;overflow:hidden;">
+                <div style="height:70px;background:linear-gradient(135deg,#1a2030,#0f1520);display:flex;align-items:center;justify-content:center;font-size:18px;">💿</div>
+                <div style="padding:6px;">
+                  <div style="font-size:9px;color:#e2e8f0;font-weight:600;">Album Title</div>
+                  <div style="font-size:8px;color:#4a5568;margin-top:2px;">Artist Name</div>
+                </div>
+              </div>
+              <div style="background:#111827;border-radius:6px;overflow:hidden;">
+                <div style="height:70px;background:linear-gradient(135deg,#1e1a2a,#12101a);display:flex;align-items:center;justify-content:center;font-size:18px;">💿</div>
+                <div style="padding:6px;">
+                  <div style="font-size:9px;color:#e2e8f0;font-weight:600;">Album Title</div>
+                  <div style="font-size:8px;color:#4a5568;margin-top:2px;">Artist Name</div>
+                </div>
+              </div>
+              <div style="background:#111827;border-radius:6px;overflow:hidden;">
+                <div style="height:70px;background:linear-gradient(135deg,#1a2030,#0f1520);display:flex;align-items:center;justify-content:center;font-size:18px;">💿</div>
+                <div style="padding:6px;">
+                  <div style="font-size:9px;color:#e2e8f0;font-weight:600;">Album Title</div>
+                  <div style="font-size:8px;color:#4a5568;margin-top:2px;">Artist Name</div>
+                </div>
+              </div>
+              <div style="background:#111827;border-radius:6px;overflow:hidden;">
+                <div style="height:70px;background:linear-gradient(135deg,#1a2a1a,#0f1a0f);display:flex;align-items:center;justify-content:center;font-size:18px;">💿</div>
+                <div style="padding:6px;">
+                  <div style="font-size:9px;color:#e2e8f0;font-weight:600;">Album Title</div>
+                  <div style="font-size:8px;color:#4a5568;margin-top:2px;">Artist Name</div>
+                </div>
+              </div>
+              <div style="background:#111827;border-radius:6px;overflow:hidden;">
+                <div style="height:70px;background:linear-gradient(135deg,#2a1a1a,#1a0f0f);display:flex;align-items:center;justify-content:center;font-size:18px;">💿</div>
+                <div style="padding:6px;">
+                  <div style="font-size:9px;color:#e2e8f0;font-weight:600;">Album Title</div>
+                  <div style="font-size:8px;color:#4a5568;margin-top:2px;">Artist Name</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- now playing -->
+        <div style="border-top:1px solid #1e2633;background:#0b0f17;padding:8px 16px;display:flex;align-items:center;gap:12px;">
+          <div style="width:36px;height:36px;background:#1a2235;border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;">🎵</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:8px;color:#c8d0dc;font-weight:600;">No track playing</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span style="color:#4a5568;font-size:12px;">⏮</span>
+            <span style="width:22px;height:22px;background:#f7b45c;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;">▶</span>
+            <span style="color:#4a5568;font-size:12px;">⏭</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Refined Current</h3>
+      <p>Same structure, better spacing, richer card surfaces. Stays very utility-focused and neutral. Clean and functional.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)" style="flex:1;min-width:340px;">
+    <div class="card-image" style="background:#0a0c0f;padding:0;overflow:hidden;border-radius:8px 8px 0 0;height:420px;position:relative;">
+      <!-- Mockup B: Lyra-inspired warm editorial -->
+      <div style="background:#0a0c0f;height:100%;display:flex;flex-direction:column;font-family:system-ui,sans-serif;">
+        <!-- topbar - warmer, bolder brand -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid rgba(247,180,92,0.12);background:rgba(10,12,15,0.95);">
+          <span style="color:#f7b45c;font-size:11px;font-weight:800;letter-spacing:.12em;">CASSETTE <span style="opacity:.5">//</span> DESKTOP</span>
+          <div style="display:flex;gap:14px;">
+            <span style="color:#8a96a8;font-size:10px;letter-spacing:.08em;">LIBRARY</span>
+            <span style="color:#8a96a8;font-size:10px;letter-spacing:.08em;">DOWNLOADS</span>
+          </div>
+        </div>
+        <div style="display:flex;flex:1;overflow:hidden;">
+          <!-- sidebar - warmer accent on active -->
+          <div style="width:90px;background:rgba(8,10,14,0.9);border-right:1px solid rgba(247,180,92,0.08);padding:10px 0;display:flex;flex-direction:column;gap:2px;">
+            <div style="padding:8px 12px;background:rgba(247,180,92,0.1);border-right:2px solid #f7b45c;margin-right:-1px;">
+              <span style="font-size:9px;color:#f7b45c;font-weight:700;">Library</span>
+            </div>
+            <div style="padding:8px 12px;"><span style="font-size:9px;color:#5a6478;">Downloads</span></div>
+            <div style="padding:8px 12px;"><span style="font-size:9px;color:#5a6478;">Playlists</span></div>
+            <div style="padding:8px 12px;"><span style="font-size:9px;color:#5a6478;">Artists</span></div>
+            <div style="margin:8px;height:1px;background:rgba(255,255,255,0.05);"></div>
+            <div style="padding:8px 12px;"><span style="font-size:9px;color:#3d4a5a;">Import</span></div>
+            <div style="padding:8px 12px;"><span style="font-size:9px;color:#3d4a5a;">Tools</span></div>
+          </div>
+          <!-- main - editorial album grid with real warmth -->
+          <div style="flex:1;padding:12px;overflow:hidden;background:linear-gradient(180deg,rgba(20,14,8,0.3) 0%,transparent 60%);">
+            <!-- featured big album card -->
+            <div style="background:linear-gradient(135deg,#2a1a08,#1a1208);border-radius:8px;overflow:hidden;margin-bottom:8px;display:flex;gap:10px;padding:10px;border:1px solid rgba(247,180,92,0.15);">
+              <div style="width:56px;height:56px;background:linear-gradient(135deg,#8b5e3c,#4a3020);border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 4px 16px rgba(0,0,0,0.5);">🎸</div>
+              <div style="flex:1;">
+                <div style="font-size:10px;color:#e8cfa0;font-weight:700;margin-bottom:2px;">Twilight Resonance</div>
+                <div style="font-size:9px;color:#7a8a9a;">Shadow Shore · 2023</div>
+                <div style="margin-top:6px;height:2px;background:rgba(255,255,255,0.08);border-radius:99px;">
+                  <div style="width:42%;height:100%;background:linear-gradient(90deg,#f7b45c,#e8903a);border-radius:99px;"></div>
+                </div>
+              </div>
+            </div>
+            <!-- album grid - warmer, more depth -->
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;">
+              <div style="background:linear-gradient(160deg,#1c1208,#110d06);border-radius:6px;overflow:hidden;border:1px solid rgba(247,180,92,0.08);">
+                <div style="height:64px;background:linear-gradient(135deg,#3d2810,#1e1408);display:flex;align-items:center;justify-content:center;font-size:18px;">🎷</div>
+                <div style="padding:5px 6px;">
+                  <div style="font-size:8px;color:#d4b896;font-weight:600;">Golden Hours</div>
+                  <div style="font-size:7px;color:#4a5568;margin-top:1px;">Sunrise Avenue</div>
+                </div>
+              </div>
+              <div style="background:linear-gradient(160deg,#0e1620,#090e18);border-radius:6px;overflow:hidden;border:1px solid rgba(100,140,220,0.1);">
+                <div style="height:64px;background:linear-gradient(135deg,#1a2840,#0e1a2c);display:flex;align-items:center;justify-content:center;font-size:18px;">🎹</div>
+                <div style="padding:5px 6px;">
+                  <div style="font-size:8px;color:#c0d0e8;font-weight:600;">Distant Echoes</div>
+                  <div style="font-size:7px;color:#4a5568;margin-top:1px;">Ether Realms</div>
+                </div>
+              </div>
+              <div style="background:linear-gradient(160deg,#120e1e,#0c0a16);border-radius:6px;overflow:hidden;border:1px solid rgba(160,100,220,0.08);">
+                <div style="height:64px;background:linear-gradient(135deg,#2a1a40,#180e28);display:flex;align-items:center;justify-content:center;font-size:18px;">🎻</div>
+                <div style="padding:5px 6px;">
+                  <div style="font-size:8px;color:#c8b8e0;font-weight:600;">Horizon Veil</div>
+                  <div style="font-size:7px;color:#4a5568;margin-top:1px;">Starlit Edge</div>
+                </div>
+              </div>
+              <div style="background:linear-gradient(160deg,#1a0a0a,#100606);border-radius:6px;overflow:hidden;border:1px solid rgba(220,80,80,0.08);">
+                <div style="height:64px;background:linear-gradient(135deg,#3a1010,#200808);display:flex;align-items:center;justify-content:center;font-size:18px;">🥁</div>
+                <div style="padding:5px 6px;">
+                  <div style="font-size:8px;color:#e0b0b0;font-weight:600;">Fading Echo</div>
+                  <div style="font-size:7px;color:#4a5568;margin-top:1px;">Northern Lines</div>
+                </div>
+              </div>
+              <div style="background:linear-gradient(160deg,#0a140e,#060d08);border-radius:6px;overflow:hidden;border:1px solid rgba(80,180,100,0.08);">
+                <div style="height:64px;background:linear-gradient(135deg,#102818,#081a0e);display:flex;align-items:center;justify-content:center;font-size:18px;">🎺</div>
+                <div style="padding:5px 6px;">
+                  <div style="font-size:8px;color:#a8d8b8;font-weight:600;">Misty Path</div>
+                  <div style="font-size:7px;color:#4a5568;margin-top:1px;">Blue Canvas</div>
+                </div>
+              </div>
+              <div style="background:linear-gradient(160deg,#141008,#0d0c06);border-radius:6px;overflow:hidden;border:1px solid rgba(200,180,80,0.08);">
+                <div style="height:64px;background:linear-gradient(135deg,#28200a,#181408);display:flex;align-items:center;justify-content:center;font-size:18px;">🪗</div>
+                <div style="padding:5px 6px;">
+                  <div style="font-size:8px;color:#d8c890;font-weight:600;">Dawn of Light</div>
+                  <div style="font-size:7px;color:#4a5568;margin-top:1px;">Echo Chamber</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- now playing - warmer, more present -->
+        <div style="border-top:1px solid rgba(247,180,92,0.12);background:linear-gradient(90deg,rgba(12,9,5,0.98),rgba(8,10,14,0.98));padding:8px 16px;display:flex;align-items:center;gap:12px;">
+          <div style="width:38px;height:38px;background:linear-gradient(135deg,#3d2810,#1e1408);border-radius:5px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.6);">🎸</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:9px;color:#e8cfa0;font-weight:600;">Twilight Resonance</div>
+            <div style="font-size:7px;color:#7a8a9a;">Shadow Shore</div>
+            <div style="margin-top:4px;height:2px;background:rgba(255,255,255,0.08);border-radius:99px;position:relative;">
+              <div style="width:42%;height:100%;background:linear-gradient(90deg,#f7b45c,#e8903a);border-radius:99px;"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <span style="color:#4a5568;font-size:11px;">⏮</span>
+            <span style="width:24px;height:24px;background:linear-gradient(135deg,#f7b45c,#e8903a);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 2px 8px rgba(247,180,92,0.3);">⏸</span>
+            <span style="color:#4a5568;font-size:11px;">⏭</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Warm Editorial</h3>
+      <p>Album art colors bleed into cards. Each album card picks up warmth from its palette. Now-playing bar is more present. Amber accent carries through. Inspired by the Lyra mockup's richness.</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:16px;text-align:center;">Click to select a direction, then tell me in the terminal what you think.</p>

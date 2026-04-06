@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cassette – Palette</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #08090c; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; padding: 28px 24px; }
+
+  h2 { font-size: 1rem; font-weight: 700; letter-spacing: .06em; margin-bottom: 4px; }
+  .sub { font-size: 0.78rem; color: #5a6478; margin-bottom: 28px; }
+
+  .palettes { display: flex; flex-direction: column; gap: 20px; }
+
+  .palette-row { display: flex; gap: 16px; align-items: stretch; cursor: pointer; }
+  .palette-row:hover .mini-app { border-color: rgba(255,255,255,0.2); }
+  .palette-row.selected .mini-app { border-color: var(--sel); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sel) 30%, transparent); }
+
+  .mini-app {
+    width: 480px; flex-shrink: 0;
+    border-radius: 10px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.07);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    display: flex; flex-direction: column;
+  }
+
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 7px 14px; flex-shrink: 0; }
+  .brand { font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+  .topnav { display: flex; gap: 12px; }
+  .topnav span { font-size: 8px; letter-spacing: .08em; }
+
+  .body { display: flex; flex: 1; }
+  .sidebar { width: 80px; flex-shrink: 0; padding: 10px 0; display: flex; flex-direction: column; gap: 1px; }
+  .nav-item { padding: 7px 10px; font-size: 8px; border-right: 2px solid transparent; }
+  .nav-divider { height: 1px; margin: 4px 8px; }
+
+  .main { flex: 1; padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .section-label { font-size: 7px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; margin-bottom: 2px; }
+  .grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 5px; }
+  .album-card { border-radius: 5px; overflow: hidden; border: 1px solid; }
+  .album-art { width: 100%; aspect-ratio: 1; overflow: hidden; }
+  .album-art img { width: 100%; height: 100%; object-fit: cover; filter: brightness(0.9); }
+  .album-meta { padding: 5px 6px; }
+  .album-meta .t { font-size: 7.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-meta .a { font-size: 6.5px; margin-top: 1px; }
+
+  .nowplaying { padding: 7px 12px; display: flex; align-items: center; gap: 10px; border-top: 1px solid; flex-shrink: 0; }
+  .np-art { width: 30px; height: 30px; border-radius: 4px; overflow: hidden; flex-shrink: 0; }
+  .np-art img { width: 100%; height: 100%; object-fit: cover; }
+  .np-info { flex: 1; min-width: 0; }
+  .np-title { font-size: 8px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np-artist { font-size: 7px; margin-top: 1px; }
+  .np-bar { height: 2px; border-radius: 99px; margin-top: 4px; }
+  .np-fill { height: 100%; border-radius: 99px; width: 40%; }
+  .np-controls { display: flex; gap: 8px; align-items: center; }
+  .btn-play { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 8px; flex-shrink: 0; }
+  .prev, .next { font-size: 10px; }
+
+  .palette-info { flex: 1; padding: 4px 0; }
+  .palette-name { font-size: 0.92rem; font-weight: 700; margin-bottom: 6px; }
+  .palette-desc { font-size: 0.75rem; line-height: 1.6; color: #5a6478; margin-bottom: 10px; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .swatch { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .swatch-color { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); }
+  .swatch-label { font-size: 6.5px; color: #3d4a5a; letter-spacing: .04em; }
+
+  .sel-badge {
+    display: none; margin-top: 10px;
+    font-size: 0.7rem; font-weight: 700; letter-spacing: .08em;
+    padding: 3px 8px; border-radius: 99px; width: fit-content;
+  }
+  .palette-row.selected .sel-badge { display: block; }
+</style>
+</head>
+<body>
+
+<h2>Palette Direction</h2>
+<p class="sub">Slate/indigo primary · amber as secondary accent. Three weight variations — same hue family, different emphasis.</p>
+
+<div class="palettes">
+
+  <!-- PALETTE A: Deep slate-indigo, amber highlights -->
+  <div class="palette-row" id="row-a" style="--sel:#7c9eff" onclick="pick('a')">
+    <div class="mini-app">
+      <div class="topbar" style="background:#06080f;border-bottom:1px solid rgba(124,158,255,0.12);">
+        <span class="brand" style="color:#7c9eff;">CASSETTE <span style="opacity:.4">//</span> DESKTOP</span>
+        <div class="topnav"><span style="color:#2a3550;">LIBRARY</span><span style="color:#2a3550;">DOWNLOADS</span></div>
+      </div>
+      <div class="body" style="background:#07090e;">
+        <div class="sidebar" style="background:#050710;border-right:1px solid rgba(124,158,255,0.07);">
+          <div class="nav-item" style="color:#7c9eff;background:rgba(124,158,255,0.08);border-right-color:#7c9eff;">Library</div>
+          <div class="nav-item" style="color:#2a3550;">Downloads</div>
+          <div class="nav-item" style="color:#2a3550;">Playlists</div>
+          <div class="nav-item" style="color:#2a3550;">Artists</div>
+          <div class="nav-divider" style="background:rgba(255,255,255,0.04);"></div>
+          <div class="nav-item" style="color:#1e2840;">Import</div>
+          <div class="nav-item" style="color:#1e2840;">Tools</div>
+        </div>
+        <div class="main">
+          <div class="section-label" style="color:#2a3550;">Albums · 2,167</div>
+          <div class="grid">
+            <div class="album-card" style="background:#0c0f1a;border-color:rgba(124,158,255,0.08);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#090c16;"><div class="t" style="color:#b8c8e8;">Twilight Res.</div><div class="a" style="color:#2a3550;">Shadow Shore</div></div>
+            </div>
+            <div class="album-card" style="background:#0c1018;border-color:rgba(100,140,255,0.07);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#090d15;"><div class="t" style="color:#a8bcd8;">Golden Hours</div><div class="a" style="color:#2a3550;">Sunrise Ave</div></div>
+            </div>
+            <div class="album-card" style="background:#0d0c1c;border-color:rgba(140,110,255,0.08);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1506157786151-b8491531f063?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#0a0918;"><div class="t" style="color:#c0b4e0;">Distant Echoes</div><div class="a" style="color:#2a3550;">Ether Realms</div></div>
+            </div>
+            <div class="album-card" style="background:#0c1210;border-color:rgba(80,160,140,0.07);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#090f0d;"><div class="t" style="color:#a0c4b8;">Horizon Veil</div><div class="a" style="color:#2a3550;">Starlit Edge</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying" style="background:#050710;border-top-color:rgba(124,158,255,0.1);">
+        <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+        <div class="np-info">
+          <div class="np-title" style="color:#c8d8f0;">Twilight Resonance</div>
+          <div class="np-artist" style="color:#2a3550;">Shadow Shore</div>
+          <div class="np-bar" style="background:rgba(124,158,255,0.1);"><div class="np-fill" style="background:linear-gradient(90deg,#7c9eff,#f7b45c);"></div></div>
+        </div>
+        <div class="np-controls">
+          <span class="prev" style="color:#2a3550;">⏮</span>
+          <div class="btn-play" style="background:linear-gradient(135deg,#7c9eff,#5c7edf);box-shadow:0 2px 10px rgba(124,158,255,0.25);">⏸</div>
+          <span class="next" style="color:#2a3550;">⏭</span>
+        </div>
+      </div>
+    </div>
+    <div class="palette-info">
+      <div class="palette-name" style="color:#7c9eff;">A — Indigo Night</div>
+      <div class="palette-desc">Deep blue-black backgrounds. Slate-indigo primary for nav, active states, and play button. Amber appears only on the progress bar gradient and key highlights — used sparingly as a warm counterpoint. Very cool, very serious.</div>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-color" style="background:#7c9eff;"></div><div class="swatch-label">Primary</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#f7b45c;"></div><div class="swatch-label">Accent</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#06080f;"></div><div class="swatch-label">BG deep</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#0c0f1a;"></div><div class="swatch-label">BG card</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#c8d8f0;"></div><div class="swatch-label">Text</div></div>
+      </div>
+      <div class="sel-badge" style="background:rgba(124,158,255,0.15);color:#7c9eff;">✓ Selected</div>
+    </div>
+  </div>
+
+  <!-- PALETTE B: Slate-steel, amber warm highlights -->
+  <div class="palette-row" id="row-b" style="--sel:#8bb4d4" onclick="pick('b')">
+    <div class="mini-app">
+      <div class="topbar" style="background:#070a0e;border-bottom:1px solid rgba(139,180,212,0.1);">
+        <span class="brand" style="color:#8bb4d4;">CASSETTE <span style="opacity:.4">//</span> DESKTOP</span>
+        <div class="topnav"><span style="color:#253040;">LIBRARY</span><span style="color:#253040;">DOWNLOADS</span></div>
+      </div>
+      <div class="body" style="background:#080b10;">
+        <div class="sidebar" style="background:#060810;border-right:1px solid rgba(139,180,212,0.06);">
+          <div class="nav-item" style="color:#8bb4d4;background:rgba(139,180,212,0.07);border-right-color:#8bb4d4;">Library</div>
+          <div class="nav-item" style="color:#253040;">Downloads</div>
+          <div class="nav-item" style="color:#253040;">Playlists</div>
+          <div class="nav-item" style="color:#253040;">Artists</div>
+          <div class="nav-divider" style="background:rgba(255,255,255,0.04);"></div>
+          <div class="nav-item" style="color:#1a2230;">Import</div>
+          <div class="nav-item" style="color:#1a2230;">Tools</div>
+        </div>
+        <div class="main">
+          <div class="section-label" style="color:#253040;">Albums · 2,167</div>
+          <div class="grid">
+            <div class="album-card" style="background:#0c1018;border-color:rgba(139,180,212,0.07);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#090d14;"><div class="t" style="color:#a8c0d4;">Twilight Res.</div><div class="a" style="color:#253040;">Shadow Shore</div></div>
+            </div>
+            <div class="album-card" style="background:#0d1118;border-color:rgba(120,170,200,0.06);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#0a0e15;"><div class="t" style="color:#9ab8cc;">Golden Hours</div><div class="a" style="color:#253040;">Sunrise Ave</div></div>
+            </div>
+            <div class="album-card" style="background:#0e0c1a;border-color:rgba(160,130,220,0.07);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1506157786151-b8491531f063?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#0b0916;"><div class="t" style="color:#b8a8d8;">Distant Echoes</div><div class="a" style="color:#253040;">Ether Realms</div></div>
+            </div>
+            <div class="album-card" style="background:#0c1410;border-color:rgba(80,160,130,0.06);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#09110d;"><div class="t" style="color:#98c0b0;">Horizon Veil</div><div class="a" style="color:#253040;">Starlit Edge</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying" style="background:#060810;border-top-color:rgba(139,180,212,0.08);">
+        <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+        <div class="np-info">
+          <div class="np-title" style="color:#b8ccd8;">Twilight Resonance</div>
+          <div class="np-artist" style="color:#253040;">Shadow Shore</div>
+          <div class="np-bar" style="background:rgba(139,180,212,0.1);"><div class="np-fill" style="background:linear-gradient(90deg,#8bb4d4,#f7b45c);"></div></div>
+        </div>
+        <div class="np-controls">
+          <span class="prev" style="color:#253040;">⏮</span>
+          <div class="btn-play" style="background:linear-gradient(135deg,#8bb4d4,#6a98b8);box-shadow:0 2px 10px rgba(139,180,212,0.2);">⏸</div>
+          <span class="next" style="color:#253040;">⏭</span>
+        </div>
+      </div>
+    </div>
+    <div class="palette-info">
+      <div class="palette-name" style="color:#8bb4d4;">B — Steel Dusk</div>
+      <div class="palette-desc">Softer, cooler steel-blue primary — less electric than indigo. Backgrounds lean slightly warm-dark (desaturated brown-black rather than pure blue-black). Amber progress bar bridges warm and cool. More understated — feels like a pro tool.</div>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-color" style="background:#8bb4d4;"></div><div class="swatch-label">Primary</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#f7b45c;"></div><div class="swatch-label">Accent</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#070a0e;"></div><div class="swatch-label">BG deep</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#0c1018;"></div><div class="swatch-label">BG card</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#b8ccd8;"></div><div class="swatch-label">Text</div></div>
+      </div>
+      <div class="sel-badge" style="background:rgba(139,180,212,0.15);color:#8bb4d4;">✓ Selected</div>
+    </div>
+  </div>
+
+  <!-- PALETTE C: Slate-teal, amber pop -->
+  <div class="palette-row" id="row-c" style="--sel:#5ec4b0" onclick="pick('c')">
+    <div class="mini-app">
+      <div class="topbar" style="background:#060c0b;border-bottom:1px solid rgba(94,196,176,0.1);">
+        <span class="brand" style="color:#5ec4b0;">CASSETTE <span style="opacity:.4">//</span> DESKTOP</span>
+        <div class="topnav"><span style="color:#1e3030;">LIBRARY</span><span style="color:#1e3030;">DOWNLOADS</span></div>
+      </div>
+      <div class="body" style="background:#070d0c;">
+        <div class="sidebar" style="background:#050b0a;border-right:1px solid rgba(94,196,176,0.06);">
+          <div class="nav-item" style="color:#5ec4b0;background:rgba(94,196,176,0.07);border-right-color:#5ec4b0;">Library</div>
+          <div class="nav-item" style="color:#1e3030;">Downloads</div>
+          <div class="nav-item" style="color:#1e3030;">Playlists</div>
+          <div class="nav-item" style="color:#1e3030;">Artists</div>
+          <div class="nav-divider" style="background:rgba(255,255,255,0.04);"></div>
+          <div class="nav-item" style="color:#152020;">Import</div>
+          <div class="nav-item" style="color:#152020;">Tools</div>
+        </div>
+        <div class="main">
+          <div class="section-label" style="color:#1e3030;">Albums · 2,167</div>
+          <div class="grid">
+            <div class="album-card" style="background:#0c1412;border-color:rgba(94,196,176,0.07);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#09110f;"><div class="t" style="color:#90c8bc;">Twilight Res.</div><div class="a" style="color:#1e3030;">Shadow Shore</div></div>
+            </div>
+            <div class="album-card" style="background:#0d1412;border-color:rgba(80,190,160,0.06);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#0a110e;"><div class="t" style="color:#88c0b4;">Golden Hours</div><div class="a" style="color:#1e3030;">Sunrise Ave</div></div>
+            </div>
+            <div class="album-card" style="background:#0e1216;border-color:rgba(100,150,200,0.06);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1506157786151-b8491531f063?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#0b0f13;"><div class="t" style="color:#a0b8d0;">Distant Echoes</div><div class="a" style="color:#1e3030;">Ether Realms</div></div>
+            </div>
+            <div class="album-card" style="background:#0c1510;border-color:rgba(70,180,120,0.06);">
+              <div class="album-art"><img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&q=80" alt=""></div>
+              <div class="album-meta" style="background:#09120d;"><div class="t" style="color:#88c0a0;">Horizon Veil</div><div class="a" style="color:#1e3030;">Starlit Edge</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying" style="background:#050b0a;border-top-color:rgba(94,196,176,0.08);">
+        <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+        <div class="np-info">
+          <div class="np-title" style="color:#a0c8c0;">Twilight Resonance</div>
+          <div class="np-artist" style="color:#1e3030;">Shadow Shore</div>
+          <div class="np-bar" style="background:rgba(94,196,176,0.1);"><div class="np-fill" style="background:linear-gradient(90deg,#5ec4b0,#f7b45c);"></div></div>
+        </div>
+        <div class="np-controls">
+          <span class="prev" style="color:#1e3030;">⏮</span>
+          <div class="btn-play" style="background:linear-gradient(135deg,#5ec4b0,#3ea890);box-shadow:0 2px 10px rgba(94,196,176,0.2);">⏸</div>
+          <span class="next" style="color:#1e3030;">⏭</span>
+        </div>
+      </div>
+    </div>
+    <div class="palette-info">
+      <div class="palette-name" style="color:#5ec4b0;">C — Ocean Slate</div>
+      <div class="palette-desc">Teal-green primary against very dark green-black backgrounds. More organic than indigo — warmer but still cool. Amber pops harder against the teal. Feels like a high-end vinyl store or recording studio aesthetic.</div>
+      <div class="swatches">
+        <div class="swatch"><div class="swatch-color" style="background:#5ec4b0;"></div><div class="swatch-label">Primary</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#f7b45c;"></div><div class="swatch-label">Accent</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#060c0b;"></div><div class="swatch-label">BG deep</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#0c1412;"></div><div class="swatch-label">BG card</div></div>
+        <div class="swatch"><div class="swatch-color" style="background:#a0c8c0;">  </div><div class="swatch-label">Text</div></div>
+      </div>
+      <div class="sel-badge" style="background:rgba(94,196,176,0.15);color:#5ec4b0;">✓ Selected</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let picked = null;
+  function pick(id) {
+    if (picked) document.getElementById('row-' + picked).classList.remove('selected');
+    picked = id;
+    document.getElementById('row-' + id).classList.add('selected');
+    if (window.__selectOption) window.__selectOption(id, document.querySelector('#row-' + id + ' .palette-name').textContent.trim());
+  }
+</script>
+</body>
+</html>

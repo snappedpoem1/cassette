@@ -9,7 +9,11 @@ pub enum DuplicateDecision {
     QuarantineAsDuplicate,
 }
 
-pub fn classify_duplicate(policy: DuplicatePolicy, incoming_score: i64, existing_score: i64) -> DuplicateDecision {
+pub fn classify_duplicate(
+    policy: DuplicatePolicy,
+    incoming_score: i64,
+    existing_score: i64,
+) -> DuplicateDecision {
     match policy {
         DuplicatePolicy::KeepBest => {
             if incoming_score >= existing_score {

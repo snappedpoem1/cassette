@@ -15,8 +15,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let a = dir.path().join("a.bin");
         let b = dir.path().join("b.bin");
-        tokio::fs::write(&a, b"same payload").await.expect("write a");
-        tokio::fs::write(&b, b"same payload").await.expect("write b");
+        tokio::fs::write(&a, b"same payload")
+            .await
+            .expect("write a");
+        tokio::fs::write(&b, b"same payload")
+            .await
+            .expect("write b");
 
         let h1 = blake3_hash_file(&a).await.expect("hash a");
         let h2 = blake3_hash_file(&b).await.expect("hash b");

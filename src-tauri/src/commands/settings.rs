@@ -1,4 +1,5 @@
-use crate::state::AppState;
+use crate::slskd_runtime::SlskdRuntimeStatus;
+use crate::state::{AppState, PolicyProfile, POLICY_PROFILE_SETTING_KEY};
 use cassette_core::db::Db;
 use cassette_core::provider_settings::{DownloadConfig, ProviderStatus};
 use tauri::State;
@@ -12,7 +13,30 @@ pub fn get_setting(state: State<'_, AppState>, key: String) -> Option<String> {
 
 #[tauri::command]
 pub fn set_setting(state: State<'_, AppState>, key: String, value: String) {
+    if key == POLICY_PROFILE_SETTING_KEY {
+        if let Some(parsed) = PolicyProfile::parse(&value) {
+            let _ = state.apply_policy_profile(parsed);
+            return;
+        }
+    }
     let _ = state.db.lock().unwrap().set_setting(&key, &value);
+}
+
+#[tauri::command]
+pub fn get_policy_profile(state: State<'_, AppState>) -> String {
+    state.get_policy_profile().id().to_string()
+}
+
+#[tauri::command]
+pub fn set_policy_profile(state: State<'_, AppState>, profile: String) -> Result<String, String> {
+    let parsed = PolicyProfile::parse(&profile).ok_or_else(|| {
+        "invalid policy profile; expected playback_first, balanced_auto, or aggressive_overnight"
+            .to_string()
+    })?;
+    state
+        .apply_policy_profile(parsed)
+        .map_err(|error| error.to_string())?;
+    Ok(parsed.id().to_string())
 }
 
 #[tauri::command]
@@ -40,6 +64,28 @@ pub fn get_provider_statuses(state: State<'_, AppState>) -> Vec<ProviderStatus> 
     load_config(&state).provider_statuses()
 }
 
+#[tauri::command]
+pub fn get_slskd_runtime_status(state: State<'_, AppState>) -> SlskdRuntimeStatus {
+    let db = state.db.lock().unwrap();
+    let mut runtime = state.slskd_runtime.lock().unwrap();
+    runtime.refresh_status(state.app_handle.as_ref(), &db, &state.download_config)
+}
+
+#[tauri::command]
+pub fn restart_slskd_runtime(state: State<'_, AppState>) -> SlskdRuntimeStatus {
+    let db = state.db.lock().unwrap();
+    let mut runtime = state.slskd_runtime.lock().unwrap();
+    runtime.restart(state.app_handle.as_ref(), &db, &state.download_config)
+}
+
+#[tauri::command]
+pub fn stop_slskd_runtime(state: State<'_, AppState>) -> SlskdRuntimeStatus {
+    let db = state.db.lock().unwrap();
+    let mut runtime = state.slskd_runtime.lock().unwrap();
+    let _ = runtime.stop();
+    runtime.refresh_status(state.app_handle.as_ref(), &db, &state.download_config)
+}
+
 fn load_config(state: &AppState) -> DownloadConfig {
     let db = state.db.lock().unwrap();
     let mut config = state.download_config.clone();
@@ -55,27 +101,19 @@ fn load_config(state: &AppState) -> DownloadConfig {
     config.slskd_user = read_optional_setting(&db, "slskd_user", config.slskd_user);
     config.slskd_pass = read_optional_setting(&db, "slskd_pass", config.slskd_pass);
 
-    config.real_debrid_key =
-        read_optional_setting(&db, "real_debrid_key", config.real_debrid_key);
+    config.real_debrid_key = read_optional_setting(&db, "real_debrid_key", config.real_debrid_key);
 
     config.qobuz_email = read_optional_setting(&db, "qobuz_email", config.qobuz_email);
-    config.qobuz_password =
-        read_optional_setting(&db, "qobuz_password", config.qobuz_password);
+    config.qobuz_password = read_optional_setting(&db, "qobuz_password", config.qobuz_password);
 
     config.deezer_arl = read_optional_setting(&db, "deezer_arl", config.deezer_arl);
 
     config.spotify_client_id =
         read_optional_setting(&db, "spotify_client_id", config.spotify_client_id);
-    config.spotify_client_secret = read_optional_setting(
-        &db,
-        "spotify_client_secret",
-        config.spotify_client_secret,
-    );
-    config.spotify_access_token = read_optional_setting(
-        &db,
-        "spotify_access_token",
-        config.spotify_access_token,
-    );
+    config.spotify_client_secret =
+        read_optional_setting(&db, "spotify_client_secret", config.spotify_client_secret);
+    config.spotify_access_token =
+        read_optional_setting(&db, "spotify_access_token", config.spotify_access_token);
     config.genius_token = read_optional_setting(&db, "genius_token", config.genius_token);
 
     config.jackett_url = read_optional_setting(&db, "jackett_url", config.jackett_url);
@@ -84,16 +122,13 @@ fn load_config(state: &AppState) -> DownloadConfig {
     config.slskd_downloads_dir =
         read_optional_setting(&db, "slskd_downloads_dir", config.slskd_downloads_dir);
 
-    config.nzbgeek_api_key =
-        read_optional_setting(&db, "nzbgeek_api_key", config.nzbgeek_api_key);
+    config.nzbgeek_api_key = read_optional_setting(&db, "nzbgeek_api_key", config.nzbgeek_api_key);
     config.sabnzbd_url = read_optional_setting(&db, "sabnzbd_url", config.sabnzbd_url);
-    config.sabnzbd_api_key =
-        read_optional_setting(&db, "sabnzbd_api_key", config.sabnzbd_api_key);
+    config.sabnzbd_api_key = read_optional_setting(&db, "sabnzbd_api_key", config.sabnzbd_api_key);
 
     config.discogs_token = read_optional_setting(&db, "discogs_token", config.discogs_token);
     config.lastfm_api_key = read_optional_setting(&db, "lastfm_api_key", config.lastfm_api_key);
-    config.lastfm_username =
-        read_optional_setting(&db, "lastfm_username", config.lastfm_username);
+    config.lastfm_username = read_optional_setting(&db, "lastfm_username", config.lastfm_username);
 
     config.ytdlp_path = read_optional_setting(&db, "ytdlp_path", config.ytdlp_path);
     config.sevenzip_path = read_optional_setting(&db, "sevenzip_path", config.sevenzip_path);
@@ -106,7 +141,10 @@ fn read_optional_setting(db: &Db, key: &str, current: Option<String>) -> Option<
 }
 
 fn mask_secret_fields(config: &mut DownloadConfig) {
-    config.slskd_pass = config.slskd_pass.as_ref().map(|_| MASKED_SECRET.to_string());
+    config.slskd_pass = config
+        .slskd_pass
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
     config.real_debrid_key = config
         .real_debrid_key
         .as_ref()
@@ -115,7 +153,10 @@ fn mask_secret_fields(config: &mut DownloadConfig) {
         .qobuz_password
         .as_ref()
         .map(|_| MASKED_SECRET.to_string());
-    config.deezer_arl = config.deezer_arl.as_ref().map(|_| MASKED_SECRET.to_string());
+    config.deezer_arl = config
+        .deezer_arl
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
     config.spotify_client_secret = config
         .spotify_client_secret
         .as_ref()
@@ -124,7 +165,10 @@ fn mask_secret_fields(config: &mut DownloadConfig) {
         .spotify_access_token
         .as_ref()
         .map(|_| MASKED_SECRET.to_string());
-    config.genius_token = config.genius_token.as_ref().map(|_| MASKED_SECRET.to_string());
+    config.genius_token = config
+        .genius_token
+        .as_ref()
+        .map(|_| MASKED_SECRET.to_string());
     config.jackett_api_key = config
         .jackett_api_key
         .as_ref()
@@ -182,7 +226,12 @@ fn persist_config(db: &Db, config: &DownloadConfig, preserve_mask: bool) {
     persist_optional_setting(db, "slskd_user", &config.slskd_user, false);
     persist_optional_setting(db, "slskd_pass", &config.slskd_pass, preserve_mask);
 
-    persist_optional_setting(db, "real_debrid_key", &config.real_debrid_key, preserve_mask);
+    persist_optional_setting(
+        db,
+        "real_debrid_key",
+        &config.real_debrid_key,
+        preserve_mask,
+    );
 
     persist_optional_setting(db, "qobuz_email", &config.qobuz_email, false);
     persist_optional_setting(db, "qobuz_password", &config.qobuz_password, preserve_mask);
@@ -205,13 +254,33 @@ fn persist_config(db: &Db, config: &DownloadConfig, preserve_mask: bool) {
     persist_optional_setting(db, "genius_token", &config.genius_token, preserve_mask);
 
     persist_optional_setting(db, "jackett_url", &config.jackett_url, false);
-    persist_optional_setting(db, "jackett_api_key", &config.jackett_api_key, preserve_mask);
+    persist_optional_setting(
+        db,
+        "jackett_api_key",
+        &config.jackett_api_key,
+        preserve_mask,
+    );
 
-    persist_optional_setting(db, "slskd_downloads_dir", &config.slskd_downloads_dir, false);
+    persist_optional_setting(
+        db,
+        "slskd_downloads_dir",
+        &config.slskd_downloads_dir,
+        false,
+    );
 
-    persist_optional_setting(db, "nzbgeek_api_key", &config.nzbgeek_api_key, preserve_mask);
+    persist_optional_setting(
+        db,
+        "nzbgeek_api_key",
+        &config.nzbgeek_api_key,
+        preserve_mask,
+    );
     persist_optional_setting(db, "sabnzbd_url", &config.sabnzbd_url, false);
-    persist_optional_setting(db, "sabnzbd_api_key", &config.sabnzbd_api_key, preserve_mask);
+    persist_optional_setting(
+        db,
+        "sabnzbd_api_key",
+        &config.sabnzbd_api_key,
+        preserve_mask,
+    );
 
     persist_optional_setting(db, "discogs_token", &config.discogs_token, preserve_mask);
     persist_optional_setting(db, "lastfm_api_key", &config.lastfm_api_key, preserve_mask);

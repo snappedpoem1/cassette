@@ -116,8 +116,7 @@ impl RealDebridProvider {
 
             // TPB returns [{"id":"0","name":"No results returned"}] when empty
             if items.len() == 1
-                && items[0].get("name").and_then(Value::as_str)
-                    == Some("No results returned")
+                && items[0].get("name").and_then(Value::as_str) == Some("No results returned")
             {
                 continue;
             }
@@ -146,7 +145,12 @@ impl RealDebridProvider {
                          &tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A6969%2Fannounce"
                     );
 
-                    Some(TorrentResult { title, magnet, seeders, size })
+                    Some(TorrentResult {
+                        title,
+                        magnet,
+                        seeders,
+                        size,
+                    })
                 })
                 .collect();
 
@@ -287,10 +291,7 @@ impl RealDebridProvider {
     }
 
     /// Submit a magnet/link to Real-Debrid and wait for it to resolve.
-    async fn submit_and_resolve(
-        &self,
-        magnet_or_link: &str,
-    ) -> Result<Vec<String>, ProviderError> {
+    async fn submit_and_resolve(&self, magnet_or_link: &str) -> Result<Vec<String>, ProviderError> {
         // Step 1: Add magnet/link — but first check if it already exists to avoid duplicates
         let existing_id = if let Some(hash) = Self::magnet_hash(magnet_or_link) {
             self.find_existing_torrent(&hash).await
@@ -302,44 +303,41 @@ impl RealDebridProvider {
             info!(torrent_id = %id, "Real-Debrid torrent already exists — reusing");
             id
         } else {
-        let add_response: Value = self
-            .client
-            .post("https://api.real-debrid.com/rest/1.0/torrents/addMagnet")
-            .form(&[("magnet", magnet_or_link)])
-            .send()
-            .await
-            .map_err(|error| self.map_network_error(error))?
-            .json()
-            .await
-            .map_err(|error| self.map_network_error(error))?;
+            let add_response: Value = self
+                .client
+                .post("https://api.real-debrid.com/rest/1.0/torrents/addMagnet")
+                .form(&[("magnet", magnet_or_link)])
+                .send()
+                .await
+                .map_err(|error| self.map_network_error(error))?
+                .json()
+                .await
+                .map_err(|error| self.map_network_error(error))?;
 
-        let new_id = add_response
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                let rate_limited = add_response
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .map(|value| value.eq_ignore_ascii_case("too_many_requests"))
-                    .unwrap_or(false)
-                    || add_response
-                        .get("error_code")
-                        .and_then(Value::as_i64)
-                        == Some(34);
-                if rate_limited {
-                    ProviderError::RateLimited {
-                        provider_id: PROVIDER_ID.to_string(),
+            let new_id = add_response
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    let rate_limited = add_response
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(|value| value.eq_ignore_ascii_case("too_many_requests"))
+                        .unwrap_or(false)
+                        || add_response.get("error_code").and_then(Value::as_i64) == Some(34);
+                    if rate_limited {
+                        ProviderError::RateLimited {
+                            provider_id: PROVIDER_ID.to_string(),
+                        }
+                    } else {
+                        ProviderError::Other {
+                            provider_id: PROVIDER_ID.to_string(),
+                            message: format!("No torrent ID in addMagnet response: {add_response}"),
+                        }
                     }
-                } else {
-                    ProviderError::Other {
-                        provider_id: PROVIDER_ID.to_string(),
-                        message: format!("No torrent ID in addMagnet response: {add_response}"),
-                    }
-                }
-            })?
-            .to_string();
-        info!(torrent_id = %new_id, "Real-Debrid torrent submitted");
-        new_id
+                })?
+                .to_string();
+            info!(torrent_id = %new_id, "Real-Debrid torrent submitted");
+            new_id
         }; // end new-or-existing
 
         // Step 2: Select all files
@@ -440,10 +438,7 @@ impl RealDebridProvider {
             .unwrap_or("download")
             .to_string();
 
-        Ok(UnrestrictedLink {
-            download,
-            filename,
-        })
+        Ok(UnrestrictedLink { download, filename })
     }
 
     /// Download a file to the temp directory.
@@ -643,10 +638,8 @@ impl Provider for RealDebridProvider {
         let cached = self.check_instant_availability(&hashes).await;
         if !cached.is_empty() {
             top.sort_by(|a, b| {
-                let a_hit = Self::magnet_hash(&a.1.magnet)
-                    .map_or(false, |h| cached.contains(&h));
-                let b_hit = Self::magnet_hash(&b.1.magnet)
-                    .map_or(false, |h| cached.contains(&h));
+                let a_hit = Self::magnet_hash(&a.1.magnet).map_or(false, |h| cached.contains(&h));
+                let b_hit = Self::magnet_hash(&b.1.magnet).map_or(false, |h| cached.contains(&h));
                 match (b_hit, a_hit) {
                     (true, false) => std::cmp::Ordering::Greater,
                     (false, true) => std::cmp::Ordering::Less,
@@ -685,7 +678,10 @@ impl Provider for RealDebridProvider {
         let magnet = &candidate.provider_candidate_id;
         let hash_opt = Self::magnet_hash(magnet);
         let is_cached = if let Some(ref hash) = hash_opt {
-            !self.check_instant_availability(&[hash.clone()]).await.is_empty()
+            !self
+                .check_instant_availability(&[hash.clone()])
+                .await
+                .is_empty()
         } else {
             false
         };

@@ -10,9 +10,9 @@ use cassette_core::director::models::{
     AcquisitionStrategy, CandidateRecord, NormalizedTrack, ProviderSearchCandidate,
     ProviderSearchRecord, TrackTask, TrackTaskSource,
 };
-use cassette_core::director::DirectorProgress;
 use cassette_core::director::provider::Provider;
 use cassette_core::director::strategy::{StrategyPlan, StrategyPlanner};
+use cassette_core::director::DirectorProgress;
 use cassette_core::librarian::models::AcquisitionRequestRow;
 use chrono::{NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -133,14 +133,15 @@ pub async fn plan_acquisition(
         (config, providers, cached_rows)
     };
 
-    let (plan, provider_searches, candidate_records, cached_provider_ids) = search_planner_candidates(
-        &config,
-        &providers,
-        &task,
-        &cached_rows,
-        request.edition_policy.as_deref(),
-    )
-    .await?;
+    let (plan, provider_searches, candidate_records, cached_provider_ids) =
+        search_planner_candidates(
+            &config,
+            &providers,
+            &task,
+            &cached_rows,
+            request.edition_policy.as_deref(),
+        )
+        .await?;
 
     {
         let db = state.db.lock().map_err(|error| error.to_string())?;
@@ -335,7 +336,7 @@ pub async fn approve_planned_request(
         )
         .await;
 
-    match state.director_submitter.submit(task).await {
+    match state.submit_director_task(task).await {
         Ok(()) => state
             .control_db
             .update_acquisition_request_status_by_task_id(
@@ -419,8 +420,12 @@ fn track_task_from_request_row(request: &AcquisitionRequestRow) -> Result<TrackT
     let source = parse_track_task_source(&request.source_name)?;
     let strategy = parse_acquisition_strategy(&request.strategy)?;
 
-    let track_number = request.track_number.and_then(|value| u32::try_from(value).ok());
-    let disc_number = request.disc_number.and_then(|value| u32::try_from(value).ok());
+    let track_number = request
+        .track_number
+        .and_then(|value| u32::try_from(value).ok());
+    let disc_number = request
+        .disc_number
+        .and_then(|value| u32::try_from(value).ok());
     let year = request.year.and_then(|value| i32::try_from(value).ok());
 
     Ok(TrackTask {
@@ -489,19 +494,20 @@ async fn load_planned_acquisition_result(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("request {request_id} not found"))?;
-    let (summary, provider_searches, candidate_review) = if let Some(task_id) = request.task_id.as_deref() {
-        let db = state.db.lock().map_err(|error| error.to_string())?;
-        (
-            db.get_candidate_set_summary(task_id)
-                .map_err(|error| error.to_string())?,
-            db.get_provider_search_records(task_id)
-                .map_err(|error| error.to_string())?,
-            db.get_candidate_review(task_id)
-                .map_err(|error| error.to_string())?,
-        )
-    } else {
-        (None, Vec::new(), Vec::new())
-    };
+    let (summary, provider_searches, candidate_review) =
+        if let Some(task_id) = request.task_id.as_deref() {
+            let db = state.db.lock().map_err(|error| error.to_string())?;
+            (
+                db.get_candidate_set_summary(task_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_provider_search_records(task_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_candidate_review(task_id)
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            (None, Vec::new(), Vec::new())
+        };
 
     Ok(PlannedAcquisitionResult {
         identity_lane: planner_identity_lane_from_row(&request),
@@ -548,7 +554,15 @@ async fn search_planner_candidates(
     task: &cassette_core::director::TrackTask,
     cached_rows: &[StoredProviderResponseCache],
     edition_policy: Option<&str>,
-) -> Result<(StrategyPlan, Vec<ProviderSearchRecord>, Vec<CandidateRecord>, Vec<String>), String> {
+) -> Result<
+    (
+        StrategyPlan,
+        Vec<ProviderSearchRecord>,
+        Vec<CandidateRecord>,
+        Vec<String>,
+    ),
+    String,
+> {
     let planner = StrategyPlanner;
     let descriptors = providers
         .iter()
@@ -575,8 +589,12 @@ async fn search_planner_candidates(
         let descriptor = provider.descriptor();
 
         if let Some(cached_row) = cached_map.get(provider_id) {
-            if cache_is_fresh(cached_row.updated_at.as_str(), config.provider_response_cache_max_age_secs) {
-                let cached_candidates = decode_cached_candidates(cached_row, &descriptor, provider_order_index);
+            if cache_is_fresh(
+                cached_row.updated_at.as_str(),
+                config.provider_response_cache_max_age_secs,
+            ) {
+                let cached_candidates =
+                    decode_cached_candidates(cached_row, &descriptor, provider_order_index);
                 let cached_count = cached_candidates.len();
                 let (filtered_candidates, filtered_count) = apply_edition_policy_filter_to_records(
                     cached_candidates,
@@ -666,7 +684,12 @@ async fn search_planner_candidates(
         }
     }
 
-    Ok((plan, provider_searches, candidate_records, cached_provider_ids))
+    Ok((
+        plan,
+        provider_searches,
+        candidate_records,
+        cached_provider_ids,
+    ))
 }
 
 fn apply_edition_policy_filter(
@@ -685,15 +708,16 @@ fn apply_edition_policy_filter(
     let requested_album_has_edition_markers = requested_album
         .map(contains_edition_marker)
         .unwrap_or(false);
-    let requested_album_has_live_marker = requested_album
-        .map(contains_live_marker)
-        .unwrap_or(false);
+    let requested_album_has_live_marker =
+        requested_album.map(contains_live_marker).unwrap_or(false);
 
     let mut kept = Vec::with_capacity(candidates.len());
     let mut filtered = 0usize;
     for candidate in candidates {
         let candidate_album = candidate.album.as_deref();
-        let candidate_has_edition_markers = candidate_album.map(contains_edition_marker).unwrap_or(false);
+        let candidate_has_edition_markers = candidate_album
+            .map(contains_edition_marker)
+            .unwrap_or(false);
         let candidate_has_live_marker = candidate_album.map(contains_live_marker).unwrap_or(false);
 
         let reject = match policy.as_str() {
@@ -740,15 +764,16 @@ fn apply_edition_policy_filter_to_records(
     let requested_album_has_edition_markers = requested_album
         .map(contains_edition_marker)
         .unwrap_or(false);
-    let requested_album_has_live_marker = requested_album
-        .map(contains_live_marker)
-        .unwrap_or(false);
+    let requested_album_has_live_marker =
+        requested_album.map(contains_live_marker).unwrap_or(false);
 
     let mut kept = Vec::with_capacity(candidates.len());
     let mut filtered = 0usize;
     for candidate in candidates {
         let candidate_album = candidate.candidate.album.as_deref();
-        let candidate_has_edition_markers = candidate_album.map(contains_edition_marker).unwrap_or(false);
+        let candidate_has_edition_markers = candidate_album
+            .map(contains_edition_marker)
+            .unwrap_or(false);
         let candidate_has_live_marker = candidate_album.map(contains_live_marker).unwrap_or(false);
 
         let reject = match policy.as_str() {
@@ -821,7 +846,8 @@ fn decode_cached_candidates(
     descriptor: &cassette_core::director::ProviderDescriptor,
     provider_order_index: usize,
 ) -> Vec<CandidateRecord> {
-    let Ok(envelope) = serde_json::from_str::<PersistedProviderResponseEnvelope>(&row.response_json)
+    let Ok(envelope) =
+        serde_json::from_str::<PersistedProviderResponseEnvelope>(&row.response_json)
     else {
         return Vec::new();
     };
@@ -832,7 +858,12 @@ fn decode_cached_candidates(
         .filter(|record| record.provider_id == row.provider_id)
         .map(|record| record.candidate)
         .collect::<Vec<_>>();
-    candidate_records_from_candidates(descriptor, provider_order_index, candidates, "planned_cached")
+    candidate_records_from_candidates(
+        descriptor,
+        provider_order_index,
+        candidates,
+        "planned_cached",
+    )
 }
 
 fn cache_is_fresh(updated_at: &str, max_age_secs: i64) -> bool {
@@ -862,12 +893,15 @@ fn provider_error_outcome(error: &ProviderError) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_edition_policy_filter,
-        cache_is_fresh, parse_acquisition_strategy, parse_track_task_source,
-        planner_identity_lane_from_request,
+        apply_edition_policy_filter, cache_is_fresh, parse_acquisition_strategy,
+        parse_track_task_source, planner_identity_lane_from_request,
     };
-    use cassette_core::acquisition::{AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy};
-    use cassette_core::director::models::{AcquisitionStrategy, ProviderSearchCandidate, TrackTaskSource};
+    use cassette_core::acquisition::{
+        AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
+    };
+    use cassette_core::director::models::{
+        AcquisitionStrategy, ProviderSearchCandidate, TrackTaskSource,
+    };
     use chrono::Utc;
 
     #[test]
@@ -973,7 +1007,8 @@ mod tests {
             },
         ];
 
-        let (kept, filtered) = apply_edition_policy_filter(candidates, Some("standard_only"), Some("Album"));
+        let (kept, filtered) =
+            apply_edition_policy_filter(candidates, Some("standard_only"), Some("Album"));
         assert_eq!(kept.len(), 1);
         assert_eq!(filtered, 1);
         assert_eq!(kept[0].provider_candidate_id, "1");
@@ -981,22 +1016,21 @@ mod tests {
 
     #[test]
     fn edition_policy_no_live_keeps_requested_live_album() {
-        let candidates = vec![
-            ProviderSearchCandidate {
-                provider_id: "p".to_string(),
-                provider_candidate_id: "1".to_string(),
-                artist: "Artist".to_string(),
-                title: "Song".to_string(),
-                album: Some("Album (Live)".to_string()),
-                duration_secs: Some(180.0),
-                extension_hint: None,
-                bitrate_kbps: None,
-                cover_art_url: None,
-                metadata_confidence: 0.9,
-            },
-        ];
+        let candidates = vec![ProviderSearchCandidate {
+            provider_id: "p".to_string(),
+            provider_candidate_id: "1".to_string(),
+            artist: "Artist".to_string(),
+            title: "Song".to_string(),
+            album: Some("Album (Live)".to_string()),
+            duration_secs: Some(180.0),
+            extension_hint: None,
+            bitrate_kbps: None,
+            cover_art_url: None,
+            metadata_confidence: 0.9,
+        }];
 
-        let (kept, filtered) = apply_edition_policy_filter(candidates, Some("no_live"), Some("Album Live"));
+        let (kept, filtered) =
+            apply_edition_policy_filter(candidates, Some("no_live"), Some("Album Live"));
         assert_eq!(kept.len(), 1);
         assert_eq!(filtered, 0);
     }

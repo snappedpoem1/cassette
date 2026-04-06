@@ -7,9 +7,11 @@ use crate::director::download::batch_download;
 use crate::director::download::compute_staging_path;
 use crate::director::provider::Provider;
 use crate::director::providers::{DeezerProvider, QobuzProvider, SlskdProvider};
-use crate::director::sources::{BandcampSource, HttpSource, LocalCacheSource, ProviderBridge, SourceProvider, SpotifySource, YoutubeSource};
+use crate::director::sources::{
+    BandcampSource, HttpSource, LocalCacheSource, ProviderBridge, SourceProvider, SpotifySource,
+    YoutubeSource,
+};
 use crate::director::DirectorConfig;
-use crate::sources::{RemoteProviderConfig, SlskdConnectionConfig};
 use crate::gatekeeper::GatekeeperConfig;
 use crate::librarian::models::DesiredTrack;
 use crate::library::{LibraryManager, ManagerConfig, Module, OperationStatus};
@@ -19,12 +21,17 @@ use crate::orchestrator::reconciliation::engine::reconcile_desired_against_local
 use crate::orchestrator::sequencing::custodian_phase::run_custodian_phase_managed;
 use crate::orchestrator::sequencing::librarian_phase::run_librarian_phase_managed;
 use crate::orchestrator::OrchestratorConfig;
+use crate::sources::{RemoteProviderConfig, SlskdConnectionConfig};
 use crate::validation::error::{Result, ValidationError};
 use crate::validation::logging::{
     explain_audit_trace, verify_complete_operation_log, verify_operation_log, LogVerification,
 };
-use crate::validation::spotify_import::{import_spotify_export, verify_spotify_import, ImportSummary};
-use crate::validation::test_library::{sqlite_url_for_path, reset_validation_environment, TestLibraryConfig, TestLibrarySetup};
+use crate::validation::spotify_import::{
+    import_spotify_export, verify_spotify_import, ImportSummary,
+};
+use crate::validation::test_library::{
+    reset_validation_environment, sqlite_url_for_path, TestLibraryConfig, TestLibrarySetup,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,7 +62,12 @@ impl Default for ValidationConfig {
             cleanup_after_run: true,
             run_director: true,
             run_gatekeeper: true,
-            enabled_sources: vec!["local_cache".to_string(), "http".to_string(), "youtube".to_string(), "bandcamp".to_string()],
+            enabled_sources: vec![
+                "local_cache".to_string(),
+                "http".to_string(),
+                "youtube".to_string(),
+                "bandcamp".to_string(),
+            ],
             production: false,
             dry_run: false,
             organize_only: false,
@@ -291,14 +303,20 @@ async fn run_validation_internal(
     }
 
     println!("Running Librarian scan...");
-    let scan_outcome = run_librarian_phase_managed(manager, root_op_id, &orchestrator_config).await?;
+    let scan_outcome =
+        run_librarian_phase_managed(manager, root_op_id, &orchestrator_config).await?;
     report.librarian_scanned = scan_outcome.files_scanned;
-    report.librarian_logged = verify_operation_log(manager, Module::Librarian, "scan").await.is_ok();
+    report.librarian_logged = verify_operation_log(manager, Module::Librarian, "scan")
+        .await
+        .is_ok();
 
     println!("Running Custodian cleanup...");
-    let cleanup_outcome = run_custodian_phase_managed(manager, root_op_id, &orchestrator_config).await?;
+    let cleanup_outcome =
+        run_custodian_phase_managed(manager, root_op_id, &orchestrator_config).await?;
     report.custodian_sorted = cleanup_outcome.files_sorted;
-    report.custodian_logged = verify_operation_log(manager, Module::Custodian, "cleanup").await.is_ok();
+    report.custodian_logged = verify_operation_log(manager, Module::Custodian, "cleanup")
+        .await
+        .is_ok();
 
     if config.organize_only {
         println!("Organize-only mode — skipping reconciliation, download, and gatekeeper.");
@@ -349,11 +367,17 @@ async fn run_validation_internal(
 
     report.reconciliation_matched = reconciliation.matched_count;
     report.reconciliation_missing = reconciliation.missing_count;
-    report.orchestrator_logged = verify_operation_log(manager, Module::Orchestrator, "reconciliation").await.is_ok();
+    report.orchestrator_logged =
+        verify_operation_log(manager, Module::Orchestrator, "reconciliation")
+            .await
+            .is_ok();
 
     println!("Generating DeltaQueue...");
-    let delta_op = manager.start_operation(Module::Orchestrator, "delta").await?;
-    let delta_queue = match generate_delta_queue_managed(manager, &delta_op, &reconciliation).await {
+    let delta_op = manager
+        .start_operation(Module::Orchestrator, "delta")
+        .await?;
+    let delta_queue = match generate_delta_queue_managed(manager, &delta_op, &reconciliation).await
+    {
         Ok(deltas) => {
             manager
                 .complete_operation(&delta_op, OperationStatus::Success)
@@ -369,10 +393,14 @@ async fn run_validation_internal(
     };
 
     report.delta_queue_entries = delta_queue.len();
-    report.delta_logged = verify_operation_log(manager, Module::Orchestrator, "delta").await.is_ok();
+    report.delta_logged = verify_operation_log(manager, Module::Orchestrator, "delta")
+        .await
+        .is_ok();
 
     let adapter = DeltaQueueAdapter::new(manager.db_pool().clone());
-    let desired_for_download = adapter.extract_desired_tracks_for_download(&delta_queue).await?;
+    let desired_for_download = adapter
+        .extract_desired_tracks_for_download(&delta_queue)
+        .await?;
 
     if config.run_director {
         println!("Downloading missing tracks...");
@@ -382,11 +410,14 @@ async fn run_validation_internal(
         director_config.temp_root = setup.test_staging.join("tmp");
         director_config.local_search_roots = vec![setup.test_library.clone()];
 
-        let download_outcome = batch_download(manager, &desired_for_download, &sources, &director_config).await?;
+        let download_outcome =
+            batch_download(manager, &desired_for_download, &sources, &director_config).await?;
         report.director_downloaded = download_outcome.successfully_downloaded;
         report.director_failed = download_outcome.errors.len();
 
-        report.director_logged = verify_operation_log(manager, Module::Director, "batch_download").await.is_ok();
+        report.director_logged = verify_operation_log(manager, Module::Director, "batch_download")
+            .await
+            .is_ok();
 
         if config.run_gatekeeper {
             println!("Admitting files with Gatekeeper...");
@@ -396,9 +427,12 @@ async fn run_validation_internal(
             gatekeeper_config.quarantine_root = setup.test_quarantine.clone();
             gatekeeper_config.audit_manifest_dir = setup.test_quarantine.join("audit");
 
-            let owned_entries = build_gatekeeper_entries(&desired_for_download, &setup.test_staging);
-            let desired_by_id: HashMap<i64, &DesiredTrack> =
-                desired_for_download.iter().map(|track| (track.id, track)).collect();
+            let owned_entries =
+                build_gatekeeper_entries(&desired_for_download, &setup.test_staging);
+            let desired_by_id: HashMap<i64, &DesiredTrack> = desired_for_download
+                .iter()
+                .map(|track| (track.id, track))
+                .collect();
             let entries: Vec<(&Path, Option<&DesiredTrack>)> = owned_entries
                 .iter()
                 .filter_map(|(path, desired_id)| {
@@ -413,14 +447,12 @@ async fn run_validation_internal(
                 .await?;
             report.gatekeeper_admitted = outcome.admitted;
 
-            report.gatekeeper_logged = verify_operation_log(manager, Module::Gatekeeper, "batch_ingest").await.is_ok();
+            report.gatekeeper_logged =
+                verify_operation_log(manager, Module::Gatekeeper, "batch_ingest")
+                    .await
+                    .is_ok();
             if let Some((path, desired_id)) = owned_entries.first() {
-                let trace = explain_audit_trace(
-                    manager,
-                    path.to_str(),
-                    Some(*desired_id),
-                )
-                .await?;
+                let trace = explain_audit_trace(manager, path.to_str(), Some(*desired_id)).await?;
                 report.audit_trace_ok =
                     !trace.operation_events.is_empty() && !trace.gatekeeper_audit.is_empty();
             }
@@ -514,11 +546,9 @@ async fn ensure_validation_pipeline_tables(pool: &sqlx::SqlitePool) -> Result<()
     )
     .execute(pool)
     .await;
-    let _ = sqlx::query(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_tracks_isrc ON tracks(isrc)",
-    )
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS uq_tracks_isrc ON tracks(isrc)")
+        .execute(pool)
+        .await;
 
     Ok(())
 }
@@ -569,7 +599,9 @@ async fn run_download_only(
     let download_outcome = batch_download(manager, &rows, &sources, &director_config).await?;
     report.director_downloaded = download_outcome.successfully_downloaded;
     report.director_failed = download_outcome.errors.len();
-    report.director_logged = verify_operation_log(manager, Module::Director, "batch_download").await.is_ok();
+    report.director_logged = verify_operation_log(manager, Module::Director, "batch_download")
+        .await
+        .is_ok();
 
     if config.run_gatekeeper {
         println!("Admitting files with Gatekeeper...");
@@ -595,7 +627,10 @@ async fn run_download_only(
             .run_gatekeeper_with_manager(&entries, &gatekeeper_config)
             .await?;
         report.gatekeeper_admitted = outcome.admitted;
-        report.gatekeeper_logged = verify_operation_log(manager, Module::Gatekeeper, "batch_ingest").await.is_ok();
+        report.gatekeeper_logged =
+            verify_operation_log(manager, Module::Gatekeeper, "batch_ingest")
+                .await
+                .is_ok();
         if let Some((path, desired_id)) = owned_entries.first() {
             let trace = explain_audit_trace(manager, path.to_str(), Some(*desired_id)).await?;
             report.audit_trace_ok =
@@ -606,7 +641,10 @@ async fn run_download_only(
     Ok(())
 }
 
-fn build_sources(config: &ValidationConfig, setup: &TestLibrarySetup) -> Vec<Arc<dyn SourceProvider>> {
+fn build_sources(
+    config: &ValidationConfig,
+    setup: &TestLibrarySetup,
+) -> Vec<Arc<dyn SourceProvider>> {
     let mut providers: Vec<Arc<dyn SourceProvider>> = Vec::new();
     let enabled: HashMap<String, bool> = config
         .enabled_sources
@@ -615,7 +653,9 @@ fn build_sources(config: &ValidationConfig, setup: &TestLibrarySetup) -> Vec<Arc
         .collect();
 
     if enabled.contains_key("local_cache") {
-        providers.push(Arc::new(LocalCacheSource::new(vec![setup.test_library.clone()])));
+        providers.push(Arc::new(LocalCacheSource::new(vec![setup
+            .test_library
+            .clone()])));
     }
     if enabled.contains_key("http") {
         providers.push(Arc::new(HttpSource::new()));
@@ -638,7 +678,8 @@ fn build_sources(config: &ValidationConfig, setup: &TestLibrarySetup) -> Vec<Arc
     };
 
     // Wire real acquisition providers via the bridge adapter.
-    let slskd_url = std::env::var("SLSKD_URL").unwrap_or_else(|_| "http://localhost:5030".to_string());
+    let slskd_url =
+        std::env::var("SLSKD_URL").unwrap_or_else(|_| "http://localhost:5030".to_string());
     let slskd_user = std::env::var("SLSKD_USER").unwrap_or_else(|_| "slskd".to_string());
     let slskd_pass = std::env::var("SLSKD_PASSWORD").unwrap_or_else(|_| "slskd".to_string());
 
@@ -662,12 +703,23 @@ fn build_sources(config: &ValidationConfig, setup: &TestLibrarySetup) -> Vec<Arc
     if has_qobuz {
         let qobuz: Arc<dyn Provider> = Arc::new(QobuzProvider::new(remote_config.clone()));
         providers.push(Arc::new(ProviderBridge::new(qobuz, &director_config)));
-        println!("[sources] Qobuz provider registered (email={})", remote_config.qobuz_email.as_deref().unwrap_or("?"));
+        println!(
+            "[sources] Qobuz provider registered (email={})",
+            remote_config.qobuz_email.as_deref().unwrap_or("?")
+        );
     } else {
         println!(
             "[sources] Qobuz SKIPPED — missing env: QOBUZ_APP_ID={}, QOBUZ_EMAIL={}",
-            if remote_config.qobuz_app_id.is_some() { "set" } else { "MISSING" },
-            if remote_config.qobuz_email.is_some() { "set" } else { "MISSING" },
+            if remote_config.qobuz_app_id.is_some() {
+                "set"
+            } else {
+                "MISSING"
+            },
+            if remote_config.qobuz_email.is_some() {
+                "set"
+            } else {
+                "MISSING"
+            },
         );
     }
 
@@ -681,7 +733,11 @@ fn build_sources(config: &ValidationConfig, setup: &TestLibrarySetup) -> Vec<Arc
     }
 
     let names: Vec<&str> = providers.iter().map(|p| p.name()).collect();
-    println!("[sources] {} providers registered: {:?}", providers.len(), names);
+    println!(
+        "[sources] {} providers registered: {:?}",
+        providers.len(),
+        names
+    );
 
     providers
 }

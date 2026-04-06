@@ -12,12 +12,14 @@ import {
   type DownloadArtistDiscography,
   type BacklogRunStatus,
   type DirectorDebugStats,
+  type SlskdRuntimeStatus,
 } from '$lib/api/tauri';
 
 export const downloadJobs = writable<DownloadJob[]>([]);
 export const downloadConfig = writable<DownloadConfig | null>(null);
 export const providerStatuses = writable<ProviderStatus[]>([]);
 export const providerHealth = writable<Record<string, ProviderHealthEvent>>({});
+export const slskdRuntimeStatus = writable<SlskdRuntimeStatus | null>(null);
 export const metadataSearchResults = writable<DownloadMetadataSearchResult | null>(null);
 export const artistDiscography = writable<DownloadArtistDiscography | null>(null);
 export const isSearchingMetadata = writable(false);
@@ -36,9 +38,11 @@ export async function loadDownloadConfig() {
   try {
     downloadConfig.set(await api.getConfig());
     providerStatuses.set(await api.getProviderStatuses());
+    slskdRuntimeStatus.set(await api.getSlskdRuntimeStatus());
   } catch {
     downloadConfig.set(null);
     providerStatuses.set([]);
+    slskdRuntimeStatus.set(null);
   }
 }
 
@@ -50,6 +54,14 @@ export async function saveDownloadConfig(config: DownloadConfig) {
 export async function persistEffectiveDownloadConfig() {
   await api.persistEffectiveConfig();
   await loadDownloadConfig();
+}
+
+export async function refreshSlskdRuntimeStatus() {
+  try {
+    slskdRuntimeStatus.set(await api.getSlskdRuntimeStatus());
+  } catch {
+    slskdRuntimeStatus.set(null);
+  }
 }
 
 export async function searchMetadata(query: string) {
@@ -150,6 +162,7 @@ export async function startDownloadSupervision() {
     if (document.visibilityState === 'visible') {
       void loadDownloadJobs();
       void refreshBacklogStatus();
+      void refreshSlskdRuntimeStatus();
     }
   };
   document.addEventListener('visibilitychange', visibilityHandler);

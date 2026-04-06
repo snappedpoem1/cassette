@@ -45,11 +45,13 @@ fn remote_provider_config(db: &Db) -> RemoteProviderConfig {
         qobuz_password_hash: read_setting(db, "qobuz_password_hash").or(env.qobuz_password_hash),
         qobuz_app_id: read_setting(db, "qobuz_app_id").or(env.qobuz_app_id),
         qobuz_app_secret: read_setting(db, "qobuz_app_secret").or(env.qobuz_app_secret),
-        qobuz_user_auth_token: read_setting(db, "qobuz_user_auth_token").or(env.qobuz_user_auth_token),
+        qobuz_user_auth_token: read_setting(db, "qobuz_user_auth_token")
+            .or(env.qobuz_user_auth_token),
         qobuz_secrets: read_setting(db, "qobuz_secrets").or(env.qobuz_secrets),
         deezer_arl: read_setting(db, "deezer_arl").or(env.deezer_arl),
         spotify_client_id: read_setting(db, "spotify_client_id").or(env.spotify_client_id),
-        spotify_client_secret: read_setting(db, "spotify_client_secret").or(env.spotify_client_secret),
+        spotify_client_secret: read_setting(db, "spotify_client_secret")
+            .or(env.spotify_client_secret),
         spotify_access_token: read_setting(db, "spotify_access_token").or(env.spotify_access_token),
         discogs_token: read_setting(db, "discogs_token").or(env.discogs_token),
     }
@@ -96,11 +98,17 @@ fn parse_args() -> Result<(Vec<String>, TrackTask), String> {
         match args[index].as_str() {
             "--provider" => {
                 index += 1;
-                provider = args.get(index).cloned().ok_or("--provider requires a value")?;
+                provider = args
+                    .get(index)
+                    .cloned()
+                    .ok_or("--provider requires a value")?;
             }
             "--artist" => {
                 index += 1;
-                artist = args.get(index).cloned().ok_or("--artist requires a value")?;
+                artist = args
+                    .get(index)
+                    .cloned()
+                    .ok_or("--artist requires a value")?;
             }
             "--title" => {
                 index += 1;
@@ -121,7 +129,11 @@ fn parse_args() -> Result<(Vec<String>, TrackTask), String> {
     }
 
     let providers = match provider.as_str() {
-        "all" => vec!["deezer".to_string(), "qobuz".to_string(), "slskd".to_string()],
+        "all" => vec![
+            "deezer".to_string(),
+            "qobuz".to_string(),
+            "slskd".to_string(),
+        ],
         "deezer" | "qobuz" | "slskd" => vec![provider],
         _ => return Err("Provider must be one of: all, deezer, qobuz, slskd".to_string()),
     };
@@ -189,18 +201,31 @@ async fn cleanup_temp_context(context: &TaskTempContext) {
     }
 }
 
-fn select_candidate(candidates: &[ProviderSearchCandidate], task: &TrackTask) -> Option<ProviderSearchCandidate> {
+fn select_candidate(
+    candidates: &[ProviderSearchCandidate],
+    task: &TrackTask,
+) -> Option<ProviderSearchCandidate> {
     ranked_candidates(candidates, task).into_iter().next()
 }
 
-fn ranked_candidates(candidates: &[ProviderSearchCandidate], task: &TrackTask) -> Vec<ProviderSearchCandidate> {
+fn ranked_candidates(
+    candidates: &[ProviderSearchCandidate],
+    task: &TrackTask,
+) -> Vec<ProviderSearchCandidate> {
     let target_title = task.target.title.to_ascii_lowercase();
-    let target_album = task.target.album.as_ref().map(|value| value.to_ascii_lowercase());
+    let target_album = task
+        .target
+        .album
+        .as_ref()
+        .map(|value| value.to_ascii_lowercase());
 
     let mut ranked = candidates.to_vec();
     ranked.sort_by(|left, right| {
-        score_candidate(right, &target_title, target_album.as_deref())
-            .cmp(&score_candidate(left, &target_title, target_album.as_deref()))
+        score_candidate(right, &target_title, target_album.as_deref()).cmp(&score_candidate(
+            left,
+            &target_title,
+            target_album.as_deref(),
+        ))
     });
     ranked
 }
@@ -214,7 +239,8 @@ fn score_candidate(
     if candidate.title.to_ascii_lowercase().contains(target_title) {
         score += 500;
     }
-    if let (Some(target_album), Some(candidate_album)) = (target_album, candidate.album.as_deref()) {
+    if let (Some(target_album), Some(candidate_album)) = (target_album, candidate.album.as_deref())
+    {
         if candidate_album.to_ascii_lowercase().contains(target_album) {
             score += 200;
         }
@@ -259,7 +285,10 @@ async fn probe_provider(provider: Arc<dyn Provider>, task: &TrackTask) -> ProbeR
             search_result.len(),
             primary_candidate.provider_candidate_id,
             primary_candidate.title,
-            primary_candidate.album.clone().unwrap_or_else(|| "<none>".to_string())
+            primary_candidate
+                .album
+                .clone()
+                .unwrap_or_else(|| "<none>".to_string())
         );
 
         let ranked = ranked_candidates(&search_result, task);
@@ -276,10 +305,9 @@ async fn probe_provider(provider: Arc<dyn Provider>, task: &TrackTask) -> ProbeR
                     acquisition = Some(acquired);
                     break;
                 }
-                Ok(Err(error)) => errors.push(format!(
-                    "{}: {}",
-                    candidate.provider_candidate_id, error
-                )),
+                Ok(Err(error)) => {
+                    errors.push(format!("{}: {}", candidate.provider_candidate_id, error))
+                }
                 Err(_) => errors.push(format!("{}: timed out", candidate.provider_candidate_id)),
             }
         }
@@ -355,7 +383,10 @@ async fn main() -> Result<(), String> {
         "Probing providers for artist='{}' title='{}' album='{}'",
         task.target.artist,
         task.target.title,
-        task.target.album.clone().unwrap_or_else(|| "<none>".to_string())
+        task.target
+            .album
+            .clone()
+            .unwrap_or_else(|| "<none>".to_string())
     );
     println!("{:<10} {:<6} detail", "provider", "status");
 

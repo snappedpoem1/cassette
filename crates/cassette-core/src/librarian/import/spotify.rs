@@ -31,7 +31,7 @@ pub fn parse_spotify_payload(json: &str) -> Result<SpotifyExportPayload, serde_j
             .get("source_name")
             .and_then(Value::as_str)
             .map(ToString::to_string)
-            .or_else(|| Some("spotify".to_string()));
+            .or_else(|| Some("spotify_library".to_string()));
 
         if let Some(items) = object.get("tracks").and_then(Value::as_array) {
             return Ok(SpotifyExportPayload {
@@ -58,7 +58,7 @@ pub fn parse_spotify_payload(json: &str) -> Result<SpotifyExportPayload, serde_j
 
     if let Some(items) = value.as_array() {
         return Ok(SpotifyExportPayload {
-            source_name: Some("spotify".to_string()),
+            source_name: Some("spotify_library".to_string()),
             tracks: items
                 .iter()
                 .cloned()
@@ -68,7 +68,7 @@ pub fn parse_spotify_payload(json: &str) -> Result<SpotifyExportPayload, serde_j
     }
 
     Ok(SpotifyExportPayload {
-        source_name: Some("spotify".to_string()),
+        source_name: Some("spotify_library".to_string()),
         tracks: Vec::new(),
     })
 }
@@ -88,7 +88,11 @@ fn spotify_track_from_value(value: Value) -> Option<SpotifyExportTrack> {
                 .and_then(|artist| artist.get("name"))
                 .and_then(Value::as_str)
         })
-        .or_else(|| value.get("master_metadata_album_artist_name").and_then(Value::as_str))?
+        .or_else(|| {
+            value
+                .get("master_metadata_album_artist_name")
+                .and_then(Value::as_str)
+        })?
         .trim()
         .to_string();
 
@@ -104,13 +108,10 @@ fn spotify_track_from_value(value: Value) -> Option<SpotifyExportTrack> {
         .get("album_title")
         .and_then(Value::as_str)
         .map(ToString::to_string)
+        .or_else(|| track_obj.get("album").and_then(album_title_from_value))
         .or_else(|| {
-            track_obj
-                .get("album")
-                .and_then(album_title_from_value)
-        })
-        .or_else(|| {
-            value.get("master_metadata_album_album_name")
+            value
+                .get("master_metadata_album_album_name")
                 .and_then(Value::as_str)
                 .map(ToString::to_string)
         });
@@ -126,11 +127,7 @@ fn spotify_track_from_value(value: Value) -> Option<SpotifyExportTrack> {
         .get("album_id")
         .and_then(Value::as_str)
         .map(ToString::to_string)
-        .or_else(|| {
-            track_obj
-                .get("album")
-                .and_then(album_id_from_value)
-        });
+        .or_else(|| track_obj.get("album").and_then(album_id_from_value));
 
     let artist_id = track_obj
         .get("artist_id")
@@ -141,22 +138,22 @@ fn spotify_track_from_value(value: Value) -> Option<SpotifyExportTrack> {
                 .get("artists")
                 .and_then(Value::as_array)
                 .and_then(|artists| artists.first())
-                .and_then(|artist| spotify_uri_like_id(artist.get("uri").and_then(Value::as_str), "artist"))
+                .and_then(|artist| {
+                    spotify_uri_like_id(artist.get("uri").and_then(Value::as_str), "artist")
+                })
                 .or_else(|| {
                     track_obj
                         .get("artists")
                         .and_then(Value::as_array)
                         .and_then(|artists| artists.first())
-                        .and_then(|artist| spotify_prefixed_id(artist.get("id").and_then(Value::as_str), "artist"))
+                        .and_then(|artist| {
+                            spotify_prefixed_id(artist.get("id").and_then(Value::as_str), "artist")
+                        })
                 })
         });
 
-    let track_number = track_obj
-        .get("track_number")
-        .and_then(as_i64);
-    let disc_number = track_obj
-        .get("disc_number")
-        .and_then(as_i64);
+    let track_number = track_obj.get("track_number").and_then(as_i64);
+    let disc_number = track_obj.get("disc_number").and_then(as_i64);
     let duration_ms = track_obj
         .get("duration_ms")
         .and_then(as_i64)
@@ -242,9 +239,18 @@ mod tests {
         .expect("payload");
 
         assert_eq!(payload.tracks.len(), 1);
-        assert_eq!(payload.tracks[0].track_id.as_deref(), Some("spotify:track:1"));
-        assert_eq!(payload.tracks[0].album_id.as_deref(), Some("spotify:album:2"));
-        assert_eq!(payload.tracks[0].artist_id.as_deref(), Some("spotify:artist:3"));
+        assert_eq!(
+            payload.tracks[0].track_id.as_deref(),
+            Some("spotify:track:1")
+        );
+        assert_eq!(
+            payload.tracks[0].album_id.as_deref(),
+            Some("spotify:album:2")
+        );
+        assert_eq!(
+            payload.tracks[0].artist_id.as_deref(),
+            Some("spotify:artist:3")
+        );
         assert!(payload.tracks[0].raw_payload.is_some());
     }
 
@@ -260,5 +266,15 @@ mod tests {
         assert_eq!(track.album_id.as_deref(), Some("spotify:album:album123"));
         assert_eq!(track.artist_id.as_deref(), Some("spotify:artist:artist123"));
         assert_eq!(track.isrc.as_deref(), Some("USRC17607839"));
+    }
+
+    #[test]
+    fn defaults_source_name_to_spotify_library_lane() {
+        let payload = parse_spotify_payload(
+            r#"[{"track":{"id":"track123","name":"Song","album":{"id":"album123","name":"Album"},"artists":[{"id":"artist123","name":"Artist"}]}}]"#,
+        )
+        .expect("payload");
+
+        assert_eq!(payload.source_name.as_deref(), Some("spotify_library"));
     }
 }

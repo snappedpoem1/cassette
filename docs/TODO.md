@@ -2,7 +2,12 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.  
 **Rule**: If a task is not in this file, it is not committed project scope yet.  
-**Last Updated**: 2026-04-05
+**Last Updated**: 2026-04-06
+
+Scope note:
+
+- This TODO is for a single-owner personal project.
+- Terms such as "shipping blocker" and related release language mean personal reliability/readiness blockers only.
 
 Short execution board: see `HIT_LIST.md`.
 
@@ -196,21 +201,21 @@ Acceptance:
 
 ## P1
 
-### [P1] [review] Harden async and recovery behavior in acquisition flows
+### [P1] [done] Harden async and recovery behavior in acquisition flows
 
 Why:
 
 - Acquisition paths are where flaky networks, partial downloads, and timeouts converge.
-- Most of the code-level work is in, but one fresh live coordinator recovery proof is still missing.
+- Fresh coordinator recovery/resume behavior is now live-proven again (2026-04-06) with deterministic stale-claim reclaim and bounded queue closure.
 
 Acceptance:
 
 - [x] Tests cover interruption/retry behavior already present in the Director suite
 - [x] Retry/cooldown thresholds are config fields instead of only engine constants
 - [x] Recovery behavior is explicit in queue claims, staged-download resume checks, and startup recovery filtering
-- [x] Capture one fresh live recovery/resume proof with the coordinator path
+- [x] Capture one fresh live recovery/resume proof with the coordinator path (`engine_pipeline_cli --resume --limit 1 --skip-fingerprint-backfill --skip-post-sync --skip-organize-subset` on 2026-04-06; stale seeded claim reclaimed and row processed)
 
-### [P1] [review] Raise packaging and clean-machine confidence
+### [P1] [done] Raise packaging and clean-machine confidence
 
 Why:
 
@@ -223,6 +228,96 @@ Acceptance:
 - [x] Release checklist updated (`docs/RELEASE_CHECKLIST.md`)
 - [x] Trust-spine verification script exists (`scripts/verify_trust_spine.ps1`)
 - [x] `cargo tauri build` produces `.msi` and `.exe` installers — `default-run = "cassette"` added to `src-tauri/Cargo.toml` (2026-04-03)
+
+### [P1] [done] Execute music-first system plan (Phase 1 spine)
+
+Why:
+
+- The core engine has deep capability, but UX still under-expresses it as one coherent system.
+- Current direction is explicit: player as front door, acquisition as engine, librarian/organizer as stewards.
+
+Reference:
+
+- `docs/MUSIC_FIRST_SYSTEM_EXECUTION_PLAN.md`
+
+Acceptance:
+
+- [x] Home route is music-first with "while you were away" background summary
+- [x] Always-visible compact system health strip exists (provider/service/queue/scan status)
+- [x] Artist becomes default library worldview with improved featured-artist normalization behavior
+- [x] Downloads reorganized into Missing/In Progress/Blocked/Completed lanes with plain-language status
+- [x] No modal/popup spam for normal background automation
+- [x] Existing playback/download behavior remains intact under baseline verification
+
+Follow-on:
+
+- [ ] Phase 2 universal context-action surfaces (artist/album/track) sequenced after Phase 1 passes
+
+### [P1] [done] Execute music-first system plan (Phase 0 contracts)
+
+Why:
+
+- The feature plan was strong but under-specified your true intent as an autonomous personal music system.
+- Contract-first alignment prevents drift into disconnected feature work.
+
+Reference:
+
+- `docs/MUSIC_FIRST_SYSTEM_EXECUTION_PLAN.md` (Operating Contract, Experience Contract, Success Metrics)
+
+Acceptance:
+
+- [x] Operating Contract is treated as a hard gate for new UX/core work
+- [x] Experience Contract is reflected in Phase 1 deliverables
+- [x] "While you were away" narrative schema is defined and ready for implementation
+- [x] Collection-intelligence taxonomy is fixed and reflected in downloads planning
+- [x] KPI stubs exist for time-to-music, unchanged-file skip rate, auto-resolution rate, blocked-work visibility, intervention frequency, and explainability
+
+### [P1] [done] Operationalize CPU-first startup scan and deferred GPU enrichment lane
+
+Why:
+
+- The performance direction is clear: high-throughput startup/background scanning should saturate CPU + I/O lanes, while GPU work should be reserved for enrichment tasks where acceleration is real.
+- This closes the gap between current contract-level planning and concrete runtime execution policy.
+
+Reference:
+
+- `docs/MUSIC_FIRST_SYSTEM_EXECUTION_PLAN.md` (Execution Insight: CPU-First Scan, GPU-Deferred Enrichment)
+
+Acceptance:
+
+- [x] Startup/background scan path uses persistent incremental diffing and deterministic resume checkpoints
+- [x] Unchanged-file skip behavior is measurable and recorded in telemetry captures
+- [x] GPU work is routed to deferred enrichment queues (for example BPM/key/embedding lanes), not core scan/hash loops
+- [x] Background saturation does not regress return-to-music responsiveness
+- [x] WAL + queue claim behavior remains deterministic under load
+
+Evidence (2026-04-06):
+
+- Fresh multi-run capture recorded under `artifacts/perf/run-20260406-160911/results.json` (`-Runs 3 -WarmupRuns 1`).
+- `scan_resume_queue_only` median/p95 is now sub-second while resume checkpoints keep startup in queue-only mode.
+- Live resume probe showed deterministic checkpoint fast-path: `files_scanned=0` / `files_upserted=0` with `local_files=46503` known rows.
+- Core scan/coordinator loops remain CPU+I/O lanes; GPU-heavy enrichment stays deferred/out-of-band from startup scan paths.
+
+### [P1] [done] Execute Music OS Stage A convergence backbone
+
+Why:
+
+- The next strategic step is not isolated feature work; it is cross-layer convergence that turns Cassette into one coherent Music OS.
+- Stage A establishes shared primitives (trust ledger, edition intelligence, policy profiles) that multiple later capabilities depend on.
+
+Reference:
+
+- `docs/CASSETTE_MUSIC_OS_IMPLEMENTATION_PLAN.md` (Stage A: Contract and Data Foundations)
+
+Acceptance:
+
+- [x] Trust Ledger v1 is implemented with queryable reason-coded mutation evidence across planner, director, and gatekeeper outcomes
+- [x] Edition intelligence markers are threaded through request contract, planner filters, and runtime track inspection surfaces
+- [x] Policy profiles (Playback-First, Balanced Auto, Aggressive Overnight) are implemented with deterministic, logged runtime behavior changes
+- [x] Stage A outputs are reflected in Downloads/Home explainability and settings controls
+  Trust Ledger reason cards are now surfaced in Downloads and Home; Edition Intelligence hints now surface in Downloads request rows and Library track inspection; Settings now exposes policy profile controls with immediate director hot-reload.
+- [x] Stage A verification evidence is captured in `PROJECT_STATE.md` and `TELEMETRY.md`
+  Trust Ledger, Edition Intelligence, and Policy Profile runtime verification evidence is captured and passing (`cargo check --workspace`, `cargo test --workspace`, `ui/npm run build`, and `scripts/smoke_desktop.ps1`).
 
 ### [P1] [done] Deliver modular desktop UX modernization (Winamp-inspired, concept-3 visual direction, no Lyra surfaces)
 
@@ -268,7 +363,7 @@ Acceptance:
 - [x] Canonical docs explicitly mark MusicBrainz as identity spine and Spotify as intent seed
 - [x] Research/reference docs that diverge are marked non-canonical
 
-### [P1] [in_progress] Unify Spotify ingest lanes into one identity-first import path
+### [P1] [done] Unify Spotify ingest lanes into one identity-first import path
 
 Why:
 
@@ -279,8 +374,19 @@ Acceptance:
 
 - [x] Shared Spotify payload parser handles direct desired-track import shapes
 - [x] Direct import now persists `source_track_id`, `source_album_id`, `source_artist_id`, `duration_ms`, best-effort `isrc`, and raw payload JSON
-- [ ] Album-summary queueing and direct desired-track intake share one canonical operator story
-- [ ] Replay proof shows improved reconciliation hit-rate on a fixed sample
+- [x] Album-summary queueing and direct desired-track intake share one canonical operator story
+- [x] Replay proof shows improved reconciliation hit-rate on a fixed sample
+
+Replay proof (2026-04-06):
+
+- Seeded paired fixed sample in sidecar (`n=50` each) from deterministic runtime track IDs:
+  - `spotify_replay_legacy`: minimal identity fields (artist + title only)
+  - `spotify_replay_rich`: richer identity fields (artist + album + title + track/disc + duration)
+- Ran bounded reconcile pass via `engine_pipeline_cli --resume --limit 0 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill`.
+- Aggregated outcomes:
+  - `spotify_replay_legacy`: `weak_match=50`
+  - `spotify_replay_rich`: `strong_match=50`
+- Seed rows were cleaned from `desired_tracks`, `reconciliation_results`, and `delta_queue` after capture.
 
 ### [P1] [done] Route all album expansion through the resilient resolver
 
@@ -295,7 +401,7 @@ Acceptance:
 - [x] `batch_download_cli` uses the shared resolver
 - [x] Regression tests prove the shared resolver is the only album expansion path
 
-### [P1] [review] Separate search owners from execution owners
+### [P1] [done] Separate search owners from execution owners
 
 Why:
 
@@ -321,8 +427,8 @@ Acceptance:
 - [x] Runtime and sidecar persist canonical artist/release/recording and alias-evidence surfaces
 - [x] Shared Spotify import now carries richer source IDs and best-effort ISRC
 - [x] Active queue/request boundaries now preserve richer source-track/source-album/source-artist identity when available
-- [ ] Release-group identity is carried and queryable where planning needs edition-level decisions
-- [ ] No active queue boundary collapses back to `artist + title + optional album` when richer identity is already known
+- [x] Release-group identity is carried and queryable where planning needs edition-level decisions — **DONE 2026-04-06**: request signatures now include `musicbrainz_release_group_id`, and request alias persistence records `musicbrainz.release_group_id` for planner and director request boundaries.
+- [x] No active queue boundary collapses back to `artist + title + optional album` when richer identity is already known — **DONE 2026-04-06**: regression coverage now proves release-group-only identity differences produce distinct request signatures and survive evidence/alias persistence.
 
 ### [P1] [in_progress] Introduce a planner stage before byte acquisition
 
@@ -350,7 +456,7 @@ Acceptance:
 - [x] Bypass lanes are demoted, removed, or explicitly marked as operator-only debt
 - [x] Canonical planner path is the default for UI/runtime queue submission
 
-### [P1] [review] Reuse persisted provenance and candidate memory in runtime behavior
+### [P1] [done] Reuse persisted provenance and candidate memory in runtime behavior
 
 Why:
 
@@ -366,7 +472,7 @@ Acceptance:
 - [x] At least one runtime path reuses persisted search/candidate memory before re-querying
 - [x] Exclusion or negative-result memory is wired into a real decision path
 
-### [P1] [review] Accumulate librarian fingerprint evidence without full-library reruns
+### [P1] [done] Accumulate librarian fingerprint evidence without full-library reruns
 
 Why:
 
@@ -475,7 +581,7 @@ Acceptance:
 - [x] Implemented in Director engine with runtime DB-backed local track matching
 - [x] Tests cover missing runtime DB path, no-match failure, and successful repair path
 
-### [P2] [review] Document and test long-session desktop behavior
+### [P2] [done] Document and test long-session desktop behavior
 
 Why:
 
@@ -486,12 +592,45 @@ Acceptance:
 - [x] Soak-test procedure documented (`docs/SOAK_TEST_PROCEDURE.md`)
 - [x] Baseline evidence run captured and known pain points recorded (`docs/SOAK_EVIDENCE.md`)
 
-### [P2] [todo] Integrate Cover Art Archive after canonical release selection
+### [P2] [done] Integrate Cover Art Archive after canonical release selection
 
 Acceptance:
 
-- [ ] Artwork fetch is tied to canonical release choice, not ad hoc provider metadata
-- [ ] Tag/embed flow documents when Cover Art Archive is used
+- [x] Runtime artwork fallback now covers broader sibling-art names plus embedded-art cache extraction
+- [x] Artwork fetch is tied to canonical release choice, not ad hoc provider metadata
+- [x] Tag/embed flow documents when Cover Art Archive is used
+
+### [P2] [done] Add a bounded lyrics refresh policy on top of the runtime lyrics cache
+
+Acceptance:
+
+- [x] Synced/plain lyrics now persist durably in the runtime DB and are reused before LRCLIB refetch
+- [x] Cache refresh/expiry policy is explicit and documented
+- [ ] Optional prefetch lane exists for recently played or newly finalized tracks if it is still worth the complexity
+
+### [P2] [done] Add a bounded runtime canonical backfill lane for older tracks
+
+Acceptance:
+
+- [x] Existing runtime `tracks` rows missing canonical artist/release IDs can be backfilled without a full-library rewrite
+- [x] Backfill ordering is deterministic and bounded
+- [x] Startup integration logs failures instead of aborting app boot
+
+### [P2] [done] Surface runtime MusicBrainz identity in the desktop UI
+
+Acceptance:
+
+- [x] Library inspection exposes persisted MusicBrainz recording/release IDs
+- [x] Canonical artist/release IDs are visible in the active desktop runtime
+- [x] No extra DB or network fetch is required just to inspect already persisted identity
+
+### [P2] [done] Make bundled slskd part of the desktop runtime lifecycle
+
+Acceptance:
+
+- [x] Cassette attempts to start bundled `slskd.exe` during desktop startup when the endpoint is not already reachable
+- [x] Settings exposes runtime status plus refresh/restart/stop controls
+- [x] Smoke tooling is updated so it exercises the managed `slskd` startup contract instead of checking port `5030` in isolation
 
 ### [P2] [todo] Prove and document Discogs and Last.fm enrichment behavior end-to-end
 
@@ -500,12 +639,12 @@ Acceptance:
 - [ ] Canonical docs and reference docs consistently reflect current Discogs/Last.fm runtime behavior
 - [ ] Bounded end-to-end proof captured for enrichment outcomes in active flows
 
-### [P2] [todo] Clarify Bandcamp scope as payload URL resolver and decide next-step ownership
+### [P2] [done] Clarify Bandcamp scope as payload URL resolver and decide next-step ownership
 
 Acceptance:
 
-- [ ] Docs explicitly state Bandcamp currently resolves payload-provided URLs only
-- [ ] Follow-up decision recorded: expand to full provider path or keep resolver-only scope
+- [x] Docs explicitly state Bandcamp currently resolves payload-provided URLs only
+- [x] Follow-up decision recorded: expand to full provider path or keep resolver-only scope (see `DECISIONS.md`, Decision 33)
 
 ### [P2] [done] Tighten metadata and enrichment operating story
 
@@ -523,9 +662,21 @@ Acceptance:
 
 ## P3
 
-### [P3] [todo] Add richer provider health and troubleshooting views in UI
+### [P3] [done] Add richer provider health and troubleshooting views in UI
 
-### [P3] [todo] Revisit broader release automation once packaging proof is stable
+Acceptance:
+
+- [x] Downloads command center shows a provider troubleshooting snapshot with down/unknown totals
+- [x] Per-provider diagnostics now show status, last-check timestamp, runtime message, and actionable hint text
+- [x] Troubleshooting hints incorporate provider configuration state and slskd runtime readiness
+
+### [P3] [done] Revisit broader release automation once packaging proof is stable
+
+Acceptance:
+
+- [x] Manual release-candidate workflow exists (`.github/workflows/release-candidate.yml`)
+- [x] Workflow runs CI gate and packaging, then uploads installers plus SHA256 manifest
+- [x] Optional perf-gate path is available before packaging
 
 ### [P3] [done] Improve artist deep-link from library page
 

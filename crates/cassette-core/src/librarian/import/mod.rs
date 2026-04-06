@@ -43,7 +43,11 @@ pub async fn import_desired_spotify_json(db: &LibrarianDb, json: &str) -> Result
         imported += 1;
     }
 
-    info!(imported, source = source_name, "imported desired-state tracks");
+    info!(
+        imported,
+        source = source_name,
+        "imported desired-state tracks"
+    );
     Ok(imported)
 }
 
@@ -51,7 +55,9 @@ pub async fn import_desired_spotify_json(db: &LibrarianDb, json: &str) -> Result
 mod tests {
     use super::*;
     use crate::librarian::db::LibrarianDb;
-    use crate::librarian::models::{DeltaActionType, NewDeltaQueueItem, NewReconciliationResult, ReconciliationStatus};
+    use crate::librarian::models::{
+        DeltaActionType, NewDeltaQueueItem, NewReconciliationResult, ReconciliationStatus,
+    };
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn test_db() -> LibrarianDb {

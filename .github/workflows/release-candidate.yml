@@ -1,0 +1,82 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Release candidate label (example: rc-2026-04-06)"
+        required: true
+        type: string
+      runPerfGate:
+        description: "Run perf regression gate before packaging"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release_candidate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify CI gate
+        shell: pwsh
+        run: ./scripts/verify_ci_gate.ps1
+
+      - name: Optional perf gate
+        if: ${{ inputs.runPerfGate }}
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/perf_baseline_capture.ps1 -Runs 3 -WarmupRuns 1
+          $latest = Get-ChildItem -Path "artifacts/perf" -Recurse -Filter "results.json" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $latest) { throw "No perf results.json found" }
+          powershell -ExecutionPolicy Bypass -File scripts/perf_regression_gate.ps1 -CandidateResultPath $latest.FullName
+
+      - name: Build installers
+        shell: pwsh
+        run: cargo tauri build
+
+      - name: Verify installer artifacts
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi" -ErrorAction SilentlyContinue
+          $exe = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -ErrorAction SilentlyContinue
+          if (-not $msi) { throw "MSI artifact not found" }
+          if (-not $exe) { throw "NSIS EXE artifact not found" }
+
+      - name: Generate artifact manifest
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/release | Out-Null
+          $files = @()
+          $files += Get-ChildItem -Path "src-tauri/target/release/bundle/msi" -Filter "*.msi"
+          $files += Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*.exe"
+          $manifestPath = "artifacts/release/release-manifest.txt"
+          "label=${{ inputs.label }}" | Out-File -FilePath $manifestPath -Encoding utf8
+          "sha=${{ github.sha }}" | Out-File -FilePath $manifestPath -Append -Encoding utf8
+          "run=${{ github.run_id }}" | Out-File -FilePath $manifestPath -Append -Encoding utf8
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
+            "$($file.Name)|$hash" | Out-File -FilePath $manifestPath -Append -Encoding utf8
+          }
+
+      - name: Upload release candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cassette-${{ inputs.label }}
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            artifacts/release/release-manifest.txt

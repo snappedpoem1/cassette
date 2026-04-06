@@ -139,14 +139,15 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
             continue;
         }
 
-        let (embedded_track_number, embedded_disc_number, embedded_error) = match read_track_metadata(path) {
-            Ok(value) => (
-                value.track_number.filter(|candidate| *candidate > 0),
-                value.disc_number.filter(|candidate| *candidate > 0),
-                None,
-            ),
-            Err(error) => (None, None, Some(error.to_string())),
-        };
+        let (embedded_track_number, embedded_disc_number, embedded_error) =
+            match read_track_metadata(path) {
+                Ok(value) => (
+                    value.track_number.filter(|candidate| *candidate > 0),
+                    value.disc_number.filter(|candidate| *candidate > 0),
+                    None,
+                ),
+                Err(error) => (None, None, Some(error.to_string())),
+            };
 
         candidates.push(CandidateTrack {
             track: track.clone(),
@@ -243,7 +244,9 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
                 .and_then(|value| value.to_str())
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            left_name.cmp(&right_name).then_with(|| left.track.path.cmp(&right.track.path))
+            left_name
+                .cmp(&right_name)
+                .then_with(|| left.track.path.cmp(&right.track.path))
         });
 
         let effective = group
@@ -257,7 +260,11 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
                 } else {
                     (
                         candidate.track.track_number.filter(|value| *value > 0),
-                        candidate.track.disc_number.filter(|value| *value > 0).or(Some(1)),
+                        candidate
+                            .track
+                            .disc_number
+                            .filter(|value| *value > 0)
+                            .or(Some(1)),
                     )
                 }
             })
@@ -300,7 +307,10 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
                     Some((1, next_disc))
                 }
                 (Some((previous_index, previous_track, previous_disc)), None)
-                    if folder_prefix_is_contiguous(&effective[..=previous_index], previous_disc) =>
+                    if folder_prefix_is_contiguous(
+                        &effective[..=previous_index],
+                        previous_disc,
+                    ) =>
                 {
                     Some((previous_track + 1, previous_disc))
                 }
@@ -311,30 +321,41 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
                 for offset in 0..(end - start) {
                     let candidate = &group[start + offset];
                     let new_track_number = starting_track + i32::try_from(offset).unwrap_or(0);
-                    repaired_by_track.entry(candidate.track.id).or_insert_with(|| RepairRow {
-                        track_id: candidate.track.id,
-                        path: candidate.track.path.clone(),
-                        old_track_number: candidate.track.track_number,
-                        new_track_number: Some(new_track_number),
-                        old_disc_number: candidate.track.disc_number,
-                        new_disc_number: Some(disc_number),
-                        repair_source: RepairSource::AlbumPattern,
-                    });
+                    repaired_by_track
+                        .entry(candidate.track.id)
+                        .or_insert_with(|| RepairRow {
+                            track_id: candidate.track.id,
+                            path: candidate.track.path.clone(),
+                            old_track_number: candidate.track.track_number,
+                            new_track_number: Some(new_track_number),
+                            old_disc_number: candidate.track.disc_number,
+                            new_disc_number: Some(disc_number),
+                            repair_source: RepairSource::AlbumPattern,
+                        });
                 }
             }
         }
     }
 
     for row in repaired_by_track.into_values() {
-        if row.old_track_number != row.new_track_number || row.old_disc_number != row.new_disc_number {
+        if row.old_track_number != row.new_track_number
+            || row.old_disc_number != row.new_disc_number
+        {
             repaired.push(row);
         }
     }
 
-    repaired.sort_by(|left, right| left.path.cmp(&right.path).then_with(|| left.track_id.cmp(&right.track_id)));
+    repaired.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.track_id.cmp(&right.track_id))
+    });
     repaired.dedup_by(|left, right| left.track_id == right.track_id);
 
-    let repaired_track_ids = repaired.iter().map(|row| row.track_id).collect::<std::collections::HashSet<_>>();
+    let repaired_track_ids = repaired
+        .iter()
+        .map(|row| row.track_id)
+        .collect::<std::collections::HashSet<_>>();
     for track in tracks {
         let current_track_number = track.track_number.filter(|value| *value > 0);
         if current_track_number.is_some() || repaired_track_ids.contains(&track.id) {
@@ -352,19 +373,30 @@ pub fn build_track_repair_plan(tracks: &[Track]) -> TrackRepairPlan {
         });
     }
 
-    unresolved.sort_by(|left, right| left.path.cmp(&right.path).then_with(|| left.track_id.cmp(&right.track_id)));
+    unresolved.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.track_id.cmp(&right.track_id))
+    });
     unresolved.dedup_by(|left, right| left.track_id == right.track_id);
 
-    TrackRepairPlan { repaired, unresolved }
+    TrackRepairPlan {
+        repaired,
+        unresolved,
+    }
 }
 
 fn folder_prefix_is_contiguous(entries: &[(Option<i32>, Option<i32>)], disc_number: i32) -> bool {
     let mut values = entries
         .iter()
-        .filter_map(|(track_number, candidate_disc)| match (track_number, candidate_disc) {
-            (Some(track_number), Some(candidate_disc)) if *candidate_disc == disc_number => Some(*track_number),
-            _ => None,
-        })
+        .filter_map(
+            |(track_number, candidate_disc)| match (track_number, candidate_disc) {
+                (Some(track_number), Some(candidate_disc)) if *candidate_disc == disc_number => {
+                    Some(*track_number)
+                }
+                _ => None,
+            },
+        )
         .collect::<Vec<_>>();
     values.sort_unstable();
     values
@@ -378,7 +410,12 @@ mod tests {
     use super::{build_track_repair_plan, parse_filename_numbers, RepairSource};
     use crate::models::Track;
 
-    fn sample_track(id: i64, path: &str, track_number: Option<i32>, disc_number: Option<i32>) -> Track {
+    fn sample_track(
+        id: i64,
+        path: &str,
+        track_number: Option<i32>,
+        disc_number: Option<i32>,
+    ) -> Track {
         Track {
             id,
             path: path.to_string(),
@@ -410,16 +447,14 @@ mod tests {
     #[test]
     fn parses_filename_track_patterns() {
         assert_eq!(
-            parse_filename_numbers(r"A:\Music\Artist\Album\02 - Track.flac")
-                .expect("single-disc"),
+            parse_filename_numbers(r"A:\Music\Artist\Album\02 - Track.flac").expect("single-disc"),
             super::FilenameNumbers {
                 track_number: 2,
                 disc_number: None,
             }
         );
         assert_eq!(
-            parse_filename_numbers(r"A:\Music\Artist\Album\2-03 - Track.flac")
-                .expect("disc-track"),
+            parse_filename_numbers(r"A:\Music\Artist\Album\2-03 - Track.flac").expect("disc-track"),
             super::FilenameNumbers {
                 track_number: 3,
                 disc_number: Some(2),
@@ -434,8 +469,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_filename_numbers(r"A:\Music\Artist\Album\07 Hysteria – Live.flac")
-                .is_none(),
+            parse_filename_numbers(r"A:\Music\Artist\Album\07 Hysteria – Live.flac").is_none(),
             true
         );
         assert!(parse_filename_numbers(r"A:\Music\Artist\Album\Track Name.flac").is_none());
@@ -473,12 +507,8 @@ mod tests {
         let path = dir.path().join("No Number.flac");
         std::fs::write(&path, b"not-audio").expect("write");
 
-        let plan = build_track_repair_plan(&[sample_track(
-            1,
-            &path.to_string_lossy(),
-            Some(0),
-            Some(0),
-        )]);
+        let plan =
+            build_track_repair_plan(&[sample_track(1, &path.to_string_lossy(), Some(0), Some(0))]);
 
         assert!(plan.repaired.is_empty());
         assert_eq!(plan.unresolved.len(), 1);
@@ -488,12 +518,7 @@ mod tests {
     #[test]
     fn valid_track_numbers_do_not_force_file_reads() {
         let missing_path = r"A:\Music\Artist\Album\01 - Existing.flac";
-        let plan = build_track_repair_plan(&[sample_track(
-            1,
-            missing_path,
-            Some(1),
-            Some(1),
-        )]);
+        let plan = build_track_repair_plan(&[sample_track(1, missing_path, Some(1), Some(1))]);
 
         assert!(plan.repaired.is_empty());
         assert!(plan.unresolved.is_empty());

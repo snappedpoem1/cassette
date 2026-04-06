@@ -1,6 +1,6 @@
-use cassette_lib::state::AppState;
 use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use cassette_core::models::{DownloadJob, DownloadStatus};
+use cassette_lib::state::AppState;
 use std::path::PathBuf;
 use tokio::runtime::Builder;
 use tokio::time::{sleep, Duration};
@@ -98,8 +98,7 @@ fn main() -> Result<(), String> {
 
     runtime.block_on(async {
         app_state
-            .director_submitter
-            .submit(TrackTask {
+            .submit_director_task(TrackTask {
                 task_id: id.clone(),
                 source: TrackTaskSource::Manual,
                 desired_track_id: None,

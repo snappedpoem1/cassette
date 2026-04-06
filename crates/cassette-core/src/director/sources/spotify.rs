@@ -30,9 +30,13 @@ impl SourceProvider for SpotifySource {
         payload.contains("spotify")
     }
 
-    async fn resolve_download_url(&self, _track: &DesiredTrack) -> Result<ResolvedTrack, SourceError> {
+    async fn resolve_download_url(
+        &self,
+        _track: &DesiredTrack,
+    ) -> Result<ResolvedTrack, SourceError> {
         Err(SourceError::NotAvailable(
-            "Spotify source resolves metadata only; direct download is intentionally unsupported".to_string(),
+            "Spotify source resolves metadata only; direct download is intentionally unsupported"
+                .to_string(),
         ))
     }
 

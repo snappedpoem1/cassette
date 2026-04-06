@@ -1,8 +1,8 @@
 use super::{test_director_config, test_manager};
 use crate::director::download::{check_existing_staged_file, download_file};
 use crate::director::sources::{LocalCacheSource, SourceProvider};
-use crate::library::Module;
 use crate::librarian::models::DesiredTrack;
+use crate::library::Module;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -18,9 +18,10 @@ async fn download_file_stages_from_local_cache() {
         .expect("write source");
 
     let config = test_director_config(staging_dir.path().to_path_buf());
-    let sources: Vec<Arc<dyn SourceProvider>> = vec![Arc::new(LocalCacheSource::new(vec![
-        source_dir.path().to_path_buf(),
-    ]))];
+    let sources: Vec<Arc<dyn SourceProvider>> =
+        vec![Arc::new(LocalCacheSource::new(vec![source_dir
+            .path()
+            .to_path_buf()]))];
 
     let track = DesiredTrack {
         id: 11,
@@ -45,9 +46,16 @@ async fn download_file_stages_from_local_cache() {
         .expect("op");
 
     let provider_semaphores = Arc::new(HashMap::new());
-    let staged = download_file(&manager, &track, &sources, &config, &op_id, &provider_semaphores)
-        .await
-        .expect("download");
+    let staged = download_file(
+        &manager,
+        &track,
+        &sources,
+        &config,
+        &op_id,
+        &provider_semaphores,
+    )
+    .await
+    .expect("download");
     assert!(staged.path.exists());
 
     let existing = check_existing_staged_file(&manager, &track, &config)

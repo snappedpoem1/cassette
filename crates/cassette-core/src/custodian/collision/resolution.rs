@@ -33,7 +33,13 @@ mod tests {
     fn compare_and_replace_honors_quality() {
         let keep = resolve_collision(CollisionPolicy::CompareAndReplace, 100, 120, false);
         let replace = resolve_collision(CollisionPolicy::CompareAndReplace, 140, 120, false);
-        assert!(matches!(keep, CollisionOutcome::KeepExistingMarkIncomingDuplicate));
-        assert!(matches!(replace, CollisionOutcome::ReplaceExistingIfIncomingBetter));
+        assert!(matches!(
+            keep,
+            CollisionOutcome::KeepExistingMarkIncomingDuplicate
+        ));
+        assert!(matches!(
+            replace,
+            CollisionOutcome::ReplaceExistingIfIncomingBetter
+        ));
     }
 }

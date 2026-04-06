@@ -25,9 +25,13 @@ impl SourceProvider for HttpSource {
         extract_http_url(track).is_some()
     }
 
-    async fn resolve_download_url(&self, track: &DesiredTrack) -> Result<ResolvedTrack, SourceError> {
-        let url = extract_http_url(track)
-            .ok_or_else(|| SourceError::NotAvailable("No HTTP URL in desired track payload".to_string()))?;
+    async fn resolve_download_url(
+        &self,
+        track: &DesiredTrack,
+    ) -> Result<ResolvedTrack, SourceError> {
+        let url = extract_http_url(track).ok_or_else(|| {
+            SourceError::NotAvailable("No HTTP URL in desired track payload".to_string())
+        })?;
 
         let filename = format!(
             "{} - {}.bin",
@@ -46,8 +50,9 @@ impl SourceProvider for HttpSource {
     }
 
     async fn check_availability(&self, track: &DesiredTrack) -> Result<bool, SourceError> {
-        let url = extract_http_url(track)
-            .ok_or_else(|| SourceError::NotAvailable("No HTTP URL in desired track payload".to_string()))?;
+        let url = extract_http_url(track).ok_or_else(|| {
+            SourceError::NotAvailable("No HTTP URL in desired track payload".to_string())
+        })?;
 
         let response = self
             .client

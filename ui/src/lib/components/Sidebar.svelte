@@ -3,10 +3,11 @@
   import { trackCount, isScanning, scanProgress } from '$lib/stores/library';
 
   const coreLinks = [
-    { href: '/', label: 'Library',   icon: 'LIB' },
+    { href: '/', label: 'Home',      icon: 'HM' },
+    { href: '/artists', label: 'Artists',   icon: 'AR' },
+    { href: '/library', label: 'Library',   icon: 'LIB' },
     { href: '/downloads', label: 'Downloads', icon: 'DL' },
     { href: '/playlists', label: 'Playlists', icon: 'PL' },
-    { href: '/artists',   label: 'Artists',   icon: 'AR' },
   ];
 
   const utilityLinks = [

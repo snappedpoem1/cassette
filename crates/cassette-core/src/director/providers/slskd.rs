@@ -106,7 +106,10 @@ impl Provider for SlskdProvider {
             .take(8)
             .map(|candidate| ProviderSearchCandidate {
                 provider_id: "slskd".to_string(),
-                provider_candidate_id: format!("{}::{}::{}", candidate.username, candidate.filename, candidate.size),
+                provider_candidate_id: format!(
+                    "{}::{}::{}",
+                    candidate.username, candidate.filename, candidate.size
+                ),
                 artist: task.target.artist.clone(),
                 title: task.target.title.clone(),
                 album: task.target.album.clone(),
@@ -146,7 +149,10 @@ impl Provider for SlskdProvider {
         let client = reqwest::Client::new();
         let response = send_slskd_request(
             client
-                .post(format!("{}/api/v0/transfers/downloads/{}", self.config.url, username))
+                .post(format!(
+                    "{}/api/v0/transfers/downloads/{}",
+                    self.config.url, username
+                ))
                 .json(&serde_json::json!([{ "filename": filename, "size": size }])),
             &self.config,
         )
@@ -167,12 +173,8 @@ impl Provider for SlskdProvider {
             sleep(Duration::from_secs(5)).await;
 
             // Check transfer status via the API first.
-            if let Ok(transfer_data) =
-                fetch_slskd_user_transfers(&self.config, &username).await
-            {
-                if let Some(completed_path) =
-                    find_completed_transfer(&transfer_data, &filename)
-                {
+            if let Ok(transfer_data) = fetch_slskd_user_transfers(&self.config, &username).await {
+                if let Some(completed_path) = find_completed_transfer(&transfer_data, &filename) {
                     // The transfer API reports a completed file. Check scan_roots for it.
                     let found = resolve_downloaded_file(
                         &self.scan_roots,
@@ -255,7 +257,10 @@ async fn slskd_best_candidates(
         for _ in 0..10 {
             sleep(Duration::from_secs(3)).await;
             let detail_response = send_slskd_request(
-                client.get(format!("{}/api/v0/searches/{search_id}/responses", config.url)),
+                client.get(format!(
+                    "{}/api/v0/searches/{search_id}/responses",
+                    config.url
+                )),
                 config,
             )
             .await
@@ -263,13 +268,14 @@ async fn slskd_best_candidates(
                 provider_id: "slskd".to_string(),
                 message,
             })?;
-            let detail_body = detail_response
-                .json::<Value>()
-                .await
-                .map_err(|error| ProviderError::Network {
-                    provider_id: "slskd".to_string(),
-                    message: error.to_string(),
-                })?;
+            let detail_body =
+                detail_response
+                    .json::<Value>()
+                    .await
+                    .map_err(|error| ProviderError::Network {
+                        provider_id: "slskd".to_string(),
+                        message: error.to_string(),
+                    })?;
             ranked.extend(rank_slskd_candidates(&detail_body, request));
         }
         // permit drops here, allowing next search
@@ -284,13 +290,15 @@ async fn rank_slskd_candidates_from_history(
     config: &SlskdConnectionConfig,
     request: &SlskdTrackRequest,
 ) -> Result<Vec<(i64, SlskdCandidate)>, ProviderError> {
-    let history_response =
-        send_slskd_request(client.get(format!("{}/api/v0/searches", config.url)), config)
-            .await
-            .map_err(|message| ProviderError::Network {
-                provider_id: "slskd".to_string(),
-                message,
-            })?;
+    let history_response = send_slskd_request(
+        client.get(format!("{}/api/v0/searches", config.url)),
+        config,
+    )
+    .await
+    .map_err(|message| ProviderError::Network {
+        provider_id: "slskd".to_string(),
+        message,
+    })?;
     if !history_response.status().is_success() {
         return Ok(Vec::new());
     }
@@ -306,8 +314,17 @@ async fn rank_slskd_candidates_from_history(
     let title_norm = normalize_text(&request.title);
     let mut candidates = history
         .into_iter()
-        .filter(|item| item.get("isComplete").and_then(Value::as_bool).unwrap_or(false))
-        .filter(|item| item.get("responseCount").and_then(Value::as_u64).unwrap_or(0) > 0)
+        .filter(|item| {
+            item.get("isComplete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter(|item| {
+            item.get("responseCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+        })
         .filter_map(|item| {
             let search_text = item
                 .get("searchText")
@@ -334,7 +351,10 @@ async fn rank_slskd_candidates_from_history(
     let mut ranked = Vec::<(i64, SlskdCandidate)>::new();
     for (search_id, _) in candidates.into_iter().take(8) {
         let detail_response = send_slskd_request(
-            client.get(format!("{}/api/v0/searches/{search_id}/responses", config.url)),
+            client.get(format!(
+                "{}/api/v0/searches/{search_id}/responses",
+                config.url
+            )),
             config,
         )
         .await
@@ -345,13 +365,14 @@ async fn rank_slskd_candidates_from_history(
         if !detail_response.status().is_success() {
             continue;
         }
-        let detail_body = detail_response
-            .json::<Value>()
-            .await
-            .map_err(|error| ProviderError::Network {
-                provider_id: "slskd".to_string(),
-                message: error.to_string(),
-            })?;
+        let detail_body =
+            detail_response
+                .json::<Value>()
+                .await
+                .map_err(|error| ProviderError::Network {
+                    provider_id: "slskd".to_string(),
+                    message: error.to_string(),
+                })?;
         ranked.extend(rank_slskd_candidates(&detail_body, request));
     }
 
@@ -362,19 +383,21 @@ async fn ensure_slskd_connected(
     client: &reqwest::Client,
     config: &SlskdConnectionConfig,
 ) -> Result<(), ProviderError> {
-    let server_response = send_slskd_request(client.get(format!("{}/api/v0/server", config.url)), config)
-        .await
-        .map_err(|message| ProviderError::Network {
-            provider_id: "slskd".to_string(),
-            message,
-        })?;
-    let server_body = server_response
-        .json::<Value>()
-        .await
-        .map_err(|error| ProviderError::Network {
-            provider_id: "slskd".to_string(),
-            message: error.to_string(),
-        })?;
+    let server_response =
+        send_slskd_request(client.get(format!("{}/api/v0/server", config.url)), config)
+            .await
+            .map_err(|message| ProviderError::Network {
+                provider_id: "slskd".to_string(),
+                message,
+            })?;
+    let server_body =
+        server_response
+            .json::<Value>()
+            .await
+            .map_err(|error| ProviderError::Network {
+                provider_id: "slskd".to_string(),
+                message: error.to_string(),
+            })?;
     let state = server_body
         .get("state")
         .and_then(Value::as_str)
@@ -399,7 +422,10 @@ async fn ensure_slskd_connected(
     if !reconnect_response.status().is_success() {
         return Err(ProviderError::TemporaryOutage {
             provider_id: "slskd".to_string(),
-            message: format!("failed to reconnect slskd server: HTTP {}", reconnect_response.status()),
+            message: format!(
+                "failed to reconnect slskd server: HTTP {}",
+                reconnect_response.status()
+            ),
         });
     }
 
@@ -415,13 +441,14 @@ async fn ensure_slskd_connected(
         if !server_response.status().is_success() {
             continue;
         }
-        let server_body = server_response
-            .json::<Value>()
-            .await
-            .map_err(|error| ProviderError::Network {
-                provider_id: "slskd".to_string(),
-                message: error.to_string(),
-            })?;
+        let server_body =
+            server_response
+                .json::<Value>()
+                .await
+                .map_err(|error| ProviderError::Network {
+                    provider_id: "slskd".to_string(),
+                    message: error.to_string(),
+                })?;
         let state = server_body
             .get("state")
             .and_then(Value::as_str)
@@ -468,7 +495,9 @@ async fn create_search_with_recovery(
             return Ok(body);
         }
 
-        let message = serde_json::to_string(&body).unwrap_or_default().to_ascii_lowercase();
+        let message = serde_json::to_string(&body)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         if message.contains("must be connected and logged in") {
             ensure_slskd_connected(client, config).await?;
             sleep(Duration::from_secs(2)).await;
@@ -488,12 +517,15 @@ async fn maybe_recover_search_queue(
     client: &reqwest::Client,
     config: &SlskdConnectionConfig,
 ) -> Result<(), ProviderError> {
-    let response = send_slskd_request(client.get(format!("{}/api/v0/searches", config.url)), config)
-        .await
-        .map_err(|message| ProviderError::Network {
-            provider_id: "slskd".to_string(),
-            message,
-        })?;
+    let response = send_slskd_request(
+        client.get(format!("{}/api/v0/searches", config.url)),
+        config,
+    )
+    .await
+    .map_err(|message| ProviderError::Network {
+        provider_id: "slskd".to_string(),
+        message,
+    })?;
 
     if !response.status().is_success() {
         return Ok(());
@@ -601,7 +633,11 @@ fn slskd_query_candidates(request: &SlskdTrackRequest) -> Vec<String> {
         build_query(&request.artist, &request.title, request.album.as_deref()),
         format!("{} {}", request.artist, request.title),
     ];
-    if let Some(album) = request.album.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(album) = request
+        .album
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         queries.push(format!("{} {}", request.artist, album));
     }
     queries.push(request.artist.clone());
@@ -611,7 +647,10 @@ fn slskd_query_candidates(request: &SlskdTrackRequest) -> Vec<String> {
     queries
 }
 
-fn rank_slskd_candidates(detail_body: &Value, request: &SlskdTrackRequest) -> Vec<(i64, SlskdCandidate)> {
+fn rank_slskd_candidates(
+    detail_body: &Value,
+    request: &SlskdTrackRequest,
+) -> Vec<(i64, SlskdCandidate)> {
     let artist_terms = normalized_terms(&request.artist);
     let title_terms = normalized_terms(&request.title);
     let album_terms = normalized_terms(request.album.as_deref().unwrap_or_default());
@@ -642,7 +681,11 @@ fn rank_slskd_candidates(detail_body: &Value, request: &SlskdTrackRequest) -> Ve
                 .into_iter()
                 .flatten()
                 .filter_map(move |file| {
-                    let filename = file.get("filename").and_then(Value::as_str).unwrap_or_default().to_string();
+                    let filename = file
+                        .get("filename")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
                     if filename.is_empty() || is_non_audio_path(&filename) {
                         return None;
                     }
@@ -756,12 +799,9 @@ fn find_completed_transfer(transfer_data: &Value, requested_filename: &str) -> O
                 .unwrap_or_default()
                 .to_lowercase();
             // Also check the string form of state enum values slskd may return.
-            let state_code = file
-                .get("state")
-                .and_then(Value::as_u64);
-            let is_completed = state.contains("completed")
-                || state.contains("succeeded")
-                || state_code == Some(2); // 2 = Completed in slskd
+            let state_code = file.get("state").and_then(Value::as_u64);
+            let is_completed =
+                state.contains("completed") || state.contains("succeeded") || state_code == Some(2); // 2 = Completed in slskd
 
             if !is_completed {
                 continue;
@@ -845,9 +885,11 @@ async fn copy_to_temp(
         .and_then(|value| value.to_str())
         .unwrap_or("bin")
         .to_string();
-    let destination = temp_context
-        .active_dir
-        .join(format!("slskd-{}.{}", sanitize(&task.target.title), extension));
+    let destination = temp_context.active_dir.join(format!(
+        "slskd-{}.{}",
+        sanitize(&task.target.title),
+        extension
+    ));
     tokio::fs::copy(found, &destination)
         .await
         .map_err(|error| ProviderError::Other {

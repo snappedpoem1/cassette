@@ -1,310 +1,628 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import {
-    tracks, albums, artists,
-    activeTab, searchQuery, searchResults, isSearching,
-    loadLibrary, search,
-  } from '$lib/stores/library';
-  import { queueTracks } from '$lib/stores/queue';
   import { goto } from '$app/navigation';
-  import { formatDuration, formatAudioSpec, coverSrc, debounce, tintFromHex } from '$lib/utils';
-  import type { Album, Artist, Track } from '$lib/api/tauri';
-  import { api } from '$lib/api/tauri';
+  import { onMount } from 'svelte';
+  import { buildArtistClusters } from '$lib/artist-clusters';
+  import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory, type TaskResultSummary, type TrustReasonDistributionEntry } from '$lib/api/tauri';
+  import { artists, trackCount } from '$lib/stores/library';
+  import { backlogStatus, slskdRuntimeStatus } from '$lib/stores/downloads';
+  import { currentTrack, nowPlayingContext, playbackState, player } from '$lib/stores/player';
+  import { formatDuration, coverSrc } from '$lib/utils';
 
-  let selectedAlbum: Album | null = null;
-  let albumTracks: Track[] = [];
-  let loadingAlbumTracks = false;
-
-  const debouncedSearch = debounce((q: string) => search(q), 300);
-
-  let searchInput = '';
-  $: debouncedSearch(searchInput);
-
-  async function openAlbum(album: Album) {
-    selectedAlbum = album;
-    loadingAlbumTracks = true;
-    albumTracks = await api.getAlbumTracks(album.artist, album.title);
-    loadingAlbumTracks = false;
+  interface WhileAwayMessage {
+    tone: 'steady' | 'watch' | 'action';
+    title: string;
+    detail: string;
   }
 
-  function closeAlbum() {
-    selectedAlbum = null;
-    albumTracks = [];
+  let missingAlbums: SpotifyAlbumHistory[] = [];
+  let recentResults: TaskResultSummary[] = [];
+  let recentRequests: AcquisitionRequestListItem[] = [];
+  let trustDistribution: TrustReasonDistributionEntry[] = [];
+  let loading = true;
+
+  $: artistClusters = buildArtistClusters($artists);
+  $: topArtists = artistClusters.slice(0, 8);
+  $: current = $currentTrack;
+  $: context = $nowPlayingContext;
+  $: activePlayback = $playbackState.is_playing && current;
+
+  $: inProgressCount = recentRequests.filter((request) =>
+    ['queued', 'submitted', 'in_progress'].includes(request.status)
+  ).length;
+  $: blockedCount = recentRequests.filter((request) =>
+    ['reviewing', 'failed', 'cancelled'].includes(request.status)
+  ).length;
+  $: completedCount = recentRequests.filter((request) =>
+    ['finalized', 'already_present'].includes(request.status)
+  ).length;
+  $: trustWatch = recentRequests
+    .filter((request) => ['review', 'blocked'].includes(request.trust_stage))
+    .slice(0, 3);
+
+  $: whileAway = buildWhileAwayMessages({
+    recentResults,
+    missingAlbums,
+    inProgressCount,
+    blockedCount,
+  });
+
+  onMount(async () => {
+    try {
+      const [missing, results, requests, trust] = await Promise.all([
+        api.getMissingSpotifyAlbums(10),
+        api.getRecentTaskResults(12),
+        api.listAcquisitionRequests(undefined, 32),
+        api.getTrustReasonDistribution(6),
+      ]);
+      missingAlbums = missing;
+      recentResults = results;
+      recentRequests = requests;
+      trustDistribution = trust;
+    } finally {
+      loading = false;
+    }
+  });
+
+  function buildWhileAwayMessages(input: {
+    recentResults: TaskResultSummary[];
+    missingAlbums: SpotifyAlbumHistory[];
+    inProgressCount: number;
+    blockedCount: number;
+  }): WhileAwayMessage[] {
+    const finalized = input.recentResults.filter((result) =>
+      ['Finalized', 'AlreadyPresent', 'MetadataOnly'].includes(result.disposition)
+    ).length;
+    const failed = input.recentResults.filter((result) =>
+      ['Failed', 'Cancelled'].includes(result.disposition)
+    ).length;
+    const messages: WhileAwayMessage[] = [];
+
+    if (finalized > 0) {
+      messages.push({
+        tone: 'steady',
+        title: `${finalized} library handoff${finalized === 1 ? '' : 's'} completed`,
+        detail: 'Cassette finished recent acquisition or repair work without needing you in the loop.',
+      });
+    }
+
+    if (input.inProgressCount > 0) {
+      messages.push({
+        tone: 'steady',
+        title: `${input.inProgressCount} request${input.inProgressCount === 1 ? '' : 's'} still moving`,
+        detail: 'Search, download, and verification work is still active in the background.',
+      });
+    }
+
+    if (input.blockedCount > 0 || failed > 0) {
+      const total = input.blockedCount + failed;
+      messages.push({
+        tone: total > 3 ? 'action' : 'watch',
+        title: `${total} lane${total === 1 ? '' : 's'} need attention`,
+        detail: 'Open Downloads to review blocked requests, failed runs, or items waiting on a decision.',
+      });
+    }
+
+    if (input.missingAlbums.length > 0) {
+      messages.push({
+        tone: 'watch',
+        title: `${input.missingAlbums.length} Spotify backlog album${input.missingAlbums.length === 1 ? '' : 's'} still missing`,
+        detail: 'The command center knows what is still absent and can keep draining it in the background.',
+      });
+    }
+
+    if (messages.length === 0) {
+      messages.push({
+        tone: 'steady',
+        title: 'Quiet desk',
+        detail: 'No fresh download noise, no blocked work, and the collection is sitting still for now.',
+      });
+    }
+
+    return messages.slice(0, 4);
   }
 
-  async function playAlbum(album: Album) {
-    const tracks = await api.getAlbumTracks(album.artist, album.title);
-    if (tracks.length) await queueTracks(tracks, 0);
-  }
-
-  async function playTrack(trackList: Track[], index: number) {
-    await queueTracks(trackList, index);
+  function resumePlayback() {
+    if ($playbackState.current_track) {
+      void player.toggle();
+    }
   }
 </script>
 
-<svelte:head><title>Library · Cassette</title></svelte:head>
+<svelte:head><title>Home · Cassette</title></svelte:head>
 
-<div class="library-page">
-  <!-- Header -->
-  <div class="page-header">
-    <h2 style="flex:1">Library</h2>
-    <div class="search-wrap">
-      <span class="search-icon">🔍</span>
-      <input
-        class="input search-input"
-        type="text"
-        placeholder="Search tracks, artists, albums…"
-        bind:value={searchInput}
-      />
-      {#if $isSearching}
-        <span class="search-spinner"><div class="spinner" style="width:14px;height:14px;border-width:2px"></div></span>
+<div class="home-page">
+  <section class="home-hero">
+    <div class="hero-backdrop">
+      {#if current?.cover_art_path}
+        <img src={coverSrc(current.cover_art_path)} alt="Current artwork" />
       {/if}
     </div>
-  </div>
 
-  <!-- Search results overlay -->
-  {#if searchInput.trim() && $searchResults.length > 0}
-    <div class="search-results">
-      <div class="sr-label">{$searchResults.length} results for "{searchInput}"</div>
-      {#each $searchResults as track, i}
-        <!-- svelte-ignore a11y-no-static-element-interactions -->
-        <div class="track-row" on:dblclick={() => playTrack($searchResults, i)}>
-          <span class="track-num">{i + 1}</span>
-          <div class="track-title">{track.title}</div>
-          <div class="track-artist">{track.artist} · {track.album}</div>
-          <span class="track-duration">{formatDuration(track.duration_secs)}</span>
-          <span class="track-format">{track.format.toUpperCase()}</span>
-        </div>
-      {/each}
-    </div>
-  {:else if searchInput.trim() && !$isSearching}
-    <div class="empty-state" style="padding:2rem;">
-      <div class="empty-icon">🔍</div>
-      <div class="empty-title">No results</div>
-      <div class="empty-body">Nothing matched "{searchInput}"</div>
-    </div>
-  {:else}
-    <!-- Tabs -->
-    <div class="tabs">
-      <button class="tab" class:active={$activeTab === 'albums'}  on:click={() => activeTab.set('albums')}>Albums</button>
-      <button class="tab" class:active={$activeTab === 'tracks'}  on:click={() => activeTab.set('tracks')}>Tracks</button>
-      <button class="tab" class:active={$activeTab === 'artists'} on:click={() => activeTab.set('artists')}>Artists</button>
-    </div>
-
-    <!-- Albums tab -->
-    {#if $activeTab === 'albums'}
-      {#if selectedAlbum}
-        <!-- Album detail view -->
-        {@const detailTint = tintFromHex(selectedAlbum.dominant_color_hex)}
-        <div class="album-detail">
-          <!-- Blurred backdrop -->
-          {#if selectedAlbum.cover_art_path}
-            <div
-              class="album-detail-backdrop"
-              style="background-image:url({coverSrc(selectedAlbum.cover_art_path)});background-color:{detailTint.bg};"
-            ></div>
-          {:else}
-            <div class="album-detail-backdrop" style="background:{detailTint.bg};"></div>
-          {/if}
-          <div class="album-detail-header">
-            <button class="back-btn" on:click={closeAlbum}>← Albums</button>
-            <div class="album-detail-art">
-              {#if selectedAlbum.cover_art_path}
-                <img src={coverSrc(selectedAlbum.cover_art_path)} alt="cover" />
-              {:else}
-                <div class="album-detail-art-ph">💿</div>
-              {/if}
-            </div>
-            <div class="album-detail-info">
-              <h1>{selectedAlbum.title}</h1>
-              <div class="album-detail-artist">{selectedAlbum.artist}</div>
-              <div class="album-detail-meta">
-                {#if selectedAlbum.year}{selectedAlbum.year} · {/if}{selectedAlbum.track_count} tracks
-              </div>
-              <button class="btn btn-primary" style="margin-top:12px;" on:click={() => playAlbum(selectedAlbum!)}>
-                ▶ Play Album
-              </button>
-            </div>
-          </div>
-
-          {#if loadingAlbumTracks}
-            <div class="empty-state"><div class="spinner"></div></div>
-          {:else}
-            <div class="track-list">
-              {#each albumTracks as track, i}
-                <!-- svelte-ignore a11y-no-static-element-interactions -->
-                <div class="track-row" on:dblclick={() => playTrack(albumTracks, i)}>
-                  <span class="track-num">{track.track_number ?? i + 1}</span>
-                  <div class="track-title">{track.title}</div>
-                  <div class="track-artist">{track.artist !== selectedAlbum?.artist ? track.artist : ''}</div>
-                  <span class="track-duration">{formatDuration(track.duration_secs)}</span>
-                  <span class="track-format">{track.format.toUpperCase()}</span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <!-- Album grid -->
-        {#if $albums.length === 0}
-          <div class="empty-state">
-            <div class="empty-icon">💿</div>
-            <div class="empty-title">No albums yet</div>
-            <div class="empty-body">Add a library root in Settings and scan to import your music.</div>
-          </div>
+    <div class="hero-copy">
+      <div class="hero-kicker">Music-first desktop</div>
+      <h1>{activePlayback ? current?.title : 'Back in the chair'}</h1>
+      <p class="hero-summary">
+        {#if activePlayback && context}
+          {current?.artist}{context.album_title ? ` · ${context.album_title}` : ''}. Playback is live and the background lanes are still keeping score.
+        {:else if current}
+          {current.artist}{current.album ? ` · ${current.album}` : ''}. Cassette is ready to pick the thread back up.
         {:else}
-          <div class="album-grid">
-            {#each $albums as album}
-              {@const tint = tintFromHex(album.dominant_color_hex)}
-              <!-- svelte-ignore a11y-no-static-element-interactions -->
-              <div
-                class="album-card"
-                role="button"
-                tabindex="0"
-                on:click={() => openAlbum(album)}
-                on:dblclick={() => playAlbum(album)}
-                on:keydown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    openAlbum(album);
-                  }
-                }}
-              >
-                {#if album.cover_art_path}
-                  <img class="album-art" src={coverSrc(album.cover_art_path)} alt="cover" />
-                {:else}
-                  <div class="album-art-placeholder">💿</div>
-                {/if}
-                <div class="album-info" style="background:{tint.bg};">
-                  <div class="album-title" style="color:{tint.titleColor};">{album.title}</div>
-                  <div class="album-artist">{album.artist}</div>
-                  <div class="album-meta">{album.year ?? ''}{album.year && album.track_count ? ' · ' : ''}{album.track_count} tracks</div>
-                </div>
-              </div>
-            {/each}
-          </div>
+          Playback, missing music, and service health stay in one place so the system can keep moving without becoming noise.
         {/if}
-      {/if}
+      </p>
 
-    <!-- Tracks tab -->
-    {:else if $activeTab === 'tracks'}
-      {#if $tracks.length === 0}
-        <div class="empty-state">
-          <div class="empty-icon">🎵</div>
-          <div class="empty-title">No tracks yet</div>
-          <div class="empty-body">Scan your library from Settings.</div>
-        </div>
-      {:else}
-        <div class="track-list">
-          {#each $tracks as track, i}
-            <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div class="track-row" on:dblclick={() => playTrack($tracks, i)}>
-              <span class="track-num">{i + 1}</span>
-              <div class="track-title">{track.title}</div>
-              <div class="track-artist">{track.artist}</div>
-              <span class="track-duration">{formatDuration(track.duration_secs)}</span>
-              <span class="track-format">{track.format.toUpperCase()}</span>
-            </div>
-          {/each}
-        </div>
-      {/if}
+      <div class="hero-actions">
+        <button class="btn btn-primary" on:click={() => goto('/artists')}>Open artists</button>
+        <button class="btn btn-ghost" on:click={() => goto('/downloads')}>Open downloads</button>
+        {#if current}
+          <button class="btn btn-ghost" on:click={resumePlayback}>
+            {$playbackState.is_playing ? 'Pause' : 'Resume'}
+          </button>
+        {/if}
+      </div>
+    </div>
 
-    <!-- Artists tab -->
+    <div class="hero-side">
+      <div class="hero-metric">
+        <span class="hero-metric-label">Collection</span>
+        <span class="hero-metric-value">{$trackCount.toLocaleString()} tracks</span>
+      </div>
+      <div class="hero-metric">
+        <span class="hero-metric-label">Artists</span>
+        <span class="hero-metric-value">{artistClusters.length.toLocaleString()} clustered</span>
+      </div>
+      <div class="hero-metric">
+        <span class="hero-metric-label">Backlog</span>
+        <span class="hero-metric-value">
+          {#if $backlogStatus?.running}
+            Running
+          {:else}
+            {missingAlbums.length} missing
+          {/if}
+        </span>
+      </div>
+      <div class="hero-metric">
+        <span class="hero-metric-label">Service</span>
+        <span class="hero-metric-value">{$slskdRuntimeStatus?.ready ? 'slskd ready' : 'slskd idle'}</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="home-band">
+    <div class="band-heading">
+      <div>
+        <div class="section-kicker">While you were away</div>
+        <h2>Plain-language system recap</h2>
+      </div>
+      <button class="band-link" on:click={() => goto('/downloads')}>Open command center</button>
+    </div>
+
+    {#if loading}
+      <div class="summary-grid loading-grid">
+        <div class="summary-card">Loading background summary...</div>
+      </div>
     {:else}
-      {#if $artists.length === 0}
-        <div class="empty-state">
-          <div class="empty-icon">🎤</div>
-          <div class="empty-title">No artists yet</div>
+      <div class="summary-grid">
+        {#each whileAway as message}
+          <article class="summary-card tone-{message.tone}">
+            <div class="summary-tone">{message.tone}</div>
+            <h3>{message.title}</h3>
+            <p>{message.detail}</p>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
+
+  <section class="home-columns">
+    <div class="column-block">
+      <div class="band-heading">
+        <div>
+          <div class="section-kicker">Artist-first collection</div>
+          <h2>Where the library actually starts</h2>
         </div>
-      {:else}
-        <div class="artist-list">
-          {#each $artists as artist}
-            <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div
-              class="artist-row"
-              role="button"
-              tabindex="0"
-              on:click={() => goto('/artists')}
-              on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goto('/artists'); } }}
-            >
-              <div class="artist-avatar">{artist.name[0]?.toUpperCase()}</div>
-              <div class="artist-info">
-                <div class="artist-name">{artist.name}</div>
-                <div class="artist-meta">{artist.album_count} albums · {artist.track_count} tracks</div>
-              </div>
+        <button class="band-link" on:click={() => goto('/artists')}>See all artists</button>
+      </div>
+
+      <div class="artist-stack">
+        {#if topArtists.length === 0}
+          <div class="stack-empty">Scan a library root and your artist clusters will show up here.</div>
+        {:else}
+          {#each topArtists as artist}
+            <button class="artist-line" on:click={() => goto('/artists')}>
+              <span class="artist-mark">{artist.primaryName[0]?.toUpperCase() ?? '?'}</span>
+              <span class="artist-copy">
+                <span class="artist-name">{artist.primaryName}</span>
+                <span class="artist-meta">{artist.albumCount} albums · {artist.trackCount} tracks</span>
+              </span>
+              {#if artist.aliases.length > 1}
+                <span class="artist-variants">{artist.aliases.length} variants</span>
+              {/if}
+            </button>
+          {/each}
+        {/if}
+      </div>
+    </div>
+
+    <div class="column-block intelligence-block">
+      <div class="band-heading">
+        <div>
+          <div class="section-kicker">Collection intelligence</div>
+          <h2>Missing work, live work, blocked work</h2>
+        </div>
+        <button class="band-link" on:click={() => goto('/downloads')}>Manage lanes</button>
+      </div>
+
+      <div class="lane-metrics">
+        <div class="lane-metric">
+          <span class="lane-label">Missing</span>
+          <strong>{missingAlbums.length}</strong>
+        </div>
+        <div class="lane-metric">
+          <span class="lane-label">In progress</span>
+          <strong>{inProgressCount}</strong>
+        </div>
+        <div class="lane-metric">
+          <span class="lane-label">Blocked</span>
+          <strong>{blockedCount}</strong>
+        </div>
+        <div class="lane-metric">
+          <span class="lane-label">Completed</span>
+          <strong>{completedCount}</strong>
+        </div>
+      </div>
+
+      <div class="trust-strip">
+        {#if trustWatch.length > 0}
+          {#each trustWatch as request}
+            <div class="trust-line">
+              <span class="trust-code">{request.trust_reason_code}</span>
+              <span class="trust-copy">{request.trust_detail}</span>
             </div>
           {/each}
-        </div>
-      {/if}
-    {/if}
-  {/if}
+        {:else if trustDistribution.length > 0}
+          {#each trustDistribution.slice(0, 3) as entry}
+            <div class="trust-line">
+              <span class="trust-code">{entry.reason_code}</span>
+              <span class="trust-copy">{entry.label} across {entry.count} recent request{entry.count === 1 ? '' : 's'}.</span>
+            </div>
+          {/each}
+        {:else}
+          <div class="stack-empty">No trust-ledger issues are crowding the desk right now.</div>
+        {/if}
+      </div>
+
+      <div class="missing-stack">
+        {#if missingAlbums.length === 0}
+          <div class="stack-empty">No Spotify backlog albums are currently flagged missing.</div>
+        {:else}
+          {#each missingAlbums.slice(0, 5) as album}
+            <div class="missing-line">
+              <span class="missing-copy">
+                <span class="missing-title">{album.artist} · {album.album}</span>
+                <span class="missing-meta">{album.play_count} plays · {formatDuration(album.total_ms / 1000)}</span>
+              </span>
+              <span class="missing-badge">missing</span>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  </section>
 </div>
 
 <style>
-.library-page { display: flex; flex-direction: column; min-height: 100%; }
-
-.page-header { background: linear-gradient(to bottom, var(--bg-base) 70%, transparent); }
-
-.search-wrap {
-  position: relative; display: flex; align-items: center; flex: 1; max-width: 360px;
+.home-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
 }
-.search-icon { position: absolute; left: 10px; font-size: 0.85rem; pointer-events: none; }
-.search-input { padding-left: 32px !important; }
-.search-spinner { position: absolute; right: 10px; }
 
-.search-results { padding: 0 1rem 1rem; }
-.sr-label { font-size: 0.8rem; color: var(--text-muted); padding: 8px 16px 4px; }
+.home-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.65fr);
+  gap: 18px;
+  min-height: 320px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(247, 180, 92, 0.16), transparent 40%),
+    linear-gradient(135deg, rgba(139, 180, 212, 0.14), transparent 55%),
+    var(--bg-card);
+}
 
-.track-list { padding: 8px; }
-
-.album-detail { padding: 1.5rem; position: relative; overflow: hidden; }
-.album-detail-backdrop {
-  position: absolute; inset: 0; z-index: 0;
-  background-size: cover; background-position: center;
-  filter: blur(60px) brightness(0.35) saturate(1.4);
-  transform: scale(1.1);
+.hero-backdrop {
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
   pointer-events: none;
 }
-.album-detail > *:not(.album-detail-backdrop) { position: relative; z-index: 1; }
-.album-detail-header {
-  display: flex; align-items: flex-end; gap: 20px;
-  margin-bottom: 24px;
-}
-.back-btn {
-  position: absolute; top: 1rem; left: 1rem;
-  font-size: 0.85rem; color: var(--text-secondary);
-  cursor: pointer; background: none; border: none;
-  transition: color 0.1s;
-}
-.back-btn:hover { color: var(--text-primary); }
-.album-detail-art {
-  width: 84px; height: 84px; flex-shrink: 0;
-  border-radius: var(--radius); overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-}
-.album-detail-art img { width: 100%; height: 100%; object-fit: cover; }
-.album-detail-art-ph {
-  width: 100%; height: 100%;
-  background: var(--bg-card);
-  display: flex; align-items: center; justify-content: center; font-size: 2.5rem;
-}
-.album-detail-info h1 { font-size: 1.3rem; font-weight: 800; color: #deeaf8; }
-.album-detail-artist { color: var(--text-secondary); font-size: 1rem; margin-top: 4px; }
-.album-detail-meta   { color: var(--text-muted); font-size: 0.85rem; margin-top: 4px; }
 
-.artist-list { padding: 8px 1rem; display: flex; flex-direction: column; gap: 4px; }
-.artist-row {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 12px; border-radius: var(--radius-sm);
-  transition: background 0.1s; cursor: pointer;
+.hero-backdrop img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(22px) saturate(1.2);
+  transform: scale(1.06);
 }
-.artist-row:hover { background: var(--bg-hover); }
-.artist-avatar {
-  width: 40px; height: 40px; border-radius: 50%;
-  background: var(--bg-active);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1rem; font-weight: 700; color: var(--accent-bright); flex-shrink: 0;
+
+.hero-copy,
+.hero-side {
+  position: relative;
+  z-index: 1;
 }
-.artist-name { font-weight: 600; font-size: 0.9rem; }
-.artist-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+
+.hero-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 12px;
+  max-width: 620px;
+}
+
+.hero-kicker,
+.section-kicker {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.home-hero h1 {
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 0.96;
+  max-width: 10ch;
+}
+
+.hero-summary {
+  max-width: 54ch;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.hero-side {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: end;
+  gap: 10px;
+}
+
+.hero-metric {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(6, 8, 16, 0.52);
+}
+
+.hero-metric-label,
+.lane-label {
+  display: block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+
+.hero-metric-value {
+  font-size: 0.88rem;
+  color: var(--text-primary);
+}
+
+.home-band,
+.column-block {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+
+.band-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.band-heading h2 {
+  margin-top: 4px;
+  font-size: 1.18rem;
+}
+
+.band-link {
+  color: var(--primary);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.summary-card {
+  padding: 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent), var(--bg-base);
+}
+
+.summary-card h3 {
+  margin: 8px 0 6px;
+  font-size: 0.95rem;
+}
+
+.summary-card p {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.summary-tone {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.tone-steady { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); }
+.tone-watch { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
+.tone-action { border-color: color-mix(in srgb, var(--error) 36%, var(--border)); }
+
+.home-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+  gap: 18px;
+}
+
+.artist-stack,
+.missing-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.artist-line,
+.missing-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+
+.artist-line:hover {
+  border-color: var(--border-active);
+}
+
+.artist-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(247, 180, 92, 0.16), rgba(139, 180, 212, 0.2));
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.artist-copy,
+.missing-copy {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.artist-name,
+.missing-title {
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artist-meta,
+.missing-meta {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.artist-variants,
+.missing-badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.lane-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.lane-metric {
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+}
+
+.lane-metric strong {
+  font-size: 1.3rem;
+  color: var(--text-primary);
+}
+
+.trust-strip {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.trust-line {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-base));
+}
+
+.trust-code {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.trust-copy {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.stack-empty {
+  padding: 16px 0 4px;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.loading-grid {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1100px) {
+  .home-hero,
+  .home-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-side,
+  .lane-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 </style>

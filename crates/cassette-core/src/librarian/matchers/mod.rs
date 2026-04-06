@@ -7,8 +7,12 @@ use crate::librarian::error::Result;
 use crate::librarian::matchers::fuzzy::fuzzy_within_distance;
 use crate::librarian::matchers::isrc::isrc_match;
 use crate::librarian::matchers::metadata::duration_within_tolerance;
-use crate::librarian::models::{DesiredTrack, LocalFile, MatchOutcome, ReconciliationStatus, Track};
-use crate::librarian::normalize::{album::normalize_album_title, artist::normalize_artist_name, track::normalize_track_title};
+use crate::librarian::models::{
+    DesiredTrack, LocalFile, MatchOutcome, ReconciliationStatus, Track,
+};
+use crate::librarian::normalize::{
+    album::normalize_album_title, artist::normalize_artist_name, track::normalize_track_title,
+};
 use std::collections::BTreeMap;
 
 pub async fn match_desired_track(db: &LibrarianDb, desired: &DesiredTrack) -> Result<MatchOutcome> {
@@ -39,7 +43,11 @@ pub async fn match_desired_track(db: &LibrarianDb, desired: &DesiredTrack) -> Re
         let isrc_ok = isrc_match(desired.isrc.as_deref(), track.isrc.as_deref());
         let duration_ok = duration_within_tolerance(desired.duration_ms, track.duration_ms, 2000);
         if isrc_ok || duration_ok {
-            let reason = if isrc_ok { "isrc+metadata" } else { "strong metadata" };
+            let reason = if isrc_ok {
+                "isrc+metadata"
+            } else {
+                "strong metadata"
+            };
             upsert_best_candidate(
                 &mut strong_matches,
                 CandidateMatch::new(track, file, reason),
@@ -78,7 +86,8 @@ pub async fn match_desired_track(db: &LibrarianDb, desired: &DesiredTrack) -> Re
     let fuzzy = db.fuzzy_candidates_for_artist(&norm_artist).await?;
 
     let exact_title_candidates = dedupe_candidates(
-        fuzzy.iter()
+        fuzzy
+            .iter()
             .filter(|(track, _)| normalize_track_title(&track.title) == norm_title)
             .map(|(track, file)| CandidateMatch::new(track.clone(), file.clone(), "exact title")),
     );
@@ -87,7 +96,8 @@ pub async fn match_desired_track(db: &LibrarianDb, desired: &DesiredTrack) -> Re
     }
 
     let fuzzy_candidates = dedupe_candidates(
-        fuzzy.into_iter()
+        fuzzy
+            .into_iter()
             .filter(|(track, _)| {
                 let track_title = normalize_track_title(&track.title);
                 fuzzy_within_distance(&norm_title, &track_title, 2)
@@ -213,7 +223,9 @@ fn resolve_exact_title_candidates(
         let matching = filtered
             .iter()
             .copied()
-            .filter(|candidate| duration_within_tolerance(desired.duration_ms, candidate.duration_ms, 2000))
+            .filter(|candidate| {
+                duration_within_tolerance(desired.duration_ms, candidate.duration_ms, 2000)
+            })
             .collect::<Vec<_>>();
         if !matching.is_empty() {
             filtered = matching;
@@ -261,10 +273,12 @@ fn resolve_exact_title_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::librarian::normalize::{album::normalize_album_title, artist::normalize_artist_name};
-    use crate::librarian::models::{IntegrityStatus, NewLocalFile};
     use super::fuzzy::levenshtein;
+    use super::*;
+    use crate::librarian::models::{IntegrityStatus, NewLocalFile};
+    use crate::librarian::normalize::{
+        album::normalize_album_title, artist::normalize_artist_name,
+    };
     use sqlx::sqlite::SqlitePoolOptions;
 
     #[test]
@@ -342,7 +356,12 @@ mod tests {
             )
             .await
             .expect("original track");
-        insert_local_file(&db, original_track, "A:\\music\\Kendrick Lamar\\02 - Bitch, Don’t Kill My Vibe.flac").await;
+        insert_local_file(
+            &db,
+            original_track,
+            "A:\\music\\Kendrick Lamar\\02 - Bitch, Don’t Kill My Vibe.flac",
+        )
+        .await;
 
         let remix_track = db
             .upsert_track(
@@ -357,7 +376,12 @@ mod tests {
             )
             .await
             .expect("remix track");
-        insert_local_file(&db, remix_track, "A:\\music\\Kendrick Lamar\\04 - Bitch, Don’t Kill My Vibe (Remix).flac").await;
+        insert_local_file(
+            &db,
+            remix_track,
+            "A:\\music\\Kendrick Lamar\\04 - Bitch, Don’t Kill My Vibe (Remix).flac",
+        )
+        .await;
 
         let desired = DesiredTrack {
             id: 1,

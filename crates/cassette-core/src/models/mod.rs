@@ -106,7 +106,9 @@ pub enum DownloadStatus {
 }
 
 impl Default for DownloadStatus {
-    fn default() -> Self { Self::Queued }
+    fn default() -> Self {
+        Self::Queued
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

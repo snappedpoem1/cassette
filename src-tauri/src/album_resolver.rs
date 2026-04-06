@@ -190,9 +190,7 @@ pub fn normalize_task_component(value: &str) -> String {
         .join(" ")
 }
 
-fn classify_release_identity(
-    release_id: &str,
-) -> (&'static str, Option<String>, Option<String>) {
+fn classify_release_identity(release_id: &str) -> (&'static str, Option<String>, Option<String>) {
     if release_id.starts_with("spotify:") {
         return ("spotify", Some(release_id.to_string()), None);
     }

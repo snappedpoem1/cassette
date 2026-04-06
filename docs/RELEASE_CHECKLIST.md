@@ -1,10 +1,10 @@
 # Cassette Release Checklist
 
-Last updated: 2026-04-03
+Last updated: 2026-04-06
 
 Use this checklist before calling a Windows release candidate shippable.
 
-## Latest Verification Snapshot (2026-04-03)
+## Latest Verification Snapshot (2026-04-06)
 
 - `./scripts/verify_trust_spine.ps1` completed successfully
 - `cargo tauri build` completed and produced both installer bundles
@@ -12,7 +12,7 @@ Use this checklist before calling a Windows release candidate shippable.
   - `desired_tracks=4`
   - `delta_queue=11`
   - `acquisition_requests=0`
-- During this run, desktop smoke reported `slskd localhost:5030 = False` (machine/runtime availability caveat)
+- Desktop smoke now validates managed `slskd` readiness through `slskd_runtime_probe_cli` instead of a raw `localhost:5030` socket check
 
 ## Build And Verification Gate
 
@@ -27,6 +27,7 @@ Use this checklist before calling a Windows release candidate shippable.
 ## Packaging Gate
 
 - [ ] `cargo tauri build`
+- [ ] Optional automation path: run `Release Candidate` workflow (`.github/workflows/release-candidate.yml`) with a label to produce installers + release manifest artifact
 - [ ] Confirm bundle artifacts exist:
   - [ ] `target/release/bundle/msi/Cassette_0.1.0_x64_en-US.msi`
   - [ ] `target/release/bundle/nsis/Cassette_0.1.0_x64-setup.exe`

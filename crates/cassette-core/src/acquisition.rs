@@ -1,6 +1,4 @@
-use crate::director::models::{
-    AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource,
-};
+use crate::director::models::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,7 +111,12 @@ impl AcquisitionRequest {
         self.task_id
             .clone()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| format!("request::{}", normalize_component(&self.request_fingerprint())))
+            .unwrap_or_else(|| {
+                format!(
+                    "request::{}",
+                    normalize_component(&self.request_fingerprint())
+                )
+            })
     }
 
     pub fn request_fingerprint(&self) -> String {
@@ -138,21 +141,13 @@ impl AcquisitionRequest {
             self.year.unwrap_or_default(),
             self.duration_secs.unwrap_or_default(),
             normalize_component(self.isrc.as_deref().unwrap_or_default()),
-            normalize_component(
-                self.musicbrainz_recording_id
-                    .as_deref()
-                    .unwrap_or_default(),
-            ),
+            normalize_component(self.musicbrainz_recording_id.as_deref().unwrap_or_default(),),
             normalize_component(
                 self.musicbrainz_release_group_id
                     .as_deref()
                     .unwrap_or_default(),
             ),
-            normalize_component(
-                self.musicbrainz_release_id
-                    .as_deref()
-                    .unwrap_or_default(),
-            ),
+            normalize_component(self.musicbrainz_release_id.as_deref().unwrap_or_default(),),
             self.canonical_artist_id.unwrap_or_default(),
             self.canonical_release_id.unwrap_or_default(),
             self.strategy_name(),
@@ -271,7 +266,10 @@ mod tests {
         assert_eq!(task.task_id, "task-1");
         assert_eq!(task.target.artist, "Artist");
         assert!(task.target.source_album_id.is_none());
-        assert_eq!(task.target.musicbrainz_release_id.as_deref(), Some("mb-release"));
+        assert_eq!(
+            task.target.musicbrainz_release_id.as_deref(),
+            Some("mb-release")
+        );
         assert_eq!(
             task.target.musicbrainz_release_group_id.as_deref(),
             Some("mb-release-group")

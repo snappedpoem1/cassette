@@ -127,7 +127,9 @@ impl MetadataService {
 
             return Err(anyhow!("MusicBrainz returned HTTP {}", status));
         }
-        Err(anyhow!("MusicBrainz request failed after {max_attempts} attempts"))
+        Err(anyhow!(
+            "MusicBrainz request failed after {max_attempts} attempts"
+        ))
     }
 
     /// Search MusicBrainz for a release matching artist + album.
@@ -140,9 +142,11 @@ impl MetadataService {
         let query = format!("artist:\"{}\" AND release:\"{}\"", artist, album);
         let body = self
             .mb_request_with_retry(|| {
-                self.client
-                    .get(format!("{MB_BASE}/release"))
-                    .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
+                self.client.get(format!("{MB_BASE}/release")).query(&[
+                    ("query", query.as_str()),
+                    ("fmt", "json"),
+                    ("limit", "5"),
+                ])
             })
             .await?;
 
@@ -174,14 +178,12 @@ impl MetadataService {
         let query = format!("recording:\"{}\" AND artist:\"{}\"", track_title, artist);
         let body = self
             .mb_request_with_retry(|| {
-                self.client
-                    .get(format!("{MB_BASE}/recording"))
-                    .query(&[
-                        ("query", query.as_str()),
-                        ("fmt", "json"),
-                        ("limit", "5"),
-                        ("inc", "releases+release-groups"),
-                    ])
+                self.client.get(format!("{MB_BASE}/recording")).query(&[
+                    ("query", query.as_str()),
+                    ("fmt", "json"),
+                    ("limit", "5"),
+                    ("inc", "releases+release-groups"),
+                ])
             })
             .await?;
         let recordings = body
@@ -211,10 +213,9 @@ impl MetadataService {
                     break;
                 }
             }
-            if best
-                .as_ref()
-                .map_or(false, |r| matches!(r.release_group_type.as_deref(), Some("Album") | Some("EP")))
-            {
+            if best.as_ref().map_or(false, |r| {
+                matches!(r.release_group_type.as_deref(), Some("Album") | Some("EP"))
+            }) {
                 break;
             }
         }
@@ -253,7 +254,10 @@ impl MetadataService {
                         let track_num = t
                             .get("position")
                             .or_else(|| t.get("number"))
-                            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                            .and_then(|v| {
+                                v.as_u64()
+                                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                            })
                             .unwrap_or(0) as u32;
 
                         let title = t
@@ -291,8 +295,7 @@ impl MetadataService {
         }
 
         let result = MbReleaseWithTracks { release, tracks };
-        self.release_tracks_cache
-            .insert(cache_key, result.clone());
+        self.release_tracks_cache.insert(cache_key, result.clone());
         Ok(result)
     }
 
@@ -305,13 +308,17 @@ impl MetadataService {
         // Try MusicBrainz first
         match self.resolve_via_mb(artist, album).await {
             Ok(result) => return Ok(result),
-            Err(e) => tracing::warn!("MusicBrainz failed for '{artist} - {album}': {e}; trying iTunes"),
+            Err(e) => {
+                tracing::warn!("MusicBrainz failed for '{artist} - {album}': {e}; trying iTunes")
+            }
         }
 
         // iTunes fallback
         match self.resolve_via_itunes(artist, album).await {
             Ok(result) => return Ok(result),
-            Err(e) => tracing::warn!("iTunes fallback failed for '{artist} - {album}': {e}; trying Spotify"),
+            Err(e) => tracing::warn!(
+                "iTunes fallback failed for '{artist} - {album}': {e}; trying Spotify"
+            ),
         }
 
         // Spotify fallback (only if credentials are configured)
@@ -322,7 +329,9 @@ impl MetadataService {
             }
         }
 
-        Err(anyhow!("All metadata sources exhausted for '{artist} - {album}'"))
+        Err(anyhow!(
+            "All metadata sources exhausted for '{artist} - {album}'"
+        ))
     }
 
     /// MusicBrainz: search for release then fetch tracklist.
@@ -343,11 +352,7 @@ impl MetadataService {
         let resp = self
             .client
             .get(&search_url)
-            .query(&[
-                ("term", term.as_str()),
-                ("entity", "album"),
-                ("limit", "5"),
-            ])
+            .query(&[("term", term.as_str()), ("entity", "album"), ("limit", "5")])
             .send()
             .await?;
 
@@ -437,14 +442,8 @@ impl MetadataService {
                     .map_or(false, |t| t == "track")
             })
             .map(|r| {
-                let track_num = r
-                    .get("trackNumber")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let disc_num = r
-                    .get("discNumber")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(1) as u32;
+                let track_num = r.get("trackNumber").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let disc_num = r.get("discNumber").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
                 let title = r
                     .get("trackName")
                     .and_then(|v| v.as_str())
@@ -472,7 +471,9 @@ impl MetadataService {
         tracks.sort_by_key(|t| (t.disc_number, t.track_number));
 
         if tracks.is_empty() {
-            return Err(anyhow!("iTunes returned no tracks for '{artist} - {album}'"));
+            return Err(anyhow!(
+                "iTunes returned no tracks for '{artist} - {album}'"
+            ));
         }
 
         let release = MbRelease {
@@ -515,7 +516,10 @@ impl MetadataService {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(anyhow!("Spotify token request returned HTTP {}", resp.status()));
+            return Err(anyhow!(
+                "Spotify token request returned HTTP {}",
+                resp.status()
+            ));
         }
 
         let body: serde_json::Value = resp.json().await?;
@@ -613,7 +617,10 @@ impl MetadataService {
             .await?;
 
         if !tracks_resp.status().is_success() {
-            return Err(anyhow!("Spotify tracks returned HTTP {}", tracks_resp.status()));
+            return Err(anyhow!(
+                "Spotify tracks returned HTTP {}",
+                tracks_resp.status()
+            ));
         }
 
         let tracks_body: serde_json::Value = tracks_resp.json().await?;
@@ -631,10 +638,7 @@ impl MetadataService {
                     .get("track_number")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(i as u64 + 1) as u32;
-                let disc_num = t
-                    .get("disc_number")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(1) as u32;
+                let disc_num = t.get("disc_number").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
                 let title = t
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -645,10 +649,7 @@ impl MetadataService {
                     .and_then(|v| v.as_str())
                     .unwrap_or(&artist_name)
                     .to_string();
-                let duration_ms = t
-                    .get("duration_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
+                let duration_ms = t.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
                 MbTrack {
                     title,
                     artist: track_artist,
@@ -662,7 +663,9 @@ impl MetadataService {
         tracks.sort_by_key(|t| (t.disc_number, t.track_number));
 
         if tracks.is_empty() {
-            return Err(anyhow!("Spotify returned no tracks for '{artist} - {album}'"));
+            return Err(anyhow!(
+                "Spotify returned no tracks for '{artist} - {album}'"
+            ));
         }
 
         let release = MbRelease {
@@ -756,7 +759,10 @@ impl MetadataService {
                 fixes.push(TagFix {
                     path: local.path.clone(),
                     field: "track_number".into(),
-                    old_value: local.track_number.map(|n| n.to_string()).unwrap_or_default(),
+                    old_value: local
+                        .track_number
+                        .map(|n| n.to_string())
+                        .unwrap_or_default(),
                     new_value: mb_t.track_number.to_string(),
                     applied: false,
                 });
@@ -851,7 +857,10 @@ fn mb_release_from_value(v: &serde_json::Value) -> MbRelease {
             .and_then(|v| v.as_str())
             .and_then(|d| d.split('-').next())
             .and_then(|y| y.parse().ok()),
-        track_count: v.get("track-count").and_then(|v| v.as_u64()).map(|n| n as u32),
+        track_count: v
+            .get("track-count")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32),
         release_group_type: v
             .pointer("/release-group/primary-type")
             .and_then(|v| v.as_str())
@@ -863,8 +872,14 @@ fn mb_release_from_value(v: &serde_json::Value) -> MbRelease {
             .and_then(|li| li.pointer("/label/name"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        country: v.get("country").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        barcode: v.get("barcode").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        country: v
+            .get("country")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        barcode: v
+            .get("barcode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     }
 }
 

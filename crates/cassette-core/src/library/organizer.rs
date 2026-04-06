@@ -1,5 +1,5 @@
-use crate::models::Track;
 use crate::library::track_number_repair::parse_filename_numbers;
+use crate::models::Track;
 use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,13 +45,26 @@ pub struct DuplicateTrack {
 /// Build the canonical destination path for a track
 pub fn canonical_path(library_base: &str, track: &Track) -> PathBuf {
     let artist = sanitize_filename(&track.album_artist);
-    let artist = if artist.is_empty() { sanitize_filename(&track.artist) } else { artist };
-    let artist = if artist.is_empty() { "Unknown Artist".to_string() } else { artist };
+    let artist = if artist.is_empty() {
+        sanitize_filename(&track.artist)
+    } else {
+        artist
+    };
+    let artist = if artist.is_empty() {
+        "Unknown Artist".to_string()
+    } else {
+        artist
+    };
 
     let album = sanitize_filename(&track.album);
-    let album = if album.is_empty() { "Unknown Album".to_string() } else { album };
+    let album = if album.is_empty() {
+        "Unknown Album".to_string()
+    } else {
+        album
+    };
 
-    let year_suffix = track.year
+    let year_suffix = track
+        .year
         .filter(|&y| y > 0)
         .map(|y| format!(" ({y})"))
         .unwrap_or_default();
@@ -111,7 +124,8 @@ fn should_preserve_existing_basename(track: &Track, effective_num: i32) -> bool 
         return true;
     }
 
-    track.album.eq_ignore_ascii_case("Singles") && existing_track_number_prefix(&track.path).is_none()
+    track.album.eq_ignore_ascii_case("Singles")
+        && existing_track_number_prefix(&track.path).is_none()
 }
 
 /// Organize a batch of tracks into canonical folder structure.
@@ -128,7 +142,9 @@ pub fn organize_tracks(library_base: &str, tracks: &[Track], dry_run: bool) -> O
         let has_artist = !track.album_artist.trim().is_empty() || !track.artist.trim().is_empty();
         let has_album = !track.album.trim().is_empty();
         if !has_artist || !has_album {
-            result.skipped.push(format!("No tags (artist/album empty): {}", track.path));
+            result
+                .skipped
+                .push(format!("No tags (artist/album empty): {}", track.path));
             continue;
         }
 
@@ -136,18 +152,24 @@ pub fn organize_tracks(library_base: &str, tracks: &[Track], dry_run: bool) -> O
         let src = Path::new(&track.path);
 
         if !src.exists() {
-            result.errors.push(format!("Source missing: {}", track.path));
+            result
+                .errors
+                .push(format!("Source missing: {}", track.path));
             continue;
         }
 
         let dest_str = dest.to_string_lossy().to_string();
         if dunce::canonicalize(src).ok() == dunce::canonicalize(&dest).ok() {
-            result.skipped.push(format!("Already in place: {}", track.path));
+            result
+                .skipped
+                .push(format!("Already in place: {}", track.path));
             continue;
         }
 
         if dest.exists() {
-            result.skipped.push(format!("Destination exists: {dest_str}"));
+            result
+                .skipped
+                .push(format!("Destination exists: {dest_str}"));
             continue;
         }
 
@@ -163,7 +185,9 @@ pub fn organize_tracks(library_base: &str, tracks: &[Track], dry_run: bool) -> O
         // Create parent directories
         if let Some(parent) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                result.errors.push(format!("Cannot create dir {}: {e}", parent.display()));
+                result
+                    .errors
+                    .push(format!("Cannot create dir {}: {e}", parent.display()));
                 continue;
             }
         }
@@ -189,7 +213,8 @@ pub fn organize_tracks(library_base: &str, tracks: &[Track], dry_run: bool) -> O
                     }
                     Err(ce) => {
                         result.errors.push(format!(
-                            "Move failed for {}: rename={e}, copy={ce}", track.path
+                            "Move failed for {}: rename={e}, copy={ce}",
+                            track.path
                         ));
                     }
                 }
@@ -199,7 +224,9 @@ pub fn organize_tracks(library_base: &str, tracks: &[Track], dry_run: bool) -> O
 
     // Clean up empty directories left behind
     if !dry_run {
-        let mut dirs_to_check: Vec<PathBuf> = result.moved.iter()
+        let mut dirs_to_check: Vec<PathBuf> = result
+            .moved
+            .iter()
             .filter_map(|m| Path::new(&m.old_path).parent().map(|p| p.to_path_buf()))
             .collect();
         dirs_to_check.sort();
@@ -231,12 +258,15 @@ pub fn find_duplicates(tracks: &[Track]) -> Vec<DuplicateGroup> {
         groups.entry(key).or_default().push(track);
     }
 
-    let mut duplicates = groups.into_iter()
+    let mut duplicates = groups
+        .into_iter()
         .filter(|(_, group)| group.len() > 1)
         .map(|(key, group)| {
             let best_idx = pick_best_quality(&group);
-            let tracks: Vec<DuplicateTrack> = group.iter().enumerate().map(|(i, t)| {
-                DuplicateTrack {
+            let tracks: Vec<DuplicateTrack> = group
+                .iter()
+                .enumerate()
+                .map(|(i, t)| DuplicateTrack {
                     id: t.id,
                     path: t.path.clone(),
                     format: t.format.clone(),
@@ -245,20 +275,29 @@ pub fn find_duplicates(tracks: &[Track]) -> Vec<DuplicateGroup> {
                     bitrate_kbps: t.bitrate_kbps,
                     file_size: t.file_size,
                     is_best: i == best_idx,
-                }
-            }).collect();
+                })
+                .collect();
 
             let best = &tracks[best_idx];
             let recommendation = format!(
                 "Keep {} ({}{})",
-                Path::new(&best.path).file_name().unwrap_or_default().to_string_lossy(),
+                Path::new(&best.path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
                 best.format,
-                best.bit_depth.map(|b| format!(" {b}bit")).unwrap_or_default(),
+                best.bit_depth
+                    .map(|b| format!(" {b}bit"))
+                    .unwrap_or_default(),
             );
 
-            DuplicateGroup { key, tracks, recommendation }
+            DuplicateGroup {
+                key,
+                tracks,
+                recommendation,
+            }
         })
-    .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
 
     duplicates.sort_by(|a, b| a.key.cmp(&b.key));
     duplicates
@@ -267,7 +306,9 @@ pub fn find_duplicates(tracks: &[Track]) -> Vec<DuplicateGroup> {
 /// Pick the best quality track from a group:
 /// FLAC > everything, then higher bit depth, then higher sample rate, then larger file
 fn pick_best_quality(tracks: &[&Track]) -> usize {
-    tracks.iter().enumerate()
+    tracks
+        .iter()
+        .enumerate()
         .max_by_key(|(_, t)| {
             let format_score: i64 = match t.format.to_uppercase().as_str() {
                 "FLAC" => 1000,
@@ -309,13 +350,20 @@ pub fn ingest_staging(staging: &str, library_base: &str) -> Result<Vec<String>> 
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        if !entry.file_type().is_file() { continue; }
-        let ext = entry.path().extension()
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let ext = entry
+            .path()
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
 
-        if !matches!(ext.as_str(), "flac" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "wav" | "aiff") {
+        if !matches!(
+            ext.as_str(),
+            "flac" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "wav" | "aiff"
+        ) {
             continue;
         }
 
@@ -352,15 +400,17 @@ pub fn ingest_staging(staging: &str, library_base: &str) -> Result<Vec<String>> 
 
 fn sanitize_filename(name: &str) -> String {
     let trimmed = name.trim();
-    let sanitized = trimmed.chars().map(|c| match c {
-        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-        '\0' => '_',
-        c => c,
-    })
-    .collect::<String>()
-    .trim_end_matches('.')
-    .trim()
-    .to_string();
+    let sanitized = trimmed
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            '\0' => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim_end_matches('.')
+        .trim()
+        .to_string();
 
     if sanitized.is_empty() && !trimmed.is_empty() {
         if trimmed.chars().all(|c| c == '.') {
@@ -386,7 +436,8 @@ pub fn is_zero_track_rename(old_path: &str, new_path: &str) -> bool {
 }
 
 fn normalize(s: &str) -> String {
-    s.trim().to_lowercase()
+    s.trim()
+        .to_lowercase()
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect::<String>()
@@ -399,11 +450,15 @@ fn cleanup_empty_dir(dir: &Path) {
     // Walk up removing empty directories
     let mut current = dir.to_path_buf();
     for _ in 0..5 {
-        if !current.is_dir() { break; }
+        if !current.is_dir() {
+            break;
+        }
         let is_empty = std::fs::read_dir(&current)
             .map(|mut entries| entries.next().is_none())
             .unwrap_or(false);
-        if !is_empty { break; }
+        if !is_empty {
+            break;
+        }
         let _ = std::fs::remove_dir(&current);
         match current.parent() {
             Some(p) => current = p.to_path_buf(),

@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$slskdProbe = $null
 $checks = [ordered]@{
     "Repo .env" = Test-Path (Join-Path $projectRoot ".env")
     "A:\Music exists" = Test-Path "A:\Music"
@@ -15,10 +16,15 @@ $checks = [ordered]@{
 }
 
 try {
-    $port = Test-NetConnection -ComputerName localhost -Port 5030 -WarningAction SilentlyContinue
-    $checks["slskd localhost:5030"] = $port.TcpTestSucceeded
+    $probeOutput = cargo run --quiet -p cassette --bin slskd_runtime_probe_cli -- --json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $probeOutput) {
+        $slskdProbe = $probeOutput | ConvertFrom-Json
+        $checks["Managed slskd runtime ready"] = [bool]$slskdProbe.probe_status.ready
+    } else {
+        $checks["Managed slskd runtime ready"] = $false
+    }
 } catch {
-    $checks["slskd localhost:5030"] = $false
+    $checks["Managed slskd runtime ready"] = $false
 }
 
 $checks.GetEnumerator() | ForEach-Object {
@@ -27,6 +33,20 @@ $checks.GetEnumerator() | ForEach-Object {
         Passed = $_.Value
     }
 } | Format-Table -AutoSize
+
+if ($slskdProbe) {
+    Write-Host ""
+    Write-Host "[smoke] managed slskd probe"
+    [pscustomobject]@{
+        Url = $slskdProbe.probe_status.url
+        Ready = [bool]$slskdProbe.probe_status.ready
+        SpawnedByProbe = [bool]$slskdProbe.probe_status.spawned_by_app
+        StoppedAfterProbe = [bool]$slskdProbe.stopped_after_probe
+        AppDir = $slskdProbe.probe_status.app_dir
+        DownloadsDir = $slskdProbe.probe_status.downloads_dir
+        Message = $slskdProbe.probe_status.message
+    } | Format-List
+}
 
 if ($Strict) {
     $requiredChecks = @(
@@ -37,7 +57,7 @@ if ($Strict) {
         "App DB exists"
     )
     if ($RequireSlskd) {
-        $requiredChecks += "slskd localhost:5030"
+        $requiredChecks += "Managed slskd runtime ready"
     }
 
     $failed = @()

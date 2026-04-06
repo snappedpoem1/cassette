@@ -48,15 +48,23 @@ pub async fn reconcile_desired_against_local(
             continue;
         }
 
-        if let Some((fuzzy, confidence)) = match_by_fuzzy(manager.db_pool(), desired, config).await? {
+        if let Some((fuzzy, confidence)) =
+            match_by_fuzzy(manager.db_pool(), desired, config).await?
+        {
             // Auto-accept fuzzy matches above 80% as high-confidence;
             // only flag truly ambiguous matches for manual review.
             let (status, label) = if confidence >= 0.80 {
                 result.matched_count += 1;
-                (ReconciliationStatus::HighConfidenceMatch, "Auto-accepted fuzzy match")
+                (
+                    ReconciliationStatus::HighConfidenceMatch,
+                    "Auto-accepted fuzzy match",
+                )
             } else {
                 result.manual_review_count += 1;
-                (ReconciliationStatus::ManualReviewNeeded, "Fuzzy match requires manual review")
+                (
+                    ReconciliationStatus::ManualReviewNeeded,
+                    "Fuzzy match requires manual review",
+                )
             };
             result.reconciliations.push(TrackReconciliation {
                 desired_track_id: desired.id as u64,
@@ -102,7 +110,8 @@ pub async fn reconcile_desired_against_local(
             continue;
         };
 
-        let duplicates = find_duplicates(manager.db_pool(), &reconcile.desired_track, config).await?;
+        let duplicates =
+            find_duplicates(manager.db_pool(), &reconcile.desired_track, config).await?;
         if !duplicates.is_empty() {
             result.duplicate_count += duplicates.len();
             reconcile.status = ReconciliationStatus::DuplicateFound {

@@ -41,7 +41,9 @@ pub fn quarantine_reason_for_status(status: ValidationStatus) -> Option<Quaranti
         ValidationStatus::UnsupportedFormat => Some(QuarantineReason::UnsupportedFormat),
         ValidationStatus::ProbableTruncation
         | ValidationStatus::SuspiciousSmallForDuration
-        | ValidationStatus::SuspiciousDurationMismatch => Some(QuarantineReason::ProbableTruncation),
+        | ValidationStatus::SuspiciousDurationMismatch => {
+            Some(QuarantineReason::ProbableTruncation)
+        }
         ValidationStatus::HtmlOrTextPayload => Some(QuarantineReason::HtmlOrText),
         ValidationStatus::MissingOnDisk => Some(QuarantineReason::MissingOnDisk),
         ValidationStatus::Valid => None,

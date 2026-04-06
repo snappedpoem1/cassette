@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cassette – Visual Direction</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #08090c; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; padding: 24px; }
+
+  h2 { font-size: 1.1rem; font-weight: 700; color: #f7b45c; letter-spacing: .06em; margin-bottom: 4px; }
+  .sub { font-size: 0.8rem; color: #5a6478; margin-bottom: 24px; }
+
+  .screens { display: flex; gap: 20px; flex-wrap: wrap; }
+
+  .screen-wrap { flex: 1; min-width: 340px; cursor: pointer; }
+  .screen-wrap:hover .screen { border-color: rgba(247,180,92,0.4); }
+  .screen-wrap.selected .screen { border-color: #f7b45c; box-shadow: 0 0 0 2px rgba(247,180,92,0.3); }
+
+  .screen {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0a0c10;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    aspect-ratio: 16/10;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+
+  .label { margin-top: 10px; font-size: 0.85rem; font-weight: 600; color: #c8d0dc; }
+  .desc { font-size: 0.75rem; color: #4a5568; margin-top: 3px; line-height: 1.5; }
+
+  /* ── SHARED CHROME ── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 14px; flex-shrink: 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    background: rgba(8,9,12,0.95);
+    z-index: 10; position: relative;
+  }
+  .brand { font-size: 9px; font-weight: 800; letter-spacing: .12em; color: #f7b45c; }
+  .topnav { display: flex; gap: 12px; }
+  .topnav span { font-size: 8px; letter-spacing: .08em; color: #4a5568; }
+
+  .body { display: flex; flex: 1; overflow: hidden; position: relative; }
+
+  .sidebar {
+    width: 80px; flex-shrink: 0;
+    border-right: 1px solid rgba(255,255,255,0.05);
+    background: rgba(6,7,10,0.97);
+    padding: 8px 0;
+    display: flex; flex-direction: column; gap: 1px;
+    z-index: 5;
+  }
+  .nav-item {
+    padding: 7px 10px; font-size: 8px; color: #3d4a5a; cursor: pointer;
+    border-right: 2px solid transparent;
+  }
+  .nav-item.active { color: #f7b45c; background: rgba(247,180,92,0.07); border-right-color: #f7b45c; }
+  .nav-divider { height: 1px; background: rgba(255,255,255,0.04); margin: 4px 8px; }
+
+  .nowplaying {
+    border-top: 1px solid rgba(255,255,255,0.06);
+    background: rgba(6,7,10,0.97);
+    padding: 7px 12px;
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0; z-index: 10; position: relative;
+  }
+  .np-art { width: 32px; height: 32px; border-radius: 4px; flex-shrink: 0; overflow: hidden; }
+  .np-art img { width: 100%; height: 100%; object-fit: cover; }
+  .np-info { flex: 1; min-width: 0; }
+  .np-title { font-size: 8px; font-weight: 600; color: #d4c0a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np-artist { font-size: 7px; color: #4a5568; margin-top: 1px; }
+  .np-progress { height: 2px; background: rgba(255,255,255,0.07); border-radius: 99px; margin-top: 4px; }
+  .np-fill { height: 100%; border-radius: 99px; }
+  .np-controls { display: flex; gap: 8px; align-items: center; }
+  .btn-play {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px; flex-shrink: 0;
+  }
+  .prev, .next { font-size: 10px; color: #3d4a5a; }
+
+  /* ── SCREEN A: Immersive hero ── */
+  .screen-a .main { flex: 1; position: relative; overflow: hidden; }
+  .screen-a .hero {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+    filter: brightness(0.35) saturate(1.2);
+  }
+  .screen-a .hero-overlay {
+    position: absolute; inset: 0;
+    background: linear-gradient(to right, rgba(8,9,12,0.92) 0%, rgba(8,9,12,0.3) 60%, rgba(8,9,12,0.0) 100%);
+  }
+  .screen-a .content { position: absolute; inset: 0; padding: 12px; display: flex; flex-direction: column; }
+  .screen-a .featured {
+    display: flex; gap: 10px; align-items: flex-end;
+    margin-bottom: 10px;
+  }
+  .screen-a .feat-art { width: 56px; height: 56px; border-radius: 6px; overflow: hidden; flex-shrink: 0; box-shadow: 0 6px 20px rgba(0,0,0,0.7); }
+  .screen-a .feat-art img { width: 100%; height: 100%; object-fit: cover; }
+  .screen-a .feat-info .feat-title { font-size: 13px; font-weight: 800; color: #f0e6d4; line-height: 1.2; }
+  .screen-a .feat-info .feat-artist { font-size: 9px; color: rgba(240,230,212,0.6); margin-top: 2px; }
+  .screen-a .grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
+  .screen-a .album-card { border-radius: 5px; overflow: hidden; background: rgba(255,255,255,0.04); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.06); }
+  .screen-a .album-art { width: 100%; aspect-ratio: 1; overflow: hidden; }
+  .screen-a .album-art img { width: 100%; height: 100%; object-fit: cover; }
+  .screen-a .album-meta { padding: 4px 5px; }
+  .screen-a .album-meta .t { font-size: 7px; font-weight: 600; color: #c8bca8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .screen-a .album-meta .a { font-size: 6px; color: #3d4a5a; margin-top: 1px; }
+  .screen-a .np-fill { background: linear-gradient(90deg, #f7b45c, #e0803a); width: 38%; }
+
+  /* ── SCREEN B: Dense grid with per-card tinted backgrounds ── */
+  .screen-b .main { flex: 1; overflow: hidden; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .screen-b .section-label { font-size: 7px; letter-spacing: .1em; text-transform: uppercase; color: #3d4a5a; font-weight: 700; margin-bottom: 4px; }
+  .screen-b .grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 5px; }
+  .screen-b .album-card {
+    border-radius: 6px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.05);
+    transition: border-color 0.15s;
+  }
+  .screen-b .album-art { width: 100%; aspect-ratio: 1; overflow: hidden; }
+  .screen-b .album-art img { width: 100%; height: 100%; object-fit: cover; }
+  .screen-b .album-meta { padding: 5px 6px; }
+  .screen-b .album-meta .t { font-size: 7.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .screen-b .album-meta .a { font-size: 6.5px; color: #4a5568; margin-top: 1px; }
+  .screen-b .np-fill { background: linear-gradient(90deg, #f7b45c, #e0803a); width: 38%; }
+
+  /* ── SCREEN C: Album open / detail view ── */
+  .screen-c .main { flex: 1; position: relative; overflow: hidden; display: flex; }
+  .screen-c .backdrop {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center top;
+    filter: brightness(0.25) saturate(1.4) blur(2px);
+  }
+  .screen-c .backdrop-grad {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, transparent 0%, rgba(8,9,12,0.85) 60%, rgba(8,9,12,1) 100%);
+  }
+  .screen-c .detail { position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column; padding: 14px; }
+  .screen-c .album-hero { display: flex; gap: 12px; margin-bottom: 12px; }
+  .screen-c .art-big { width: 72px; height: 72px; border-radius: 7px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.7); flex-shrink: 0; }
+  .screen-c .art-big img { width: 100%; height: 100%; object-fit: cover; }
+  .screen-c .album-title { font-size: 15px; font-weight: 800; color: #f0e6d4; margin-bottom: 3px; }
+  .screen-c .album-artist { font-size: 9px; color: rgba(240,230,212,0.55); }
+  .screen-c .album-year { font-size: 8px; color: rgba(240,230,212,0.35); margin-top: 2px; }
+  .screen-c .play-btn {
+    margin-top: 8px; padding: 5px 12px; border-radius: 99px; font-size: 8px; font-weight: 700;
+    background: linear-gradient(135deg,#f7b45c,#e0803a); color: #0a0c10; border: none;
+    display: inline-block; width: fit-content;
+  }
+  .screen-c .tracklist { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+  .screen-c .track-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px; border-radius: 4px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .screen-c .track-row.playing { background: rgba(247,180,92,0.08); border-color: rgba(247,180,92,0.15); }
+  .screen-c .tr-num { font-size: 7px; color: #3d4a5a; width: 12px; text-align: center; }
+  .screen-c .tr-num.active { color: #f7b45c; }
+  .screen-c .tr-title { flex: 1; font-size: 8px; color: #c8bca8; }
+  .screen-c .tr-title.active { color: #f0e0c0; font-weight: 600; }
+  .screen-c .tr-dur { font-size: 7px; color: #3d4a5a; }
+  .screen-c .np-fill { background: linear-gradient(90deg, #f7b45c, #e0803a); width: 38%; }
+  .screen-c .np-art-bg { background: url('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80') center/cover; }
+</style>
+</head>
+<body>
+
+<h2>Three directions for Cassette</h2>
+<p class="sub">Click a screen to select it — tell me what you like or don't like in the terminal.</p>
+
+<div class="screens">
+
+  <!-- SCREEN A: Immersive hero with blurred album art background -->
+  <div class="screen-wrap" id="wrap-a" onclick="select('a')">
+    <div class="screen screen-a">
+      <div class="topbar">
+        <span class="brand">CASSETTE // DESKTOP</span>
+        <div class="topnav"><span>LIBRARY</span><span>DOWNLOADS</span><span>SETTINGS</span></div>
+      </div>
+      <div class="body">
+        <div class="sidebar">
+          <div class="nav-item active">Library</div>
+          <div class="nav-item">Downloads</div>
+          <div class="nav-item">Playlists</div>
+          <div class="nav-item">Artists</div>
+          <div class="nav-divider"></div>
+          <div class="nav-item">Import</div>
+          <div class="nav-item">Tools</div>
+        </div>
+        <div class="main">
+          <div class="hero" style="background-image:url('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&q=60')"></div>
+          <div class="hero-overlay"></div>
+          <div class="content">
+            <div class="featured">
+              <div class="feat-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=120&q=80" alt=""></div>
+              <div class="feat-info">
+                <div class="feat-title">Twilight Resonance</div>
+                <div class="feat-artist">Shadow Shore · 2023</div>
+              </div>
+            </div>
+            <div class="grid">
+              <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=120&q=80" alt=""></div><div class="album-meta"><div class="t">Golden Hours</div><div class="a">Sunrise Ave</div></div></div>
+              <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1506157786151-b8491531f063?w=120&q=80" alt=""></div><div class="album-meta"><div class="t">Distant Echoes</div><div class="a">Ether Realms</div></div></div>
+              <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&q=80" alt=""></div><div class="album-meta"><div class="t">Horizon Veil</div><div class="a">Starlit Edge</div></div></div>
+              <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=120&q=80" alt=""></div><div class="album-meta"><div class="t">Fading Echo</div><div class="a">Northern Lines</div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying">
+        <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+        <div class="np-info">
+          <div class="np-title">Twilight Resonance</div>
+          <div class="np-artist">Shadow Shore</div>
+          <div class="np-progress"><div class="np-fill screen-a"></div></div>
+        </div>
+        <div class="np-controls">
+          <span class="prev">⏮</span>
+          <div class="btn-play" style="background:linear-gradient(135deg,#f7b45c,#e0803a);box-shadow:0 2px 10px rgba(247,180,92,0.3);">⏸</div>
+          <span class="next">⏭</span>
+        </div>
+      </div>
+    </div>
+    <div class="label">A — Immersive Hero</div>
+    <div class="desc">Blurred album art fills the background. Featured album up top, grid below. Most cinematic feel.</div>
+  </div>
+
+  <!-- SCREEN B: Dense grid, real photos, editorial card design -->
+  <div class="screen-wrap" id="wrap-b" onclick="select('b')">
+    <div class="screen screen-b">
+      <div class="topbar">
+        <span class="brand">CASSETTE // DESKTOP</span>
+        <div class="topnav"><span>LIBRARY</span><span>DOWNLOADS</span><span>SETTINGS</span></div>
+      </div>
+      <div class="body">
+        <div class="sidebar">
+          <div class="nav-item active">Library</div>
+          <div class="nav-item">Downloads</div>
+          <div class="nav-item">Playlists</div>
+          <div class="nav-item">Artists</div>
+          <div class="nav-divider"></div>
+          <div class="nav-item">Import</div>
+          <div class="nav-item">Tools</div>
+        </div>
+        <div class="main">
+          <div class="section-label">Albums</div>
+          <div class="grid">
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=120&q=80" alt=""></div><div class="album-meta" style="background:#0e0b08;"><div class="t" style="color:#e0cdb0;">Twilight Res.</div><div class="a">Shadow Shore</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=120&q=80" alt=""></div><div class="album-meta" style="background:#080e10;"><div class="t" style="color:#b0c8d8;">Golden Hours</div><div class="a">Sunrise Ave</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1506157786151-b8491531f063?w=120&q=80" alt=""></div><div class="album-meta" style="background:#0a0810;"><div class="t" style="color:#c0b0d8;">Distant Echoes</div><div class="a">Ether Realms</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=120&q=80" alt=""></div><div class="album-meta" style="background:#0a0e08;"><div class="t" style="color:#b0c8a8;">Horizon Veil</div><div class="a">Starlit Edge</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=120&q=80" alt=""></div><div class="album-meta" style="background:#10080a;"><div class="t" style="color:#d8b0b8;">Fading Echo</div><div class="a">Northern Lines</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1415201364774-f6f0bb35f28f?w=120&q=80" alt=""></div><div class="album-meta" style="background:#080d10;"><div class="t" style="color:#a8c0d0;">Misty Path</div><div class="a">Blue Canvas</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=120&q=80" alt=""></div><div class="album-meta" style="background:#100d08;"><div class="t" style="color:#d4c090;">Dawn of Light</div><div class="a">Echo Chamber</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1524368535928-5b5e00ddc76b?w=120&q=80" alt=""></div><div class="album-meta" style="background:#0c0810;"><div class="t" style="color:#c0a8d0;">Cosmic Drift</div><div class="a">Lunar Vale</div></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying">
+        <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+        <div class="np-info">
+          <div class="np-title">Twilight Resonance</div>
+          <div class="np-artist">Shadow Shore</div>
+          <div class="np-progress"><div class="np-fill screen-b"></div></div>
+        </div>
+        <div class="np-controls">
+          <span class="prev">⏮</span>
+          <div class="btn-play" style="background:linear-gradient(135deg,#f7b45c,#e0803a);box-shadow:0 2px 10px rgba(247,180,92,0.3);">⏸</div>
+          <span class="next">⏭</span>
+        </div>
+      </div>
+    </div>
+    <div class="label">B — Editorial Grid</div>
+    <div class="desc">Dense album grid where each card's metadata strip picks up a tint from the art. More music app, less media player.</div>
+  </div>
+
+  <!-- SCREEN C: Album open / detail with blurred backdrop -->
+  <div class="screen-wrap" id="wrap-c" onclick="select('c')">
+    <div class="screen screen-c">
+      <div class="topbar">
+        <span class="brand">CASSETTE // DESKTOP</span>
+        <div class="topnav"><span>LIBRARY</span><span>DOWNLOADS</span><span>SETTINGS</span></div>
+      </div>
+      <div class="body">
+        <div class="sidebar">
+          <div class="nav-item active">Library</div>
+          <div class="nav-item">Downloads</div>
+          <div class="nav-item">Playlists</div>
+          <div class="nav-item">Artists</div>
+          <div class="nav-divider"></div>
+          <div class="nav-item">Import</div>
+          <div class="nav-item">Tools</div>
+        </div>
+        <div class="main">
+          <div class="backdrop" style="background-image:url('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&q=60')"></div>
+          <div class="backdrop-grad"></div>
+          <div class="detail">
+            <div class="album-hero">
+              <div class="art-big"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=160&q=80" alt=""></div>
+              <div>
+                <div class="album-title">Twilight Resonance</div>
+                <div class="album-artist">Shadow Shore</div>
+                <div class="album-year">2023 · 11 tracks · FLAC</div>
+                <div class="play-btn">▶ Play Album</div>
+              </div>
+            </div>
+            <div class="tracklist">
+              <div class="track-row playing"><span class="tr-num active">▶</span><span class="tr-title active">Twilight Glow</span><span class="tr-dur">4:22</span></div>
+              <div class="track-row"><span class="tr-num">2</span><span class="tr-title">Fading Echo</span><span class="tr-dur">3:51</span></div>
+              <div class="track-row"><span class="tr-num">3</span><span class="tr-title">Nightfall Journey</span><span class="tr-dur">5:08</span></div>
+              <div class="track-row"><span class="tr-num">4</span><span class="tr-title">Ember Stone</span><span class="tr-dur">3:44</span></div>
+              <div class="track-row"><span class="tr-num">5</span><span class="tr-title">Into the Horizon</span><span class="tr-dur">6:12</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying">
+        <div class="np-art np-art-bg"></div>
+        <div class="np-info">
+          <div class="np-title">Twilight Glow</div>
+          <div class="np-artist">Shadow Shore</div>
+          <div class="np-progress"><div class="np-fill screen-c"></div></div>
+        </div>
+        <div class="np-controls">
+          <span class="prev">⏮</span>
+          <div class="btn-play" style="background:linear-gradient(135deg,#f7b45c,#e0803a);box-shadow:0 2px 10px rgba(247,180,92,0.3);">⏸</div>
+          <span class="next">⏭</span>
+        </div>
+      </div>
+    </div>
+    <div class="label">C — Album Detail with Blurred Backdrop</div>
+    <div class="desc">When you open an album the art bleeds into the whole background. Tracklist over the atmospheric blur. Like the Lyra mockup's third panel.</div>
+  </div>
+
+</div>
+
+<script>
+  let selected = null;
+  function select(id) {
+    if (selected) document.getElementById('wrap-' + selected).classList.remove('selected');
+    selected = id;
+    document.getElementById('wrap-' + id).classList.add('selected');
+    // fire selection event for the server
+    if (window.__selectOption) window.__selectOption(id, document.querySelector('#wrap-' + id + ' .label').textContent);
+  }
+</script>
+</body>
+</html>

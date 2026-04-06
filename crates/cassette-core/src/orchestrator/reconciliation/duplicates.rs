@@ -21,7 +21,10 @@ pub async fn find_duplicates(
     if config.detect_by_fingerprint {
         if has_column(pool, "local_files", "acoustid_fingerprint").await? {
             if let Some(fingerprint) = extract_payload_value(desired, "acoustid_fingerprint") {
-                where_clauses.push(format!("lf.acoustid_fingerprint = '{}'", fingerprint.replace('\'', "''")));
+                where_clauses.push(format!(
+                    "lf.acoustid_fingerprint = '{}'",
+                    fingerprint.replace('\'', "''")
+                ));
             }
         }
     }
@@ -58,10 +61,7 @@ pub async fn find_duplicates(
     Ok(out)
 }
 
-pub fn should_upgrade_quality(
-    current_tier: &str,
-    config: &ReconciliationConfig,
-) -> bool {
+pub fn should_upgrade_quality(current_tier: &str, config: &ReconciliationConfig) -> bool {
     if !config.prefer_lossless {
         return false;
     }
@@ -81,12 +81,19 @@ fn quality_tier_rank(tier: &str) -> u32 {
 fn extract_payload_value(desired: &DesiredTrack, key: &str) -> Option<String> {
     let payload = desired.raw_payload_json.as_ref()?;
     let value: serde_json::Value = serde_json::from_str(payload).ok()?;
-    value.get(key).and_then(|v| v.as_str()).map(ToString::to_string)
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
 }
 
 async fn has_column(pool: &sqlx::SqlitePool, table: &str, column: &str) -> Result<bool> {
     let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
         .fetch_all(pool)
         .await?;
-    Ok(rows.iter().any(|r| r.try_get::<String, _>("name").map(|n| n == column).unwrap_or(false)))
+    Ok(rows.iter().any(|r| {
+        r.try_get::<String, _>("name")
+            .map(|n| n == column)
+            .unwrap_or(false)
+    }))
 }

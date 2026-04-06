@@ -24,7 +24,10 @@ impl SourceProvider for LocalCacheSource {
         !self.roots.is_empty()
     }
 
-    async fn resolve_download_url(&self, track: &DesiredTrack) -> Result<ResolvedTrack, SourceError> {
+    async fn resolve_download_url(
+        &self,
+        track: &DesiredTrack,
+    ) -> Result<ResolvedTrack, SourceError> {
         let roots = self.roots.clone();
         let artist = track.artist_name.clone();
         let title = track.track_title.clone();
@@ -67,10 +70,7 @@ impl SourceProvider for LocalCacheSource {
             ))
         })?;
 
-        let extension = path
-            .extension()
-            .and_then(|v| v.to_str())
-            .unwrap_or("bin");
+        let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("bin");
 
         Ok(ResolvedTrack {
             download_url: format!("file://{}", path.to_string_lossy()),

@@ -49,7 +49,8 @@ impl TestLibrarySetup {
                     source_library.display(),
                     config.copy_limit
                 );
-                copy_library_subset(source_library, &config.test_library, config.copy_limit).await?;
+                copy_library_subset(source_library, &config.test_library, config.copy_limit)
+                    .await?;
             }
         }
 
@@ -102,7 +103,10 @@ impl TestLibrarySetup {
             if !removed && self.test_db.exists() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    format!("Failed to remove locked test database {}", self.test_db.display()),
+                    format!(
+                        "Failed to remove locked test database {}",
+                        self.test_db.display()
+                    ),
                 )
                 .into());
             }
@@ -132,7 +136,11 @@ async fn copy_library_subset(source: &Path, destination: &Path, limit: usize) ->
     let mut copied = 0usize;
     let mut linked = 0usize;
 
-    for entry in WalkDir::new(source).follow_links(true).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(source)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if copied >= limit {
             break;
         }
@@ -171,9 +179,7 @@ async fn copy_library_subset(source: &Path, destination: &Path, limit: usize) ->
 
         copied += 1;
         if copied % 500 == 0 {
-            println!(
-                "Test library prep progress: {copied}/{limit} files (hard-linked: {linked})"
-            );
+            println!("Test library prep progress: {copied}/{limit} files (hard-linked: {linked})");
         }
     }
 
@@ -184,7 +190,6 @@ async fn copy_library_subset(source: &Path, destination: &Path, limit: usize) ->
 
     Ok(())
 }
-
 
 async fn remove_if_exists(path: &Path) -> Result<()> {
     if !path.exists() {

@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use cassette_core::{
+    db::TrackIdentityContext,
     library::Scanner,
     models::{Album, Artist, LibraryRoot, ScanProgress, Track},
 };
@@ -7,7 +8,12 @@ use tauri::{Emitter, State, Window};
 
 #[tauri::command]
 pub fn get_library_roots(state: State<'_, AppState>) -> Vec<LibraryRoot> {
-    state.db.lock().unwrap().get_library_roots().unwrap_or_default()
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_library_roots()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -23,7 +29,9 @@ pub fn remove_library_root(state: State<'_, AppState>, path: String) {
 #[tauri::command]
 pub async fn scan_library(window: Window, state: State<'_, AppState>) -> Result<u64, String> {
     let roots = state
-        .db.lock().unwrap()
+        .db
+        .lock()
+        .unwrap()
         .get_library_roots()
         .unwrap_or_default()
         .into_iter()
@@ -43,19 +51,34 @@ pub async fn scan_library(window: Window, state: State<'_, AppState>) -> Result<
     });
 
     let scanner = Scanner::new(db);
-    scanner.scan_roots(roots, tx).await.map_err(|e| e.to_string())
+    scanner
+        .scan_roots(roots, tx)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_tracks(state: State<'_, AppState>, limit: Option<i64>, offset: Option<i64>) -> Vec<Track> {
-    state.db.lock().unwrap()
+pub fn get_tracks(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Vec<Track> {
+    state
+        .db
+        .lock()
+        .unwrap()
         .get_tracks(limit.unwrap_or(500), offset.unwrap_or(0))
         .unwrap_or_default()
 }
 
 #[tauri::command]
 pub fn search_tracks(state: State<'_, AppState>, query: String) -> Vec<Track> {
-    state.db.lock().unwrap().search_tracks(&query).unwrap_or_default()
+    state
+        .db
+        .lock()
+        .unwrap()
+        .search_tracks(&query)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -65,7 +88,12 @@ pub fn get_albums(state: State<'_, AppState>) -> Vec<Album> {
 
 #[tauri::command]
 pub fn get_album_tracks(state: State<'_, AppState>, artist: String, album: String) -> Vec<Track> {
-    state.db.lock().unwrap().get_album_tracks(&artist, &album).unwrap_or_default()
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_album_tracks(&artist, &album)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -76,4 +104,17 @@ pub fn get_artists(state: State<'_, AppState>) -> Vec<Artist> {
 #[tauri::command]
 pub fn get_track_count(state: State<'_, AppState>) -> i64 {
     state.db.lock().unwrap().get_track_count().unwrap_or(0)
+}
+
+#[tauri::command]
+pub fn get_track_identity_context(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Option<TrackIdentityContext> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_track_identity_context(track_id)
+        .unwrap_or(None)
 }

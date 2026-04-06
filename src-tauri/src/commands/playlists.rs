@@ -9,7 +9,12 @@ pub fn get_playlists(state: State<'_, AppState>) -> Vec<Playlist> {
 
 #[tauri::command]
 pub fn get_playlist_items(state: State<'_, AppState>, playlist_id: i64) -> Vec<PlaylistItem> {
-    state.db.lock().unwrap().get_playlist_items(playlist_id).unwrap_or_default()
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_playlist_items(playlist_id)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -19,14 +24,21 @@ pub fn create_playlist(
     description: Option<String>,
     track_ids: Vec<i64>,
 ) -> i64 {
-    state.db.lock().unwrap()
+    state
+        .db
+        .lock()
+        .unwrap()
         .create_playlist(&name, description.as_deref(), &track_ids)
         .unwrap_or(-1)
 }
 
 #[tauri::command]
 pub fn replace_playlist_tracks(state: State<'_, AppState>, playlist_id: i64, track_ids: Vec<i64>) {
-    let _ = state.db.lock().unwrap().replace_playlist_tracks(playlist_id, &track_ids);
+    let _ = state
+        .db
+        .lock()
+        .unwrap()
+        .replace_playlist_tracks(playlist_id, &track_ids);
 }
 
 #[tauri::command]
@@ -36,7 +48,10 @@ pub fn delete_playlist(state: State<'_, AppState>, playlist_id: i64) {
 
 #[tauri::command]
 pub fn play_playlist(state: State<'_, AppState>, playlist_id: i64, start_index: Option<usize>) {
-    let items = state.db.lock().unwrap()
+    let items = state
+        .db
+        .lock()
+        .unwrap()
         .get_playlist_items(playlist_id)
         .unwrap_or_default();
     let track_ids: Vec<i64> = items.iter().map(|i| i.track_id).collect();

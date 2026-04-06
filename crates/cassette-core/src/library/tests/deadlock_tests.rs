@@ -27,8 +27,12 @@ async fn detects_wait_cycle_risk() {
         .await
         .expect("lock b");
 
-    manager.mark_operation_waiting(&op_a, Some(file_b.clone())).await;
-    manager.mark_operation_waiting(&op_b, Some(file_a.clone())).await;
+    manager
+        .mark_operation_waiting(&op_a, Some(file_b.clone()))
+        .await;
+    manager
+        .mark_operation_waiting(&op_b, Some(file_a.clone()))
+        .await;
 
     let report = manager.detect_deadlock_risk().await.expect("report");
     assert!(report.is_some());

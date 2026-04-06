@@ -15,6 +15,13 @@ Before substantial work, read:
 5. `docs/AGENT_BRIEFING.md`
 6. `docs/AGENT_CODEX.md`
 
+## Ownership And Product Framing
+
+- This project is single-owner and personal-use only.
+- Do not frame work as commercial productization, go-to-market, customer launch, or team-scale rollout.
+- Treat terms like "release", "ship", and "production" in existing docs as personal reliability/readiness gates for the owner's machine and workflows.
+- Prioritize trust, reversibility, auditability, and day-to-day personal utility over product-facing concerns.
+
 ## Current Ground Truth
 
 - The app is a Tauri 2 shell in `src-tauri/`, a SvelteKit UI in `ui/`, and shared Rust domain code in `crates/cassette-core/`.

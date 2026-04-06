@@ -1,7 +1,5 @@
 use crate::director::config::DirectorConfig;
-use crate::director::models::{
-    AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource,
-};
+use crate::director::models::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use crate::director::provider::Provider;
 use crate::director::sources::{ResolvedTrack, SourceError, SourceProvider};
 use crate::director::strategy::StrategyPlanner;
@@ -51,11 +49,7 @@ impl SourceProvider for ProviderBridge {
     ) -> Result<ResolvedTrack, SourceError> {
         let task = desired_track_to_task(track);
         let planner = StrategyPlanner;
-        let strategy = planner.plan(
-            &task,
-            &[self.provider.descriptor()],
-            &self.config,
-        );
+        let strategy = planner.plan(&task, &[self.provider.descriptor()], &self.config);
 
         let candidates = self
             .provider
@@ -71,10 +65,7 @@ impl SourceProvider for ProviderBridge {
         })?;
 
         let temp_root = self.config.temp_root.join("bridge");
-        let temp_manager = TempManager::new(
-            temp_root,
-            self.config.temp_recovery.clone(),
-        );
+        let temp_manager = TempManager::new(temp_root, self.config.temp_recovery.clone());
         let task_id = Uuid::new_v4().to_string();
         let temp_context = temp_manager
             .prepare_task(&task_id)
@@ -120,11 +111,7 @@ impl SourceProvider for ProviderBridge {
     async fn check_availability(&self, track: &DesiredTrack) -> Result<bool, SourceError> {
         let task = desired_track_to_task(track);
         let planner = StrategyPlanner;
-        let strategy = planner.plan(
-            &task,
-            &[self.provider.descriptor()],
-            &self.config,
-        );
+        let strategy = planner.plan(&task, &[self.provider.descriptor()], &self.config);
 
         match self.provider.search(&task, &strategy).await {
             Ok(candidates) => Ok(!candidates.is_empty()),

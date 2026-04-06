@@ -51,7 +51,10 @@ pub fn collect_spotify_history_files(path: &Path) -> Result<Vec<PathBuf>, String
         return Ok(vec![path.to_path_buf()]);
     }
 
-    Err("Path must be a directory containing Spotify history JSON files, or a single JSON file".into())
+    Err(
+        "Path must be a directory containing Spotify history JSON files, or a single JSON file"
+            .into(),
+    )
 }
 
 pub fn parse_spotify_entries(json_files: &[PathBuf]) -> Result<Vec<SpotifyStreamEntry>, String> {

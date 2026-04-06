@@ -1,8 +1,8 @@
 use crate::director::config::DirectorConfig;
 use crate::director::error::DirectorError;
 use crate::director::types::StagedFile;
-use crate::library::LibraryManager;
 use crate::librarian::models::DesiredTrack;
+use crate::library::LibraryManager;
 use std::path::{Path, PathBuf};
 
 pub fn compute_staging_path(staging_root: &Path, desired_track: &DesiredTrack) -> PathBuf {
@@ -76,7 +76,7 @@ pub async fn check_existing_staged_file(
         }));
     }
 
-        let row = sqlx::query_scalar::<_, String>(
+    let row = sqlx::query_scalar::<_, String>(
         r#"
         SELECT event_data
         FROM operation_events
@@ -91,11 +91,11 @@ pub async fn check_existing_staged_file(
         "#,
     )
     .bind(desired_track.id)
-        .fetch_optional(manager.db_pool())
+    .fetch_optional(manager.db_pool())
     .await
     .map_err(|e| DirectorError::DatabaseError(e.to_string()))?;
 
-        let Some(event_data) = row else {
+    let Some(event_data) = row else {
         return Ok(None);
     };
 
@@ -121,8 +121,14 @@ pub async fn check_existing_staged_file(
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string(),
-        codec: value.get("codec").and_then(|v| v.as_str()).map(ToString::to_string),
-        bitrate: value.get("bitrate").and_then(|v| v.as_u64()).map(|v| v as u32),
+        codec: value
+            .get("codec")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        bitrate: value
+            .get("bitrate")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
         source: value
             .get("source")
             .and_then(|v| v.as_str())

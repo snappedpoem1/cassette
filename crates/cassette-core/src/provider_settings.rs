@@ -91,12 +91,7 @@ impl DownloadConfig {
                 ],
                 None,
             ),
-            Self::build_status(
-                "deezer",
-                "Deezer",
-                vec![("ARL", &self.deezer_arl)],
-                None,
-            ),
+            Self::build_status("deezer", "Deezer", vec![("ARL", &self.deezer_arl)], None),
             // ── Torrent / debrid ─────────────────────────────────────────
             Self::build_status(
                 "jackett",
@@ -105,7 +100,10 @@ impl DownloadConfig {
                     ("URL", &self.jackett_url),
                     ("API key", &self.jackett_api_key),
                 ],
-                Some(vec![("Real-Debrid key (required for resolve)", &self.real_debrid_key)]),
+                Some(vec![(
+                    "Real-Debrid key (required for resolve)",
+                    &self.real_debrid_key,
+                )]),
             ),
             Self::build_status(
                 "real_debrid",

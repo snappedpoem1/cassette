@@ -4,8 +4,8 @@ use crate::director::download::staging::check_existing_staged_file;
 use crate::director::error::DirectorError;
 use crate::director::sources::SourceProvider;
 use crate::director::types::BatchDownloadOutcome;
-use crate::library::{LibraryManager, Module, OperationStatus};
 use crate::librarian::models::DesiredTrack;
+use crate::library::{LibraryManager, Module, OperationStatus};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -64,7 +64,18 @@ pub async fn batch_download(
         let op_id = operation_id.clone();
         tasks.push(tokio::spawn(async move {
             let _permit = semaphore.acquire().await.ok()?;
-            Some((track.id as u64, download_file(&manager, &track, &sources, &config, &op_id, &provider_semaphores).await))
+            Some((
+                track.id as u64,
+                download_file(
+                    &manager,
+                    &track,
+                    &sources,
+                    &config,
+                    &op_id,
+                    &provider_semaphores,
+                )
+                .await,
+            ))
         }));
     }
 
@@ -81,12 +92,12 @@ pub async fn batch_download(
         match task.await {
             Ok(Some((_track_id, Ok(_staged)))) => outcome.successfully_downloaded += 1,
             Ok(Some((track_id, Err(error)))) => {
-                outcome
-                    .failed_downloads
-                    .push((track_id, error.to_string()));
+                outcome.failed_downloads.push((track_id, error.to_string()));
                 outcome.errors.push(error.to_string());
             }
-            Ok(None) => outcome.errors.push("semaphore acquisition failed".to_string()),
+            Ok(None) => outcome
+                .errors
+                .push("semaphore acquisition failed".to_string()),
             Err(error) => outcome.errors.push(format!("Task panicked: {error}")),
         }
     }

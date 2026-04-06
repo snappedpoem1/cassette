@@ -194,7 +194,10 @@ async fn run_validate(args: ValidateArgs) -> Result<(), String> {
             empty
         }
         None => {
-            return Err("--spotify-export is required unless --reset or --organize-only is used".to_string());
+            return Err(
+                "--spotify-export is required unless --reset or --organize-only is used"
+                    .to_string(),
+            );
         }
     };
 
@@ -236,7 +239,9 @@ async fn run_lineage(args: LineageArgs) -> Result<(), String> {
     for event in events {
         println!(
             "{} | {} | {} | {} | {}",
-            event.timestamp.unwrap_or_else(|| "<no timestamp>".to_string()),
+            event
+                .timestamp
+                .unwrap_or_else(|| "<no timestamp>".to_string()),
             event.operation_id,
             event.module,
             event.phase,

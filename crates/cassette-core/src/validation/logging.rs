@@ -82,15 +82,13 @@ pub async fn verify_operation_log(
 }
 
 pub async fn verify_complete_operation_log(manager: &LibraryManager) -> Result<LogVerification> {
-    let total_operations =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operation_log")
-            .fetch_one(manager.db_pool())
-            .await? as usize;
+    let total_operations = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operation_log")
+        .fetch_one(manager.db_pool())
+        .await? as usize;
 
-    let total_events =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operation_events")
-            .fetch_one(manager.db_pool())
-            .await? as usize;
+    let total_events = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operation_events")
+        .fetch_one(manager.db_pool())
+        .await? as usize;
 
     let stalled_operations = sqlx::query_scalar::<_, i64>(
         r#"
@@ -204,7 +202,10 @@ pub async fn get_operation_summary(
     manager: &LibraryManager,
     operation_id: &str,
 ) -> Result<OperationDetails> {
-    manager.get_operation_details(operation_id).await.map_err(Into::into)
+    manager
+        .get_operation_details(operation_id)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn get_file_lineage_by_local_file_target(
@@ -329,8 +330,8 @@ pub async fn explain_audit_trace(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gatekeeper::database::ensure_schema as ensure_gatekeeper_schema;
     use crate::gatekeeper::config::GatekeeperConfig;
+    use crate::gatekeeper::database::ensure_schema as ensure_gatekeeper_schema;
     use crate::library::{LibraryManager, ManagerConfig, Module};
     use std::collections::HashSet;
     use std::path::Path;
@@ -393,7 +394,10 @@ mod tests {
 
         assert!(!trace.operation_events.is_empty());
         assert!(!trace.gatekeeper_audit.is_empty());
-        assert_eq!(trace.gatekeeper_audit[0].desired_track_id, Some(desired_track_id));
+        assert_eq!(
+            trace.gatekeeper_audit[0].desired_track_id,
+            Some(desired_track_id)
+        );
 
         let operation_ids: HashSet<&str> = trace
             .operation_events
@@ -460,7 +464,10 @@ mod tests {
             .await
             .expect("lineage for wanted path");
 
-        assert!(!lineage.is_empty(), "expected at least one matching lineage row");
+        assert!(
+            !lineage.is_empty(),
+            "expected at least one matching lineage row"
+        );
         let wanted_escaped = wanted.replace('\\', "\\\\");
         assert!(
             lineage.iter().all(|row| {

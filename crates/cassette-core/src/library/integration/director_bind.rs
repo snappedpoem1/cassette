@@ -2,10 +2,10 @@ use crate::director::config::DirectorConfig;
 use crate::director::download::batch_download;
 use crate::director::sources::SourceProvider;
 use crate::director::types::BatchDownloadOutcome;
+use crate::librarian::models::DesiredTrack;
 use crate::library::error::{ManagerError, Result};
 use crate::library::manager::LibraryManager;
 use crate::library::state::{Module, OperationStatus};
-use crate::librarian::models::DesiredTrack;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -22,7 +22,9 @@ impl LibraryManager {
         sources: &[Arc<dyn SourceProvider>],
         config: &DirectorConfig,
     ) -> Result<DirectorOutcome> {
-        let op_id = self.start_operation(Module::Director, "batch_download").await?;
+        let op_id = self
+            .start_operation(Module::Director, "batch_download")
+            .await?;
 
         let result: std::result::Result<BatchDownloadOutcome, crate::director::DirectorError> =
             batch_download(self, desired_tracks, sources, config).await;

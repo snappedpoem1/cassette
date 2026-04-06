@@ -6,7 +6,10 @@ use crate::director::resilience::range_request::with_optional_range;
 fn retryable_error_classification() {
     assert!(is_retryable(&DirectorError::NetworkError("x".to_string())));
     assert!(is_retryable(&DirectorError::HttpError(503)));
-    assert!(!is_retryable(&DirectorError::FileTooLarge { size: 100, max: 10 }));
+    assert!(!is_retryable(&DirectorError::FileTooLarge {
+        size: 100,
+        max: 10
+    }));
 }
 
 #[test]

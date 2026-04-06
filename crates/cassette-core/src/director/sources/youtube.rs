@@ -15,13 +15,21 @@ impl SourceProvider for YoutubeSource {
         extract_youtube_url(track).is_some()
     }
 
-    async fn resolve_download_url(&self, track: &DesiredTrack) -> Result<ResolvedTrack, SourceError> {
-        let url = extract_youtube_url(track)
-            .ok_or_else(|| SourceError::NotAvailable("No YouTube URL in desired payload".to_string()))?;
+    async fn resolve_download_url(
+        &self,
+        track: &DesiredTrack,
+    ) -> Result<ResolvedTrack, SourceError> {
+        let url = extract_youtube_url(track).ok_or_else(|| {
+            SourceError::NotAvailable("No YouTube URL in desired payload".to_string())
+        })?;
 
         Ok(ResolvedTrack {
             download_url: url.clone(),
-            suggested_filename: format!("{} - {}.m4a", sanitize(&track.artist_name), sanitize(&track.track_title)),
+            suggested_filename: format!(
+                "{} - {}.m4a",
+                sanitize(&track.artist_name),
+                sanitize(&track.track_title)
+            ),
             expected_codec: Some("m4a".to_string()),
             expected_bitrate: Some(128),
             expected_duration_ms: track.duration_ms.map(|d| d as u64),
@@ -51,7 +59,13 @@ fn extract_youtube_url(track: &DesiredTrack) -> Option<String> {
 fn sanitize(value: &str) -> String {
     value
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == ' ' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim()
         .to_string()

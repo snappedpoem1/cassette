@@ -4,7 +4,7 @@ use crate::gatekeeper::database::enrichment_queue::enqueue_enrichment;
 use crate::gatekeeper::database::local_files::upsert_local_file;
 use crate::gatekeeper::error::Result;
 use crate::gatekeeper::mod_types::{
-    AdmissionDecision, AuditLogEntry, AudioTags, IngressOutcome, NextAction, QuarantineReason,
+    AdmissionDecision, AudioTags, AuditLogEntry, IngressOutcome, NextAction, QuarantineReason,
 };
 use crate::gatekeeper::placement::admission::decide_and_place;
 use crate::gatekeeper::placement::quarantine::move_to_quarantine;
@@ -45,7 +45,8 @@ pub async fn ingest_single_file(
     let tags = read_audio_tags(source_path);
     let junk_flags = apply_junk_filters(&probe, &tags, &config.policy_spine)?;
 
-    let (decision, final_path, next_action) = if config.reject_junk_files && !junk_flags.is_empty() {
+    let (decision, final_path, next_action) = if config.reject_junk_files && !junk_flags.is_empty()
+    {
         let qpath = move_to_quarantine(
             source_path,
             &config.quarantine_root,
@@ -65,7 +66,9 @@ pub async fn ingest_single_file(
                 reason: "Junk policy triggered".to_string(),
             },
         )
-    } else if config.require_identity_match && identity.acoustid_confidence < config.fingerprint_confidence_floor {
+    } else if config.require_identity_match
+        && identity.acoustid_confidence < config.fingerprint_confidence_floor
+    {
         let qpath = move_to_quarantine(
             source_path,
             &config.quarantine_root,
@@ -138,7 +141,14 @@ pub async fn ingest_single_file(
 
     let mut action = next_action;
     if let AdmissionDecision::Admitted { .. } = decision {
-        let local_file_id = upsert_local_file(db_pool, &final_path, &identity, &quality, desired_track.map(|d| d.id)).await?;
+        let local_file_id = upsert_local_file(
+            db_pool,
+            &final_path,
+            &identity,
+            &quality,
+            desired_track.map(|d| d.id),
+        )
+        .await?;
         if config.enrichment_queue_enabled {
             enqueue_enrichment(
                 db_pool,

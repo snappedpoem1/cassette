@@ -17,7 +17,9 @@ fn normalize_compatibility_punctuation(input: &str) -> String {
 
 pub fn normalize_text(input: &str) -> String {
     let mut out = normalize_compatibility_punctuation(input).to_lowercase();
-    for ch in ['.', ',', '!', '?', '-', '_', ':', ';', '\'', '"', '(', ')', '[', ']', '{', '}', '/'] {
+    for ch in [
+        '.', ',', '!', '?', '-', '_', ':', ';', '\'', '"', '(', ')', '[', ']', '{', '}', '/',
+    ] {
         out = out.replace(ch, " ");
     }
     out = out.replace("featuring", "feat");

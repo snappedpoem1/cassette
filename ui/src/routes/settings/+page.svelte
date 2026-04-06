@@ -17,10 +17,12 @@
     persistEffectiveDownloadConfig,
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
-  import type { DownloadConfig } from '$lib/api/tauri';
+  import type { DownloadConfig, PolicyProfile, SlskdRuntimeStatus } from '$lib/api/tauri';
 
   onMount(async () => {
     await loadDownloadConfig();
+    await loadSlskdRuntimeStatus();
+    await loadPolicyProfile();
   });
 
   let cfg: DownloadConfig = {
@@ -59,9 +61,33 @@
   let persistingEffective = false;
   let lastfmSyncing = false;
   let lastfmSyncMessage: string | null = null;
+  let slskdRuntime: SlskdRuntimeStatus | null = null;
+  let slskdRuntimeBusy = false;
+  let policyProfile: PolicyProfile = 'balanced_auto';
+  let policyProfileSaving = false;
+  let policyProfileMessage: string | null = null;
+
+  async function loadSlskdRuntimeStatus() {
+    try {
+      slskdRuntime = await api.getSlskdRuntimeStatus();
+    } catch (error) {
+      slskdRuntime = {
+        running: false,
+        ready: false,
+        spawned_by_app: false,
+        binary_found: false,
+        binary_path: null,
+        app_dir: null,
+        downloads_dir: null,
+        url: cfg.slskd_url ?? 'http://localhost:5030',
+        message: error instanceof Error ? error.message : 'slskd status unavailable',
+      };
+    }
+  }
 
   async function handleSave() {
     await saveDownloadConfig(cfg);
+    await loadSlskdRuntimeStatus();
     saved = true;
     setTimeout(() => {
       saved = false;
@@ -72,6 +98,7 @@
     persistingEffective = true;
     try {
       await persistEffectiveDownloadConfig();
+      await loadSlskdRuntimeStatus();
       saved = true;
       setTimeout(() => {
         saved = false;
@@ -104,6 +131,45 @@
 
   async function handleScan() {
     await scanLibrary();
+  }
+
+  async function restartSlskdRuntime() {
+    slskdRuntimeBusy = true;
+    try {
+      slskdRuntime = await api.restartSlskdRuntime();
+    } finally {
+      slskdRuntimeBusy = false;
+    }
+  }
+
+  async function stopSlskdRuntime() {
+    slskdRuntimeBusy = true;
+    try {
+      slskdRuntime = await api.stopSlskdRuntime();
+    } finally {
+      slskdRuntimeBusy = false;
+    }
+  }
+
+  async function loadPolicyProfile() {
+    try {
+      policyProfile = await api.getPolicyProfile();
+      policyProfileMessage = null;
+    } catch (error) {
+      policyProfileMessage = error instanceof Error ? error.message : 'Policy profile unavailable';
+    }
+  }
+
+  async function applyPolicyProfile() {
+    policyProfileSaving = true;
+    try {
+      policyProfile = await api.setPolicyProfile(policyProfile);
+      policyProfileMessage = 'Policy profile applied to runtime director behavior.';
+    } catch (error) {
+      policyProfileMessage = error instanceof Error ? error.message : 'Failed to apply policy profile';
+    } finally {
+      policyProfileSaving = false;
+    }
   }
 </script>
 
@@ -204,6 +270,40 @@
 
         <div class="settings-section">
           <div class="section-title">Soulseek</div>
+          {#if slskdRuntime}
+            <div class="provider-runtime-card" class:runtime-ready={slskdRuntime.ready}>
+              <div class="runtime-row">
+                <div class="runtime-title">Bundled slskd runtime</div>
+                <div class="runtime-actions">
+                  <button class="action-btn" on:click={loadSlskdRuntimeStatus} disabled={slskdRuntimeBusy}>Refresh</button>
+                  <button class="action-btn" on:click={restartSlskdRuntime} disabled={slskdRuntimeBusy}>
+                    {slskdRuntimeBusy ? 'Working...' : 'Restart'}
+                  </button>
+                  {#if slskdRuntime.spawned_by_app}
+                    <button class="action-btn" on:click={stopSlskdRuntime} disabled={slskdRuntimeBusy}>Stop</button>
+                  {/if}
+                </div>
+              </div>
+              <div class="runtime-summary">
+                {#if slskdRuntime.ready}
+                  Cassette sees slskd at {slskdRuntime.url}
+                  {#if slskdRuntime.spawned_by_app} and started it itself.{:else} from an existing process.{/if}
+                {:else if slskdRuntime.running}
+                  slskd is starting, but the endpoint is not reachable yet.
+                {:else}
+                  slskd is not reachable right now.
+                {/if}
+              </div>
+              {#if slskdRuntime.message}
+                <div class="runtime-note">{slskdRuntime.message}</div>
+              {/if}
+              <div class="runtime-meta">
+                <span>binary: {slskdRuntime.binary_path ?? 'not found'}</span>
+                <span>app dir: {slskdRuntime.app_dir ?? 'n/a'}</span>
+                <span>downloads: {slskdRuntime.downloads_dir ?? 'n/a'}</span>
+              </div>
+            </div>
+          {/if}
           <div class="field-group">
             <div class="field"><label>URL<input bind:value={cfg.slskd_url} placeholder="http://localhost:5030" /></label></div>
             <div class="field"><label>Username<input bind:value={cfg.slskd_user} placeholder="slskd user" /></label></div>
@@ -289,6 +389,31 @@
       <!-- TOOLS -->
       {#if activeSection === 'tools'}
         <div class="settings-section">
+          <div class="section-title">Policy Profile</div>
+          <div class="section-sub">Choose deterministic runtime behavior for playback pressure, queue throughput, and retry cadence.</div>
+          <div class="field-group">
+            <div class="field field-full">
+              <label>
+                Active Profile
+                <select bind:value={policyProfile} class="select-field">
+                  <option value="playback_first">Playback-First</option>
+                  <option value="balanced_auto">Balanced Auto</option>
+                  <option value="aggressive_overnight">Aggressive Overnight</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="sync-row">
+            <button class="action-btn" on:click={applyPolicyProfile} disabled={policyProfileSaving}>
+              {policyProfileSaving ? 'Applying…' : 'Apply Profile'}
+            </button>
+            {#if policyProfileMessage}
+              <span class="sync-msg">{policyProfileMessage}</span>
+            {/if}
+          </div>
+        </div>
+
+        <div class="settings-section">
           <div class="section-title">Tools</div>
           <div class="section-sub">Paths to local tool binaries. Leave blank to use system PATH or built-in defaults.</div>
           <div class="field-group">
@@ -351,6 +476,16 @@
   font-size: 0.8rem; color: var(--text-primary); font-family: inherit;
   transition: border-color 0.15s;
 }
+.field .select-field {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  font-family: inherit;
+}
+.field .select-field:focus { outline: none; border-color: var(--primary-dim); }
 .field input::placeholder { color: var(--text-muted); }
 .field input:focus { outline: none; border-color: var(--primary-dim); }
 
@@ -407,6 +542,51 @@
 .status-ok { color: var(--status-ok); }
 .status-missing { color: var(--text-muted); }
 .provider-missing-hint { font-size: 0.65rem; color: var(--text-muted); margin-top: 2px; }
+
+.provider-runtime-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.provider-runtime-card.runtime-ready {
+  border-color: rgba(94, 196, 160, 0.35);
+}
+.runtime-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.runtime-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.runtime-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.runtime-summary {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.runtime-note {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.runtime-meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-family: monospace;
+}
 
 /* save row */
 .save-row { display: flex; gap: 8px; align-items: center; padding-top: 4px; }

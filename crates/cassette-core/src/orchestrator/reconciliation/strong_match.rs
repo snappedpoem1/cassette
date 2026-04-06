@@ -49,12 +49,15 @@ pub async fn match_by_strong_metadata(
         }
 
         if let Some(expected_album) = album.as_ref() {
-            if !expected_album.is_empty() && normalize_name(&candidate.album_title) != *expected_album {
+            if !expected_album.is_empty()
+                && normalize_name(&candidate.album_title) != *expected_album
+            {
                 continue;
             }
         }
 
-        let confidence = compute_metadata_confidence(desired, &candidate, config.duration_tolerance_ms);
+        let confidence =
+            compute_metadata_confidence(desired, &candidate, config.duration_tolerance_ms);
         if confidence >= config.strong_match_floor {
             candidate.matched_via = MatchMethod::StrongMetadata;
             if best.as_ref().map(|(_, c)| *c).unwrap_or(0.0) < confidence {

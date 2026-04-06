@@ -55,7 +55,11 @@ pub fn parse_lastfm_artist_info(json: &serde_json::Value) -> Option<LastfmArtist
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                .filter_map(|t| {
+                    t.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -81,14 +85,12 @@ pub fn parse_lastfm_album_info(json: &serde_json::Value) -> Option<LastfmAlbumIn
         .get("image")
         .and_then(|v| v.as_array())
         .and_then(|arr| {
-            arr.iter()
-                .rev()
-                .find_map(|img| {
-                    img.get("#text")
-                        .and_then(|t| t.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                })
+            arr.iter().rev().find_map(|img| {
+                img.get("#text")
+                    .and_then(|t| t.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            })
         });
 
     Some(LastfmAlbumInfo { summary, image_url })

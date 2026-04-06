@@ -131,9 +131,7 @@ impl LastFmClient {
         }
 
         let json: Value = response.json().await.ok()?;
-        let duration_value = json
-            .get("track")
-            .and_then(|track| track.get("duration"))?;
+        let duration_value = json.get("track").and_then(|track| track.get("duration"))?;
 
         let duration_ms = if let Some(value) = duration_value.as_i64() {
             value
@@ -229,7 +227,11 @@ impl LastFmClient {
 
 #[async_trait::async_trait]
 impl super::MetadataEnricher for LastFmClient {
-    async fn enrich(&self, track: &mut Track, context: Option<&super::EnrichmentContext>) -> Result<()> {
+    async fn enrich(
+        &self,
+        track: &mut Track,
+        context: Option<&super::EnrichmentContext>,
+    ) -> Result<()> {
         if track.duration_ms.is_some() || !self.is_configured() {
             return Ok(());
         }

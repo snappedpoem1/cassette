@@ -51,11 +51,7 @@ impl Provider for UsenetProvider {
         let client = reqwest::Client::new();
         let response = client
             .get("https://api.nzbgeek.info/api")
-            .query(&[
-                ("t", "caps"),
-                ("o", "json"),
-                ("apikey", api_key),
-            ])
+            .query(&[("t", "caps"), ("o", "json"), ("apikey", api_key)])
             .send()
             .await
             .map_err(|error| ProviderError::Network {
@@ -94,7 +90,15 @@ impl Provider for UsenetProvider {
             .query(&[
                 ("t", "search"),
                 ("cat", "3000"),
-                ("q", build_query(&task.target.artist, &task.target.title, task.target.album.as_deref()).as_str()),
+                (
+                    "q",
+                    build_query(
+                        &task.target.artist,
+                        &task.target.title,
+                        task.target.album.as_deref(),
+                    )
+                    .as_str(),
+                ),
                 ("apikey", api_key),
                 ("o", "json"),
                 ("limit", "5"),
@@ -124,7 +128,10 @@ impl Provider for UsenetProvider {
         let mut scored = items
             .into_iter()
             .map(|item| {
-                let title = item.get("title").and_then(Value::as_str).unwrap_or_default();
+                let title = item
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let normalized = normalize_text(title);
                 let mut score = 0_i64;
                 score += (count_matching_terms(&normalized, &artist_terms) as i64) * 20;
@@ -194,9 +201,11 @@ impl Provider for UsenetProvider {
                 message: error.to_string(),
             })?;
 
-        let nzb_path = temp_context
-            .active_dir
-            .join(format!("{}-{}.nzb", sanitize(&task.target.artist), sanitize(&task.target.title)));
+        let nzb_path = temp_context.active_dir.join(format!(
+            "{}-{}.nzb",
+            sanitize(&task.target.artist),
+            sanitize(&task.target.title)
+        ));
         tokio::fs::write(&nzb_path, &nzb_bytes)
             .await
             .map_err(|error| ProviderError::Other {
@@ -252,19 +261,25 @@ impl Provider for UsenetProvider {
             ) {
                 match sab_completion_paths(&client, sabnzbd_url, sabnzbd_api_key, job_id).await {
                     Ok(extra_roots) => scan_roots.extend(extra_roots),
-                    Err(error) => warn!(provider = "usenet", %job_id, %error, "SAB queue/history poll failed"),
+                    Err(error) => {
+                        warn!(provider = "usenet", %job_id, %error, "SAB queue/history poll failed")
+                    }
                 }
             }
 
-            if let Some(found) = find_matching_audio_file(&scan_roots, &task.target.artist, &task.target.title) {
+            if let Some(found) =
+                find_matching_audio_file(&scan_roots, &task.target.artist, &task.target.title)
+            {
                 let extension = found
                     .extension()
                     .and_then(|value| value.to_str())
                     .unwrap_or("bin")
                     .to_string();
-                let destination = temp_context
-                    .active_dir
-                    .join(format!("usenet-{}.{}", sanitize(&task.target.title), extension));
+                let destination = temp_context.active_dir.join(format!(
+                    "usenet-{}.{}",
+                    sanitize(&task.target.title),
+                    extension
+                ));
                 tokio::fs::copy(&found, &destination)
                     .await
                     .map_err(|error| ProviderError::Other {
@@ -288,7 +303,8 @@ impl Provider for UsenetProvider {
 
         Err(ProviderError::TemporaryOutage {
             provider_id: "usenet".to_string(),
-            message: "NZB submitted but no finalized audio file appeared in watched roots".to_string(),
+            message: "NZB submitted but no finalized audio file appeared in watched roots"
+                .to_string(),
         })
     }
 }
@@ -297,7 +313,11 @@ fn extract_sab_job_id(body: &Value) -> Option<String> {
     body.pointer("/nzo_ids/0")
         .and_then(Value::as_str)
         .map(ToString::to_string)
-        .or_else(|| body.get("nzo_id").and_then(Value::as_str).map(ToString::to_string))
+        .or_else(|| {
+            body.get("nzo_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
 }
 
 async fn sab_completion_paths(
@@ -329,7 +349,10 @@ async fn sab_completion_paths(
 
     if let Some(slot) = find_sab_slot(&queue_body, nzo_id) {
         let status = sab_slot_status(slot).unwrap_or_default();
-        if matches!(status.as_str(), "downloading" | "queued" | "fetching" | "grabbing") {
+        if matches!(
+            status.as_str(),
+            "downloading" | "queued" | "fetching" | "grabbing"
+        ) {
             return Ok(collect_sab_slot_paths(slot));
         }
     }

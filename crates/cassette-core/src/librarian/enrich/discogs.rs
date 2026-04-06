@@ -98,7 +98,11 @@ impl DiscogsClient {
 
 #[async_trait::async_trait]
 impl super::MetadataEnricher for DiscogsClient {
-    async fn enrich(&self, track: &mut Track, context: Option<&super::EnrichmentContext>) -> Result<()> {
+    async fn enrich(
+        &self,
+        track: &mut Track,
+        context: Option<&super::EnrichmentContext>,
+    ) -> Result<()> {
         if track.discogs_id.is_some() || !self.is_configured() {
             return Ok(());
         }
@@ -114,7 +118,10 @@ impl super::MetadataEnricher for DiscogsClient {
         };
 
         let client = reqwest::Client::new();
-        if let Some(release) = self.fetch_release_context(&client, artist_name, album_title).await {
+        if let Some(release) = self
+            .fetch_release_context(&client, artist_name, album_title)
+            .await
+        {
             track.discogs_id = Some(release.release_id);
         }
 

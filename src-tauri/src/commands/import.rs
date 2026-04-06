@@ -116,7 +116,9 @@ pub struct SpotifyImportStatus {
 }
 
 #[tauri::command]
-pub fn get_spotify_import_status(state: State<'_, AppState>) -> Result<SpotifyImportStatus, String> {
+pub fn get_spotify_import_status(
+    state: State<'_, AppState>,
+) -> Result<SpotifyImportStatus, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let album_rows = db
         .get_spotify_album_history_count()

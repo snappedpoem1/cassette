@@ -52,7 +52,10 @@ async fn main() -> Result<(), String> {
 
         while let Some(progress) = rx.recv().await {
             if progress.done {
-                println!("Scan complete: {}/{} files", progress.scanned, progress.total);
+                println!(
+                    "Scan complete: {}/{} files",
+                    progress.scanned, progress.total
+                );
                 if !progress.current_file.is_empty() {
                     println!("{}", progress.current_file);
                 }

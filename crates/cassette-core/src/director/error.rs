@@ -58,17 +58,35 @@ pub enum ProviderError {
     #[error("provider {provider_id} not found")]
     NotFound { provider_id: String },
     #[error("provider {provider_id} network error: {message}")]
-    Network { provider_id: String, message: String },
+    Network {
+        provider_id: String,
+        message: String,
+    },
     #[error("provider {provider_id} unsupported content: {message}")]
-    UnsupportedContent { provider_id: String, message: String },
+    UnsupportedContent {
+        provider_id: String,
+        message: String,
+    },
     #[error("provider {provider_id} metadata mismatch: {message}")]
-    MetadataMismatch { provider_id: String, message: String },
+    MetadataMismatch {
+        provider_id: String,
+        message: String,
+    },
     #[error("provider {provider_id} invalid audio: {message}")]
-    InvalidAudio { provider_id: String, message: String },
+    InvalidAudio {
+        provider_id: String,
+        message: String,
+    },
     #[error("provider {provider_id} temporary outage: {message}")]
-    TemporaryOutage { provider_id: String, message: String },
+    TemporaryOutage {
+        provider_id: String,
+        message: String,
+    },
     #[error("provider {provider_id} other failure: {message}")]
-    Other { provider_id: String, message: String },
+    Other {
+        provider_id: String,
+        message: String,
+    },
     #[error("provider {provider_id} busy (semaphore full)")]
     ProviderBusy { provider_id: String },
 }

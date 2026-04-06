@@ -1,11 +1,11 @@
 use crate::gatekeeper::error::{GatekeeperError, Result};
 use crate::gatekeeper::mod_types::PayloadProbe;
+use std::path::Path;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::path::Path;
 
 pub async fn probe_payload(path: &Path) -> Result<PayloadProbe> {
     let p = path.to_path_buf();
@@ -31,7 +31,12 @@ fn probe_payload_blocking(path: &Path) -> Result<PayloadProbe> {
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| GatekeeperError::DecodeFailed(e.to_string()))?;
 
     let mut format = probed.format;
@@ -43,15 +48,16 @@ fn probe_payload_blocking(path: &Path) -> Result<PayloadProbe> {
         .clone();
 
     let codec = format!("{:?}", track.codec_params.codec);
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .ok_or_else(|| GatekeeperError::PayloadValidationFailed("sample rate missing".to_string()))?;
+    let sample_rate = track.codec_params.sample_rate.ok_or_else(|| {
+        GatekeeperError::PayloadValidationFailed("sample rate missing".to_string())
+    })?;
     let channels = track
         .codec_params
         .channels
         .map(|c| c.count() as u8)
-        .ok_or_else(|| GatekeeperError::PayloadValidationFailed("channel count missing".to_string()))?;
+        .ok_or_else(|| {
+            GatekeeperError::PayloadValidationFailed("channel count missing".to_string())
+        })?;
 
     let duration_ms = match (track.codec_params.n_frames, track.codec_params.sample_rate) {
         (Some(frames), Some(rate)) if rate > 0 => ((frames as f64 / rate as f64) * 1000.0) as u64,
@@ -82,7 +88,11 @@ fn probe_payload_blocking(path: &Path) -> Result<PayloadProbe> {
         0
     };
 
-    let bit_depth = track.codec_params.bits_per_sample.unwrap_or(16).clamp(1, 32) as u8;
+    let bit_depth = track
+        .codec_params
+        .bits_per_sample
+        .unwrap_or(16)
+        .clamp(1, 32) as u8;
 
     if duration_ms > 0 {
         let bytes_per_sec = file_size as f64 / (duration_ms as f64 / 1000.0);

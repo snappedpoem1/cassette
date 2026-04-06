@@ -37,7 +37,9 @@ use tracing::{info, warn};
 
 fn app_db_path() -> PathBuf {
     let app_data = std::env::var("APPDATA").unwrap_or_default();
-    PathBuf::from(app_data).join("dev.cassette.app").join("cassette.db")
+    PathBuf::from(app_data)
+        .join("dev.cassette.app")
+        .join("cassette.db")
 }
 
 fn read_setting(db: &Db, key: &str) -> Option<String> {
@@ -56,14 +58,20 @@ fn read_setting(db: &Db, key: &str) -> Option<String> {
 
 fn is_audio(path: &std::path::Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
         Some("flac" | "mp3" | "m4a" | "aac" | "ogg" | "opus" | "wav" | "aiff" | "alac")
     )
 }
 
 fn is_archive(path: &std::path::Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
         Some("rar" | "zip" | "7z" | "tar" | "gz")
     )
 }
@@ -79,12 +87,21 @@ fn extract_archive(archive: &std::path::Path, dest_dir: &std::path::Path) -> Vec
         return Vec::new();
     }
     let status = std::process::Command::new(&sevenz)
-        .args(["e", "-y", &archive.to_string_lossy(), &format!("-o{}", dest_dir.to_string_lossy()), "*"])
+        .args([
+            "e",
+            "-y",
+            &archive.to_string_lossy(),
+            &format!("-o{}", dest_dir.to_string_lossy()),
+            "*",
+        ])
         .output();
     match status {
         Ok(out) if out.status.success() => {}
         Ok(out) => {
-            warn!("7z extraction failed: {}", String::from_utf8_lossy(&out.stderr));
+            warn!(
+                "7z extraction failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
             return Vec::new();
         }
         Err(e) => {
@@ -127,7 +144,15 @@ fn is_single_not_album(album: &str) -> bool {
         return true;
     }
     // Explicit single/remix labels
-    let single_patterns = [" - single", "[single]", "(single)", " remix)", " edit)", "- ep]", "[ep]"];
+    let single_patterns = [
+        " - single",
+        "[single]",
+        "(single)",
+        " remix)",
+        " edit)",
+        "- ep]",
+        "[ep]",
+    ];
     if single_patterns.iter().any(|p| t.contains(p)) {
         return true;
     }
@@ -142,11 +167,11 @@ fn is_live_or_bootleg(album: &str) -> bool {
     // Check for 4-digit year followed by separator and 2-digit month
     let chars: Vec<char> = t.chars().collect();
     for i in 0..chars.len().saturating_sub(7) {
-        if chars[i..i+4].iter().all(|c| c.is_ascii_digit()) {
-            let sep = chars[i+4];
+        if chars[i..i + 4].iter().all(|c| c.is_ascii_digit()) {
+            let sep = chars[i + 4];
             if (sep == '-' || sep == '\u{2010}' || sep == '/')
                 && i + 7 < chars.len()
-                && chars[i+5..i+7].iter().all(|c| c.is_ascii_digit())
+                && chars[i + 5..i + 7].iter().all(|c| c.is_ascii_digit())
             {
                 return true;
             }
@@ -155,15 +180,30 @@ fn is_live_or_bootleg(album: &str) -> bool {
 
     // Explicit live/bootleg keywords
     let live_patterns = [
-        "live at ", "live from ", "live in ", "live on ",
-        ": live", "(live)", "[live]", " - live",
-        "concert at ", "concert in ",
-        "bootleg", "unofficial",
-        "black session", "session #", "fm broadcast",
-        "radio session", "bbc session", "kcrw", "kexp",
+        "live at ",
+        "live from ",
+        "live in ",
+        "live on ",
+        ": live",
+        "(live)",
+        "[live]",
+        " - live",
+        "concert at ",
+        "concert in ",
+        "bootleg",
+        "unofficial",
+        "black session",
+        "session #",
+        "fm broadcast",
+        "radio session",
+        "bbc session",
+        "kcrw",
+        "kexp",
         "morning becomes eclectic",
-        ": venue", "unknown venue",
-        "pre‐fm", "pre-fm",
+        ": venue",
+        "unknown venue",
+        "pre‐fm",
+        "pre-fm",
     ];
     live_patterns.iter().any(|p| t.contains(p))
 }
@@ -181,11 +221,23 @@ fn strip_feat(s: &str) -> String {
     }
     // Also strip trailing edition/remaster suffixes for better search hits
     let trailing = [
-        " - deluxe", " - remastered", " - limited", " - expanded",
-        " (deluxe edition)", " (deluxe)", " (remastered)", " [deluxe]",
-        " (20th anniversary", " limited tour edition", " tour edition",
-        " special edition", " anniversary edition", " collector's edition",
-        " (anniversary", " - super deluxe", " super deluxe",
+        " - deluxe",
+        " - remastered",
+        " - limited",
+        " - expanded",
+        " (deluxe edition)",
+        " (deluxe)",
+        " (remastered)",
+        " [deluxe]",
+        " (20th anniversary",
+        " limited tour edition",
+        " tour edition",
+        " special edition",
+        " anniversary edition",
+        " collector's edition",
+        " (anniversary",
+        " - super deluxe",
+        " super deluxe",
         // Year-remastered pattern like "- 2014 Remastered" is handled below
     ];
     let lower = result.to_ascii_lowercase();
@@ -271,21 +323,31 @@ impl RdClient {
                 return Ok(existing_id);
             }
         }
-        let resp: Value = self.client
+        let resp: Value = self
+            .client
             .post("https://api.real-debrid.com/rest/1.0/torrents/addMagnet")
             .form(&[("magnet", magnet)])
-            .send().await.map_err(|e| e.to_string())?
-            .json().await.map_err(|e| e.to_string())?;
-        resp.get("id").and_then(Value::as_str)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        resp.get("id")
+            .and_then(Value::as_str)
             .map(|s| s.to_string())
             .ok_or_else(|| format!("addMagnet: no id in response: {resp}"))
     }
 
     async fn select_all_files(&self, torrent_id: &str) -> Result<(), String> {
         self.client
-            .post(format!("https://api.real-debrid.com/rest/1.0/torrents/selectFiles/{torrent_id}"))
+            .post(format!(
+                "https://api.real-debrid.com/rest/1.0/torrents/selectFiles/{torrent_id}"
+            ))
             .form(&[("files", "all")])
-            .send().await.map_err(|e| e.to_string())?;
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -301,10 +363,19 @@ impl RdClient {
                 for _retry in 0..5 {
                     match self.client.get(&url).send().await {
                         Ok(resp) => match resp.json().await {
-                            Ok(v) => { got = Some(v); break; }
-                            Err(e) => { last_err = e.to_string(); sleep(Duration::from_secs(3)).await; }
+                            Ok(v) => {
+                                got = Some(v);
+                                break;
+                            }
+                            Err(e) => {
+                                last_err = e.to_string();
+                                sleep(Duration::from_secs(3)).await;
+                            }
+                        },
+                        Err(e) => {
+                            last_err = e.to_string();
+                            sleep(Duration::from_secs(3)).await;
                         }
-                        Err(e) => { last_err = e.to_string(); sleep(Duration::from_secs(3)).await; }
                     }
                 }
                 match got {
@@ -316,8 +387,14 @@ impl RdClient {
             let status = info.get("status").and_then(Value::as_str).unwrap_or("");
             match status {
                 "downloaded" => {
-                    let links = info.get("links").and_then(Value::as_array)
-                        .map(|arr| arr.iter().filter_map(|l| l.as_str().map(|s| s.to_string())).collect())
+                    let links = info
+                        .get("links")
+                        .and_then(Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|l| l.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     return Ok(links);
                 }
@@ -336,12 +413,18 @@ impl RdClient {
     }
 
     async fn unrestrict(&self, link: &str) -> Result<String, String> {
-        let resp: Value = self.client
+        let resp: Value = self
+            .client
             .post("https://api.real-debrid.com/rest/1.0/unrestrict/link")
             .form(&[("link", link)])
-            .send().await.map_err(|e| e.to_string())?
-            .json().await.map_err(|e| e.to_string())?;
-        resp.get("download").and_then(Value::as_str)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        resp.get("download")
+            .and_then(Value::as_str)
             .map(|s| s.to_string())
             .ok_or_else(|| format!("unrestrict: no download url: {resp}"))
     }
@@ -350,7 +433,12 @@ impl RdClient {
 // ── Jackett search ───────────────────────────────────────────────────────────
 
 /// Search Jackett via the Torznab XML endpoint (works with API key, no login session needed).
-async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &str) -> Vec<TorrentResult> {
+async fn search_jackett(
+    artist: &str,
+    album: &str,
+    jackett_url: &str,
+    api_key: &str,
+) -> Vec<TorrentResult> {
     let query = format!("{artist} {album} FLAC");
     let encoded = urlencoding::encode(&query);
     // Torznab: cat=3000 = Audio
@@ -365,10 +453,19 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
     let text = match client.get(&url).send().await {
         Ok(r) if r.status().is_success() => match r.text().await {
             Ok(t) => t,
-            Err(e) => { warn!("Jackett body read failed: {e}"); return Vec::new(); }
+            Err(e) => {
+                warn!("Jackett body read failed: {e}");
+                return Vec::new();
+            }
         },
-        Ok(r) => { warn!("Jackett returned {}", r.status()); return Vec::new(); }
-        Err(e) => { warn!("Jackett request failed: {e}"); return Vec::new(); }
+        Ok(r) => {
+            warn!("Jackett returned {}", r.status());
+            return Vec::new();
+        }
+        Err(e) => {
+            warn!("Jackett request failed: {e}");
+            return Vec::new();
+        }
     };
 
     // Parse Torznab RSS XML — extract <item> elements
@@ -388,7 +485,7 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
     let extract_attr = |block: &str, tag: &str, attr: &str| -> Option<String> {
         let open = format!("<{tag}");
         let start = block.find(&open)?;
-        let tag_end = block[start..].find('>')?  + start;
+        let tag_end = block[start..].find('>')? + start;
         let tag_str = &block[start..tag_end];
         let attr_pat = format!("{attr}=\"");
         let a_start = tag_str.find(&attr_pat)? + attr_pat.len();
@@ -403,7 +500,11 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
         let item = &item_block[..end];
 
         let title = match extract(item, "title") {
-            Some(t) => t.replace("<![CDATA[", "").replace("]]>", "").trim().to_string(),
+            Some(t) => t
+                .replace("<![CDATA[", "")
+                .replace("]]>", "")
+                .trim()
+                .to_string(),
             None => continue,
         };
 
@@ -412,7 +513,9 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
             let mut s = 0u32;
             for chunk in item.split("<torznab:attr") {
                 if chunk.contains("\"seeders\"") {
-                    if let Some(v) = extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value") {
+                    if let Some(v) =
+                        extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value")
+                    {
                         s = v.parse().unwrap_or(0);
                     }
                     break;
@@ -420,9 +523,13 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
             }
             s
         };
-        if seeders < 2 { continue; }
+        if seeders < 2 {
+            continue;
+        }
 
-        let size: u64 = extract(item, "size").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let size: u64 = extract(item, "size")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
 
         // Magnet from torznab:attr name="magneturl" or link
         let magnet = {
@@ -442,7 +549,8 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
                 let mut hash = None;
                 for chunk in item.split("<torznab:attr") {
                     if chunk.contains("\"infohash\"") {
-                        hash = extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value");
+                        hash =
+                            extract_attr(&format!("<torznab:attr{chunk}"), "torznab:attr", "value");
                         break;
                     }
                 }
@@ -454,22 +562,45 @@ async fn search_jackett(artist: &str, album: &str, jackett_url: &str, api_key: &
                     ));
                 }
             }
-            match m { Some(v) => v, None => continue }
+            match m {
+                Some(v) => v,
+                None => continue,
+            }
         };
 
         let t = normalize_text(&title);
         let has_artist = t.contains(&artist_n);
-        let has_album = album_words.iter().all(|w| t.split_whitespace().any(|tw| tw == w.as_str()));
-        if !has_album { continue; }
+        let has_album = album_words
+            .iter()
+            .all(|w| t.split_whitespace().any(|tw| tw == w.as_str()));
+        if !has_album {
+            continue;
+        }
 
         let mut score = 60i64;
-        if has_artist { score += 40; }
-        if t.contains("flac") { score += 50; }
-        if t.contains("24bit") || t.contains("24-bit") || t.contains("24 bit") { score += 20; }
+        if has_artist {
+            score += 40;
+        }
+        if t.contains("flac") {
+            score += 50;
+        }
+        if t.contains("24bit") || t.contains("24-bit") || t.contains("24 bit") {
+            score += 20;
+        }
         score += (seeders.min(50) as i64) * 2;
-        if size > 10 * 1024 * 1024 * 1024 { score -= 100; }
+        if size > 10 * 1024 * 1024 * 1024 {
+            score -= 100;
+        }
 
-        scored.push((score, TorrentResult { title, magnet, seeders, size }));
+        scored.push((
+            score,
+            TorrentResult {
+                title,
+                magnet,
+                seeders,
+                size,
+            },
+        ));
     }
 
     scored.sort_by(|a, b| b.0.cmp(&a.0));
@@ -496,52 +627,100 @@ async fn search_tpb(artist: &str, album: &str) -> Vec<TorrentResult> {
 
     for cat in ["104", "101"] {
         let url = format!("https://apibay.org/q.php?q={encoded}&cat={cat}");
-        let Ok(resp) = client.get(&url).header("User-Agent", "Mozilla/5.0").send().await else { continue };
-        if !resp.status().is_success() { continue }
-        let items: Vec<Value> = resp.json().await.unwrap_or_default();
-        if items.len() == 1 && items[0].get("name").and_then(Value::as_str) == Some("No results returned") {
+        let Ok(resp) = client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0")
+            .send()
+            .await
+        else {
+            continue;
+        };
+        if !resp.status().is_success() {
             continue;
         }
-        let mut results: Vec<TorrentResult> = items.into_iter().filter_map(|item| {
-            let title = item.get("name")?.as_str()?.to_string();
-            let hash = item.get("info_hash")?.as_str()?;
-            let seeders = item.get("seeders").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0u32);
-            let size = item.get("size").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0u64);
-            if seeders < 2 { return None; }
-            let enc = urlencoding::encode(&title);
-            let magnet = format!(
-                "magnet:?xt=urn:btih:{hash}&dn={enc}\
+        let items: Vec<Value> = resp.json().await.unwrap_or_default();
+        if items.len() == 1
+            && items[0].get("name").and_then(Value::as_str) == Some("No results returned")
+        {
+            continue;
+        }
+        let mut results: Vec<TorrentResult> = items
+            .into_iter()
+            .filter_map(|item| {
+                let title = item.get("name")?.as_str()?.to_string();
+                let hash = item.get("info_hash")?.as_str()?;
+                let seeders = item
+                    .get("seeders")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0u32);
+                let size = item
+                    .get("size")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0u64);
+                if seeders < 2 {
+                    return None;
+                }
+                let enc = urlencoding::encode(&title);
+                let magnet = format!(
+                    "magnet:?xt=urn:btih:{hash}&dn={enc}\
                  &tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce\
                  &tr=udp%3A%2F%2Fopen.tracker.cl%3A1337%2Fannounce"
-            );
-            Some(TorrentResult { title, magnet, seeders, size })
-        }).collect();
+                );
+                Some(TorrentResult {
+                    title,
+                    magnet,
+                    seeders,
+                    size,
+                })
+            })
+            .collect();
 
-        if results.is_empty() { continue; }
+        if results.is_empty() {
+            continue;
+        }
 
         // Score: artist + album match, FLAC bonus, seeder bonus
         let artist_n = normalize_text(artist);
         let album_n = normalize_text(album);
         // For short album names (≤3 words), require word-boundary match not just substring
         let album_words: Vec<&str> = album_n.split_whitespace().collect();
-        let mut scored: Vec<(i64, TorrentResult)> = results.drain(..).filter_map(|r| {
-            let t = normalize_text(&r.title);
-            let mut score = 0i64;
-            let has_artist = t.contains(&artist_n);
-            // Album match: all album words must appear in torrent title
-            let has_album = album_words.iter().all(|w| t.split_whitespace().any(|tw| tw == *w));
-            // Must match the album title to be considered
-            if !has_album { return None; }
-            if has_artist { score += 40; }
-            score += 60; // album matched
-            if t.contains("flac") { score += 50; }
-            if t.contains("24bit") || t.contains("24-bit") || t.contains("24 bit") { score += 20; }
-            score += (r.seeders.min(50) as i64) * 2;
-            // Penalise obvious wrong albums
-            if r.size > 10 * 1024 * 1024 * 1024 { score -= 100; } // >10GB
-            Some((score, r))
-        }).collect();
-        if scored.is_empty() { continue; }
+        let mut scored: Vec<(i64, TorrentResult)> = results
+            .drain(..)
+            .filter_map(|r| {
+                let t = normalize_text(&r.title);
+                let mut score = 0i64;
+                let has_artist = t.contains(&artist_n);
+                // Album match: all album words must appear in torrent title
+                let has_album = album_words
+                    .iter()
+                    .all(|w| t.split_whitespace().any(|tw| tw == *w));
+                // Must match the album title to be considered
+                if !has_album {
+                    return None;
+                }
+                if has_artist {
+                    score += 40;
+                }
+                score += 60; // album matched
+                if t.contains("flac") {
+                    score += 50;
+                }
+                if t.contains("24bit") || t.contains("24-bit") || t.contains("24 bit") {
+                    score += 20;
+                }
+                score += (r.seeders.min(50) as i64) * 2;
+                // Penalise obvious wrong albums
+                if r.size > 10 * 1024 * 1024 * 1024 {
+                    score -= 100;
+                } // >10GB
+                Some((score, r))
+            })
+            .collect();
+        if scored.is_empty() {
+            continue;
+        }
         scored.sort_by(|a, b| b.0.cmp(&a.0));
         return scored.into_iter().map(|(_, r)| r).collect();
     }
@@ -560,7 +739,9 @@ async fn download_file(url: &str, dest: &std::path::Path) -> Result<(), String> 
     if !resp.status().is_success() {
         return Err(format!("HTTP {} downloading {url}", resp.status()));
     }
-    let mut file = tokio::fs::File::create(dest).await.map_err(|e| e.to_string())?;
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| e.to_string())?;
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
     }
@@ -583,10 +764,7 @@ struct ExpectedTrack {
 /// Match downloaded audio files to expected tracks by title similarity + track number.
 /// Returns vec of (expected_index, file_path) pairs.
 #[allow(dead_code)]
-fn match_files_to_tracks(
-    files: &[PathBuf],
-    tracks: &[ExpectedTrack],
-) -> Vec<(usize, PathBuf)> {
+fn match_files_to_tracks(files: &[PathBuf], tracks: &[ExpectedTrack]) -> Vec<(usize, PathBuf)> {
     let mut matched: Vec<(usize, PathBuf)> = Vec::new();
     let mut used_files = vec![false; files.len()];
 
@@ -595,7 +773,9 @@ fn match_files_to_tracks(
         let mut best_fi: Option<usize> = None;
 
         for (fi, file) in files.iter().enumerate() {
-            if used_files[fi] { continue; }
+            if used_files[fi] {
+                continue;
+            }
             let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let normalized_stem = normalize_text(stem);
 
@@ -606,7 +786,9 @@ fn match_files_to_tracks(
 
             let title_sim = title_similarity(&track.title, stem);
             let mut score = title_sim * 0.6;
-            if has_number { score += 0.4; }
+            if has_number {
+                score += 0.4;
+            }
 
             if score > best_score {
                 best_score = score;
@@ -671,7 +853,10 @@ async fn process_album(
         return Err(format!("No torrents found for {artist} - {album}"));
     }
     let best = &results[0];
-    println!("    torrent [{source}]: {} ({} seeders)", best.title, best.seeders);
+    println!(
+        "    torrent [{source}]: {} ({} seeders)",
+        best.title, best.seeders
+    );
 
     if dry_run {
         println!("    [dry-run] would add: {}", best.magnet);
@@ -679,14 +864,19 @@ async fn process_album(
     }
 
     // 2. Add to RD
-    let torrent_id = rd.add_magnet(&best.magnet).await
+    let torrent_id = rd
+        .add_magnet(&best.magnet)
+        .await
         .map_err(|e| format!("addMagnet failed: {e}"))?;
-    rd.select_all_files(&torrent_id).await
+    rd.select_all_files(&torrent_id)
+        .await
         .map_err(|e| format!("selectFiles failed: {e}"))?;
 
     // 3. Wait for download
     println!("    waiting for RD to download...");
-    let links = rd.wait_for_links(&torrent_id).await
+    let links = rd
+        .wait_for_links(&torrent_id)
+        .await
         .map_err(|e| format!("RD wait failed: {e}"))?;
     println!("    RD done, {} links", links.len());
 
@@ -696,18 +886,24 @@ async fn process_album(
         normalize_text(artist).replace(' ', "_"),
         normalize_text(album).replace(' ', "_")
     ));
-    tokio::fs::create_dir_all(&album_dir).await
+    tokio::fs::create_dir_all(&album_dir)
+        .await
         .map_err(|e| format!("mkdir staging: {e}"))?;
 
     let mut downloaded_files: Vec<PathBuf> = Vec::new();
     for link in &links {
         let direct = match rd.unrestrict(link).await {
             Ok(u) => u,
-            Err(e) => { warn!("unrestrict failed for {link}: {e}"); continue; }
+            Err(e) => {
+                warn!("unrestrict failed for {link}: {e}");
+                continue;
+            }
         };
 
         // Derive filename from URL (strip query params)
-        let raw_filename = direct.split('/').last()
+        let raw_filename = direct
+            .split('/')
+            .last()
             .and_then(|f| f.split('?').next())
             .unwrap_or("track")
             .to_string();
@@ -715,7 +911,8 @@ async fn process_album(
         let decoded = urlencoding::decode(&raw_filename)
             .map(|s| s.into_owned())
             .unwrap_or(raw_filename);
-        let filename: String = decoded.chars()
+        let filename: String = decoded
+            .chars()
             .filter(|c| c.is_ascii() || c.is_alphanumeric())
             .collect::<String>()
             .trim()
@@ -769,16 +966,15 @@ async fn process_album(
     // 5. Build expected tracklist from DB (tracks already in library) or just use files as-is
     // Since this is for missing albums, we don't have DB tracks — use filenames directly.
     // Sort files by filename (track order).
-    downloaded_files.sort_by(|a, b| {
-        a.file_name().cmp(&b.file_name())
-    });
+    downloaded_files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
     // 6. Copy into library
     let dest_album_dir = PathBuf::from(library_base)
         .join(sanitize_component(artist))
         .join(sanitize_component(album));
 
-    tokio::fs::create_dir_all(&dest_album_dir).await
+    tokio::fs::create_dir_all(&dest_album_dir)
+        .await
         .map_err(|e| format!("mkdir library: {e}"))?;
 
     let mut installed = 0usize;
@@ -789,13 +985,16 @@ async fn process_album(
             println!("    skip (exists): {}", dest.display());
             continue;
         }
-        tokio::fs::copy(src, &dest).await
+        tokio::fs::copy(src, &dest)
+            .await
             .map_err(|e| format!("copy failed: {e}"))?;
         println!("    installed: {}", dest.display());
 
         // Upsert into DB
         match read_track_metadata(&dest) {
-            Ok(track) => { let _ = db.upsert_track(&track); }
+            Ok(track) => {
+                let _ = db.upsert_track(&track);
+            }
             Err(e) => warn!("metadata read failed for {}: {e}", dest.display()),
         }
         installed += 1;
@@ -868,7 +1067,10 @@ async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
     let mut seeded_tracks = 0usize;
     let mut skipped = 0usize;
 
-    println!("\n=== seeding {} failed albums to sidecar ===", failed_albums.len());
+    println!(
+        "\n=== seeding {} failed albums to sidecar ===",
+        failed_albums.len()
+    );
 
     for (artist, album) in failed_albums {
         print!("  [{artist} - {album}] ");
@@ -876,7 +1078,7 @@ async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
 
         // Check if any desired_tracks already exist for this album
         let existing: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM desired_tracks WHERE artist_name = ?1 AND album_title = ?2"
+            "SELECT COUNT(*) FROM desired_tracks WHERE artist_name = ?1 AND album_title = ?2",
         )
         .bind(artist)
         .bind(album)
@@ -905,7 +1107,10 @@ async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
             }
         };
 
-        let release = match releases.into_iter().find(|r| r.track_count.unwrap_or(0) > 0) {
+        let release = match releases
+            .into_iter()
+            .find(|r| r.track_count.unwrap_or(0) > 0)
+        {
             Some(r) => r,
             None => {
                 println!("no release with tracks");
@@ -949,7 +1154,11 @@ async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
                     &track.title,
                     Some(track.track_number as i64),
                     Some(track.disc_number as i64),
-                    if track.duration_ms > 0 { Some(track.duration_ms as i64) } else { None },
+                    if track.duration_ms > 0 {
+                        Some(track.duration_ms as i64)
+                    } else {
+                        None
+                    },
                     None,
                     Some(&format!(
                         r#"{{"artist":"{artist}","album":"{album}","release_id":"{}"}}"#,
@@ -960,7 +1169,10 @@ async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
             {
                 Ok(id) => id,
                 Err(e) => {
-                    warn!("insert_desired_track failed for {} - {}: {e}", artist, track.title);
+                    warn!(
+                        "insert_desired_track failed for {} - {}: {e}",
+                        artist, track.title
+                    );
                     continue;
                 }
             };
@@ -970,7 +1182,9 @@ async fn seed_failures_to_sidecar(failed_albums: &[(String, String)]) {
                 desired_track_id: desired_id,
                 action_type: DeltaActionType::MissingDownload,
                 priority: 100,
-                reason: format!("torrent_album_cli fallback: no torrent found for {artist} - {album}"),
+                reason: format!(
+                    "torrent_album_cli fallback: no torrent found for {artist} - {album}"
+                ),
                 target_quality: Some("lossless_preferred".to_string()),
             };
             match sidecar.enqueue_delta(&delta).await {
@@ -1010,17 +1224,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // so engine_pipeline_cli can acquire them via Qobuz/Deezer/slskd on the next run
     let seed_sidecar = args.iter().any(|a| a == "--seed-sidecar");
     let allow_apibay_fallback = args.iter().any(|a| a == "--allow-apibay-fallback");
-    let limit: usize = args.windows(2)
+    let limit: usize = args
+        .windows(2)
         .find(|w| w[0] == "--limit")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(50);
-    let min_plays: i64 = args.windows(2)
+    let min_plays: i64 = args
+        .windows(2)
         .find(|w| w[0] == "--min-plays")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(3);
 
     // --album "Artist" "Album" for a single targeted run
-    let single_album: Option<(String, String)> = args.windows(3)
+    let single_album: Option<(String, String)> = args
+        .windows(3)
         .find(|w| w[0] == "--album")
         .map(|w| (w[1].clone(), w[2].clone()));
 
@@ -1030,12 +1247,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rd_key = read_setting(&db, "real_debrid_key")
         .ok_or("REAL_DEBRID_KEY not set in DB or environment")?;
     let library_base = read_setting(&db, "library_base").unwrap_or_else(|| "A:\\Music".to_string());
-    let staging_folder = read_setting(&db, "staging_folder").unwrap_or_else(|| "A:\\Staging".to_string());
+    let staging_folder =
+        read_setting(&db, "staging_folder").unwrap_or_else(|| "A:\\Staging".to_string());
     let staging_dir = PathBuf::from(&staging_folder).join(".torrent-album-staging");
 
     // Jackett config — canonical torrent search owner. apibay remains explicit fallback only.
-    let jackett_url = read_setting(&db, "jackett_url")
-        .unwrap_or_else(|| "http://localhost:9117".to_string());
+    let jackett_url =
+        read_setting(&db, "jackett_url").unwrap_or_else(|| "http://localhost:9117".to_string());
     let jackett_api_key = read_setting(&db, "jackett_api_key");
     let jackett: Option<(String, String)> = jackett_api_key.map(|k| (jackett_url, k));
 
@@ -1048,7 +1266,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let missing = db.get_missing_spotify_albums_with_min_plays(min_plays)?;
         let completed_keys = db.get_completed_task_keys()?;
         let lib = PathBuf::from(&library_base);
-        missing.into_iter()
+        missing
+            .into_iter()
             .filter(|a| !a.artist.trim().is_empty() && !a.album.trim().is_empty())
             // Skip singles masquerading as albums
             .filter(|a| !is_single_not_album(&a.album))
@@ -1065,7 +1284,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|a| {
                 let artist_s = strip_feat(&a.artist.trim().to_string());
                 let album_s = strip_feat(&a.album.trim().to_string());
-                let dir = lib.join(sanitize_component(&artist_s)).join(sanitize_component(&album_s));
+                let dir = lib
+                    .join(sanitize_component(&artist_s))
+                    .join(sanitize_component(&album_s));
                 !dir.exists()
             })
             .take(limit)

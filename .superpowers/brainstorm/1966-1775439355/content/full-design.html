@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cassette – Full Design</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#04060a;
+  color:#e2e8f0;
+  font-family: system-ui, -apple-system, sans-serif;
+  padding: 28px 24px;
+}
+
+h2 { font-size:1rem; font-weight:700; letter-spacing:.06em; color:#8bb4d4; margin-bottom:4px; }
+.sub { font-size:0.78rem; color:#253040; margin-bottom:32px; }
+.view-title { font-size:0.7rem; letter-spacing:.1em; text-transform:uppercase; font-weight:700; color:#253040; margin-bottom:10px; }
+
+.views { display:flex; flex-direction:column; gap:48px; }
+
+/* ── SHARED CHROME ── */
+:root {
+  --bg-deep:    #060810;
+  --bg-base:    #080b12;
+  --bg-card:    #0c1018;
+  --bg-hover:   #0f1420;
+  --bg-active:  rgba(139,180,212,0.08);
+  --border:     rgba(139,180,212,0.07);
+  --border-dim: rgba(255,255,255,0.04);
+  --primary:    #8bb4d4;
+  --primary-dim:rgba(139,180,212,0.5);
+  --accent:     #f7b45c;
+  --text-1:     #c4d4e4;
+  --text-2:     #4a6070;
+  --text-3:     #253040;
+  --sidebar-w:  88px;
+}
+
+.app {
+  border-radius:12px;
+  overflow:hidden;
+  border:1px solid rgba(139,180,212,0.1);
+  background:var(--bg-base);
+  display:flex;
+  flex-direction:column;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+
+/* topbar */
+.topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:9px 18px;
+  background:var(--bg-deep);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.brand { font-size:9.5px; font-weight:800; letter-spacing:.12em; color:var(--primary); }
+.brand .slash { opacity:.35; margin:0 4px; }
+.topnav { display:flex; gap:16px; align-items:center; }
+.topnav a { font-size:8px; letter-spacing:.08em; color:var(--text-3); text-decoration:none; }
+.topnav a.active { color:var(--text-2); }
+.topbar-right { display:flex; gap:10px; align-items:center; }
+.topbar-btn { font-size:8px; padding:3px 10px; border-radius:4px; border:1px solid var(--border); color:var(--text-3); background:none; cursor:pointer; }
+
+/* body layout */
+.body { display:flex; flex:1; overflow:hidden; }
+
+/* sidebar */
+.sidebar {
+  width:var(--sidebar-w); flex-shrink:0;
+  background:var(--bg-deep);
+  border-right:1px solid var(--border-dim);
+  display:flex; flex-direction:column;
+  padding:10px 0;
+}
+.sidebar-logo { padding:4px 14px 12px; border-bottom:1px solid var(--border-dim); margin-bottom:8px; }
+.sidebar-logo .icon { font-size:7px; font-weight:800; letter-spacing:.1em; color:var(--primary); display:block; }
+.sidebar-logo .name { font-size:9px; font-weight:700; color:var(--text-1); display:block; margin-top:1px; }
+.nav-group-label { font-size:6px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-3); font-weight:700; padding:0 14px; margin-bottom:3px; }
+.nav-item {
+  display:flex; align-items:center; gap:7px;
+  padding:7px 12px 7px 12px;
+  font-size:8px; color:var(--text-3);
+  border-right:2px solid transparent;
+  cursor:pointer;
+  transition:color .1s;
+}
+.nav-item .icon { font-size:7px; width:16px; text-align:center; letter-spacing:.06em; color:inherit; }
+.nav-item.active { color:var(--primary); background:var(--bg-active); border-right-color:var(--primary); }
+.nav-item:not(.active):hover { color:var(--text-2); }
+.nav-divider { height:1px; background:var(--border-dim); margin:6px 10px; }
+.sidebar-footer { margin-top:auto; padding:10px 10px 2px; border-top:1px solid var(--border-dim); }
+.sidebar-stat { font-size:7.5px; color:var(--text-2); }
+.sidebar-stat strong { color:var(--text-1); font-weight:600; }
+
+/* right sidebar */
+.right-sidebar {
+  width:190px; flex-shrink:0;
+  background:var(--bg-deep);
+  border-left:1px solid var(--border-dim);
+  display:flex; flex-direction:column;
+}
+.rs-tabs { display:flex; border-bottom:1px solid var(--border-dim); flex-shrink:0; }
+.rs-tab {
+  flex:1; padding:9px 6px; font-size:7.5px; font-weight:600;
+  color:var(--text-3); cursor:pointer; background:none; border:none;
+  border-bottom:2px solid transparent; margin-bottom:-1px;
+  letter-spacing:.04em;
+}
+.rs-tab.active { color:var(--primary); border-bottom-color:var(--primary); }
+.rs-content { flex:1; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:10px; }
+.rs-section-label { font-size:6.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-3); font-weight:700; margin-bottom:4px; }
+.rs-artist { font-size:9px; font-weight:700; color:var(--text-1); margin-bottom:3px; }
+.rs-tags { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:6px; }
+.rs-tag { font-size:6px; padding:2px 5px; border-radius:3px; background:rgba(139,180,212,0.1); color:var(--primary); letter-spacing:.04em; }
+.rs-bio { font-size:7px; color:var(--text-2); line-height:1.7; }
+.rs-lyrics { font-size:7px; color:var(--text-2); line-height:2; white-space:pre-wrap; }
+
+/* queue */
+.queue-list { display:flex; flex-direction:column; gap:1px; }
+.queue-item { display:flex; align-items:center; gap:7px; padding:5px 6px; border-radius:4px; }
+.queue-item.current { background:rgba(139,180,212,0.07); }
+.q-num { font-size:6.5px; color:var(--text-3); width:14px; text-align:center; }
+.q-num.active { color:var(--primary); }
+.q-info { flex:1; min-width:0; }
+.q-title { font-size:7.5px; font-weight:500; color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.q-artist { font-size:6.5px; color:var(--text-3); }
+.q-dur { font-size:6.5px; color:var(--text-3); }
+
+/* now playing bar */
+.nowplaying {
+  border-top:1px solid var(--border-dim);
+  background:var(--bg-deep);
+  padding:8px 16px;
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:12px;
+  flex-shrink:0;
+}
+.np-left { display:flex; align-items:center; gap:10px; overflow:hidden; }
+.np-art { width:38px; height:38px; border-radius:5px; overflow:hidden; flex-shrink:0; box-shadow:0 2px 8px rgba(0,0,0,0.5); }
+.np-art img { width:100%; height:100%; object-fit:cover; }
+.np-art-ph { width:100%; height:100%; background:var(--bg-card); display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--text-3); }
+.np-info { overflow:hidden; }
+.np-title { font-size:8.5px; font-weight:600; color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.np-artist { font-size:7px; color:var(--text-3); margin-top:1px; }
+.np-center { display:flex; flex-direction:column; align-items:center; gap:5px; }
+.np-controls { display:flex; align-items:center; gap:10px; }
+.np-btn { font-size:11px; color:var(--text-3); background:none; border:none; cursor:pointer; }
+.np-play {
+  width:28px; height:28px; border-radius:50%;
+  background:var(--primary);
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; color:var(--bg-deep);
+  box-shadow:0 2px 10px rgba(139,180,212,0.25);
+}
+.np-seek { display:flex; align-items:center; gap:7px; width:280px; }
+.np-time { font-size:7px; color:var(--text-3); min-width:28px; }
+.np-time.right { text-align:right; }
+.seek-bar { flex:1; height:3px; background:rgba(139,180,212,0.1); border-radius:99px; position:relative; cursor:pointer; }
+.seek-fill { position:absolute; left:0; top:0; bottom:0; border-radius:99px; background:linear-gradient(90deg,var(--primary),var(--accent)); }
+.np-right { display:flex; align-items:center; gap:7px; justify-content:flex-end; }
+.vol-bar { width:70px; height:3px; background:rgba(139,180,212,0.08); border-radius:99px; position:relative; }
+.vol-fill { position:absolute; left:0; top:0; bottom:0; background:var(--text-3); border-radius:99px; width:70%; }
+.vol-icon { font-size:9px; color:var(--text-3); }
+
+/* ── VIEW 1: LIBRARY GRID ── */
+.library-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.library-header {
+  padding:12px 14px 8px;
+  display:flex; align-items:center; gap:10px;
+  border-bottom:1px solid var(--border-dim);
+  flex-shrink:0;
+}
+.library-header h3 { font-size:11px; font-weight:700; color:var(--text-1); flex:1; }
+.search-wrap { position:relative; }
+.search-input {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:6px; padding:4px 10px 4px 24px;
+  font-size:8px; color:var(--text-1); width:160px;
+}
+.search-input::placeholder { color:var(--text-3); }
+.search-icon { position:absolute; left:8px; top:50%; transform:translateY(-50%); font-size:8px; color:var(--text-3); }
+.tabs { display:flex; gap:0; padding:0 14px; border-bottom:1px solid var(--border-dim); flex-shrink:0; }
+.tab { font-size:8px; font-weight:600; padding:8px 12px; color:var(--text-3); border-bottom:2px solid transparent; margin-bottom:-1px; cursor:pointer; background:none; border-top:none; border-left:none; border-right:none; }
+.tab.active { color:var(--primary); border-bottom-color:var(--primary); }
+.album-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); gap:8px; padding:12px; overflow-y:auto; flex:1; }
+.album-card {
+  border-radius:7px; overflow:hidden;
+  border:1px solid var(--border);
+  background:var(--bg-card);
+  cursor:pointer;
+  transition:border-color .15s, transform .1s;
+}
+.album-card:hover { border-color:var(--primary-dim); transform:translateY(-1px); }
+.album-art { width:100%; aspect-ratio:1; overflow:hidden; }
+.album-art img { width:100%; height:100%; object-fit:cover; }
+.album-meta { padding:7px 8px; }
+.album-meta .t { font-size:8px; font-weight:600; color:var(--text-1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.album-meta .a { font-size:7px; color:var(--text-3); margin-top:2px; }
+.album-meta .y { font-size:6.5px; color:#1e2a36; margin-top:1px; }
+
+/* ── VIEW 2: ALBUM DETAIL ── */
+.album-detail-main { flex:1; position:relative; overflow:hidden; display:flex; flex-direction:column; }
+.album-backdrop { position:absolute; inset:0; background-size:cover; background-position:center; filter:brightness(.18) saturate(1.3) blur(3px); }
+.album-backdrop-grad { position:absolute; inset:0; background:linear-gradient(180deg,rgba(6,8,16,.5) 0%,rgba(6,8,16,.92) 55%,rgba(6,8,16,1) 100%); }
+.album-detail-content { position:relative; z-index:2; flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.album-hero { display:flex; gap:16px; padding:16px 16px 12px; align-items:flex-end; flex-shrink:0; }
+.album-hero-art { width:84px; height:84px; border-radius:8px; overflow:hidden; flex-shrink:0; box-shadow:0 8px 32px rgba(0,0,0,.7); }
+.album-hero-art img { width:100%; height:100%; object-fit:cover; }
+.album-hero-info { flex:1; min-width:0; }
+.album-hero-back { font-size:7px; color:var(--text-3); cursor:pointer; margin-bottom:6px; display:block; }
+.album-hero-title { font-size:16px; font-weight:800; color:#deeaf8; line-height:1.15; margin-bottom:3px; }
+.album-hero-artist { font-size:9px; color:rgba(200,220,240,.55); margin-bottom:2px; }
+.album-hero-meta { font-size:7.5px; color:rgba(200,220,240,.3); }
+.album-play-btn {
+  margin-top:8px; display:inline-flex; align-items:center; gap:5px;
+  padding:5px 14px; border-radius:99px; font-size:8px; font-weight:700;
+  background:var(--primary); color:var(--bg-deep); border:none; cursor:pointer;
+  box-shadow:0 2px 12px rgba(139,180,212,.25);
+}
+.tracklist { flex:1; overflow-y:auto; padding:0 12px 12px; display:flex; flex-direction:column; gap:2px; }
+.track-row {
+  display:flex; align-items:center; gap:10px;
+  padding:5px 8px; border-radius:5px;
+  border:1px solid transparent;
+  cursor:pointer;
+}
+.track-row:hover { background:rgba(139,180,212,.04); border-color:var(--border); }
+.track-row.playing { background:rgba(139,180,212,.07); border-color:rgba(139,180,212,.15); }
+.tr-num { font-size:7px; color:var(--text-3); width:14px; text-align:center; flex-shrink:0; }
+.tr-num.active { color:var(--primary); }
+.tr-title { flex:1; font-size:8.5px; color:var(--text-2); }
+.tr-title.active { color:var(--text-1); font-weight:600; }
+.tr-meta { font-size:7px; color:var(--text-3); }
+.tr-dur { font-size:7px; color:var(--text-3); }
+
+/* ── VIEW 3: SETTINGS ── */
+.settings-main { flex:1; overflow-y:auto; padding:0; display:flex; }
+.settings-nav { width:130px; flex-shrink:0; padding:12px 0; border-right:1px solid var(--border-dim); }
+.settings-nav-item { padding:7px 16px; font-size:8px; cursor:pointer; color:var(--text-3); }
+.settings-nav-item.active { color:var(--primary); background:rgba(139,180,212,.06); border-right:2px solid var(--primary); }
+.settings-content { flex:1; padding:16px 20px; display:flex; flex-direction:column; gap:20px; overflow-y:auto; }
+.settings-section { display:flex; flex-direction:column; gap:10px; }
+.settings-section-title { font-size:9px; font-weight:700; color:var(--text-1); letter-spacing:.04em; padding-bottom:6px; border-bottom:1px solid var(--border-dim); }
+.settings-section-sub { font-size:7px; color:var(--text-3); margin-top:-6px; }
+.field-group { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.field { display:flex; flex-direction:column; gap:3px; }
+.field label { font-size:7px; color:var(--text-2); font-weight:600; letter-spacing:.04em; }
+.field input {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:5px; padding:5px 9px;
+  font-size:8px; color:var(--text-1);
+  font-family:inherit;
+}
+.field input::placeholder { color:var(--text-3); }
+.field input:focus { outline:none; border-color:var(--primary-dim); }
+.field input[type=password] { letter-spacing:.1em; }
+.field-full { grid-column:1/-1; }
+.provider-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.provider-card {
+  padding:8px 10px; border-radius:6px;
+  background:var(--bg-card); border:1px solid var(--border);
+  display:flex; flex-direction:column; gap:3px;
+}
+.provider-card.configured { border-color:rgba(139,180,212,.2); }
+.provider-card.unconfigured { border-color:rgba(255,255,255,.03); }
+.provider-name { font-size:8px; font-weight:600; color:var(--text-1); }
+.provider-status { font-size:7px; }
+.provider-status.ok { color:#5ec4a0; }
+.provider-status.missing { color:var(--text-3); }
+.provider-dot { display:inline-block; width:5px; height:5px; border-radius:50%; margin-right:3px; vertical-align:middle; }
+.dot-ok { background:#5ec4a0; box-shadow:0 0 4px rgba(94,196,160,.5); }
+.dot-missing { background:var(--text-3); }
+.save-row { display:flex; gap:8px; align-items:center; margin-top:4px; }
+.btn-save {
+  padding:6px 18px; border-radius:6px; font-size:8px; font-weight:700;
+  background:var(--primary); color:var(--bg-deep); border:none; cursor:pointer;
+  letter-spacing:.04em;
+}
+.btn-ghost {
+  padding:6px 14px; border-radius:6px; font-size:8px; font-weight:600;
+  background:none; color:var(--text-2); border:1px solid var(--border); cursor:pointer;
+}
+.library-root-row {
+  display:flex; align-items:center; gap:8px;
+  padding:6px 8px; background:var(--bg-card); border-radius:5px; border:1px solid var(--border);
+}
+.library-root-path { flex:1; font-size:7.5px; color:var(--text-1); font-family:monospace; }
+.library-root-remove { font-size:7px; color:var(--text-3); cursor:pointer; padding:2px 6px; border-radius:3px; background:rgba(255,80,80,.06); border:1px solid rgba(255,80,80,.1); }
+.scan-btn {
+  padding:5px 12px; border-radius:5px; font-size:7.5px; font-weight:700;
+  background:rgba(139,180,212,.1); color:var(--primary); border:1px solid rgba(139,180,212,.2); cursor:pointer;
+}
+</style>
+</head>
+<body>
+
+<h2>Steel Dusk — Full App Design</h2>
+<p class="sub">Three views: Library (browsing), Album Detail (open album), Settings. Same chrome throughout.</p>
+
+<div class="views">
+
+  <!-- ═══════════════════════════════ VIEW 1: LIBRARY ═══════════════════════════════ -->
+  <div>
+    <div class="view-title">View 1 — Library (album grid)</div>
+    <div class="app" style="height:520px;">
+      <div class="topbar">
+        <span class="brand">CASSETTE<span class="slash">//</span>DESKTOP</span>
+        <div class="topnav">
+          <a href="#" class="active">Library</a>
+          <a href="#">Downloads</a>
+          <a href="#">Settings</a>
+        </div>
+        <div class="topbar-right">
+          <button class="topbar-btn">Mini Player</button>
+          <button class="topbar-btn">Commands</button>
+        </div>
+      </div>
+      <div class="body">
+        <!-- sidebar -->
+        <div class="sidebar">
+          <div class="sidebar-logo"><span class="icon">TAPE</span><span class="name">Cassette</span></div>
+          <div class="nav-item active"><span class="icon">LIB</span>Library</div>
+          <div class="nav-item"><span class="icon">DL</span>Downloads</div>
+          <div class="nav-item"><span class="icon">PL</span>Playlists</div>
+          <div class="nav-item"><span class="icon">AR</span>Artists</div>
+          <div class="nav-divider"></div>
+          <div class="nav-item"><span class="icon">IM</span>Import</div>
+          <div class="nav-item"><span class="icon">TL</span>Tools</div>
+          <div class="nav-item"><span class="icon">CFG</span>Settings</div>
+          <div class="sidebar-footer">
+            <div class="sidebar-stat"><strong>24,974</strong> tracks</div>
+          </div>
+        </div>
+        <!-- main -->
+        <div class="library-main">
+          <div class="library-header">
+            <h3>Library</h3>
+            <div class="search-wrap">
+              <span class="search-icon">⌕</span>
+              <input class="search-input" type="text" placeholder="Search tracks, artists, albums…">
+            </div>
+          </div>
+          <div class="tabs">
+            <button class="tab active">Albums</button>
+            <button class="tab">Tracks</button>
+            <button class="tab">Artists</button>
+          </div>
+          <div class="album-grid">
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&q=75" alt=""></div><div class="album-meta"><div class="t">Twilight Resonance</div><div class="a">Shadow Shore</div><div class="y">2023</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=200&q=75" alt=""></div><div class="album-meta" style="background:#090e14;"><div class="t" style="color:#9ab4c8;">Golden Hours</div><div class="a">Sunrise Avenue</div><div class="y">2021</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1506157786151-b8491531f063?w=200&q=75" alt=""></div><div class="album-meta" style="background:#0a0a16;"><div class="t" style="color:#b0a8d8;">Distant Echoes</div><div class="a">Ether Realms</div><div class="y">2022</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=200&q=75" alt=""></div><div class="album-meta" style="background:#090f0d;"><div class="t" style="color:#90c0b0;">Horizon Veil</div><div class="a">Starlit Edge</div><div class="y">2020</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=200&q=75" alt=""></div><div class="album-meta" style="background:#0f0909;"><div class="t" style="color:#d0a0a8;">Fading Echo</div><div class="a">Northern Lines</div><div class="y">2019</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1415201364774-f6f0bb35f28f?w=200&q=75" alt=""></div><div class="album-meta" style="background:#090e12;"><div class="t" style="color:#98b8cc;">Misty Path</div><div class="a">Blue Canvas</div><div class="y">2023</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=200&q=75" alt=""></div><div class="album-meta" style="background:#0e0c09;"><div class="t" style="color:#c8b888;">Dawn of Light</div><div class="a">Echo Chamber</div><div class="y">2022</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1524368535928-5b5e00ddc76b?w=200&q=75" alt=""></div><div class="album-meta" style="background:#0c0a14;"><div class="t" style="color:#b8a8d4;">Cosmic Drift</div><div class="a">Lunar Vale</div><div class="y">2021</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1482886383377-a06c7f628f32?w=200&q=75" alt=""></div><div class="album-meta"><div class="t">Harbour Lights</div><div class="a">River Tides</div><div class="y">2020</div></div></div>
+            <div class="album-card"><div class="album-art"><img src="https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=200&q=75" alt=""></div><div class="album-meta" style="background:#0a0f0e;"><div class="t" style="color:#9abab0;">Morning Haze</div><div class="a">Coastal Drift</div><div class="y">2018</div></div></div>
+          </div>
+        </div>
+        <!-- right sidebar -->
+        <div class="right-sidebar">
+          <div class="rs-tabs">
+            <button class="rs-tab active">Queue</button>
+            <button class="rs-tab">Info</button>
+          </div>
+          <div class="rs-content">
+            <div>
+              <div class="rs-section-label">Up next</div>
+              <div class="queue-list">
+                <div class="queue-item current">
+                  <span class="q-num active">▶</span>
+                  <div class="q-info"><div class="q-title">Twilight Glow</div><div class="q-artist">Shadow Shore</div></div>
+                  <span class="q-dur">4:22</span>
+                </div>
+                <div class="queue-item">
+                  <span class="q-num">2</span>
+                  <div class="q-info"><div class="q-title">Fading Echo</div><div class="q-artist">Shadow Shore</div></div>
+                  <span class="q-dur">3:51</span>
+                </div>
+                <div class="queue-item">
+                  <span class="q-num">3</span>
+                  <div class="q-info"><div class="q-title">Nightfall Journey</div><div class="q-artist">Shadow Shore</div></div>
+                  <span class="q-dur">5:08</span>
+                </div>
+                <div class="queue-item">
+                  <span class="q-num">4</span>
+                  <div class="q-info"><div class="q-title">Ember Stone</div><div class="q-artist">Shadow Shore</div></div>
+                  <span class="q-dur">3:44</span>
+                </div>
+                <div class="queue-item">
+                  <span class="q-num">5</span>
+                  <div class="q-info"><div class="q-title">Into the Horizon</div><div class="q-artist">Shadow Shore</div></div>
+                  <span class="q-dur">6:12</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- now playing -->
+      <div class="nowplaying">
+        <div class="np-left">
+          <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+          <div class="np-info">
+            <div class="np-title">Twilight Glow</div>
+            <div class="np-artist">Shadow Shore · Twilight Resonance</div>
+          </div>
+        </div>
+        <div class="np-center">
+          <div class="np-controls">
+            <button class="np-btn">⏮</button>
+            <div class="np-play">⏸</div>
+            <button class="np-btn">⏭</button>
+          </div>
+          <div class="np-seek">
+            <span class="np-time">1:42</span>
+            <div class="seek-bar"><div class="seek-fill" style="width:38%"></div></div>
+            <span class="np-time right">4:22</span>
+          </div>
+        </div>
+        <div class="np-right">
+          <span class="vol-icon">🔉</span>
+          <div class="vol-bar"><div class="vol-fill"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════ VIEW 2: ALBUM DETAIL ═══════════════════════════════ -->
+  <div>
+    <div class="view-title">View 2 — Album Detail (open album, art bleeds into background)</div>
+    <div class="app" style="height:520px;">
+      <div class="topbar">
+        <span class="brand">CASSETTE<span class="slash">//</span>DESKTOP</span>
+        <div class="topnav">
+          <a href="#" class="active">Library</a>
+          <a href="#">Downloads</a>
+          <a href="#">Settings</a>
+        </div>
+        <div class="topbar-right">
+          <button class="topbar-btn">Mini Player</button>
+          <button class="topbar-btn">Commands</button>
+        </div>
+      </div>
+      <div class="body">
+        <div class="sidebar">
+          <div class="sidebar-logo"><span class="icon">TAPE</span><span class="name">Cassette</span></div>
+          <div class="nav-item active"><span class="icon">LIB</span>Library</div>
+          <div class="nav-item"><span class="icon">DL</span>Downloads</div>
+          <div class="nav-item"><span class="icon">PL</span>Playlists</div>
+          <div class="nav-item"><span class="icon">AR</span>Artists</div>
+          <div class="nav-divider"></div>
+          <div class="nav-item"><span class="icon">IM</span>Import</div>
+          <div class="nav-item"><span class="icon">TL</span>Tools</div>
+          <div class="nav-item"><span class="icon">CFG</span>Settings</div>
+          <div class="sidebar-footer"><div class="sidebar-stat"><strong>24,974</strong> tracks</div></div>
+        </div>
+        <div class="album-detail-main">
+          <div class="album-backdrop" style="background-image:url('https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=900&q=60')"></div>
+          <div class="album-backdrop-grad"></div>
+          <div class="album-detail-content">
+            <div class="album-hero">
+              <div class="album-hero-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&q=80" alt=""></div>
+              <div class="album-hero-info">
+                <span class="album-hero-back">← Albums</span>
+                <div class="album-hero-title">Twilight Resonance</div>
+                <div class="album-hero-artist">Shadow Shore</div>
+                <div class="album-hero-meta">2023 · 11 tracks · FLAC 24bit · 96kHz</div>
+                <button class="album-play-btn">▶ Play Album</button>
+              </div>
+            </div>
+            <div class="tracklist">
+              <div class="track-row playing"><span class="tr-num active">▶</span><span class="tr-title active">Twilight Glow</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">4:22</span></div>
+              <div class="track-row"><span class="tr-num">2</span><span class="tr-title">Fading Echo</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">3:51</span></div>
+              <div class="track-row"><span class="tr-num">3</span><span class="tr-title">Nightfall Journey</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">5:08</span></div>
+              <div class="track-row"><span class="tr-num">4</span><span class="tr-title">Ember Stone</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">3:44</span></div>
+              <div class="track-row"><span class="tr-num">5</span><span class="tr-title">Into the Horizon</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">6:12</span></div>
+              <div class="track-row"><span class="tr-num">6</span><span class="tr-title">Bridge of Stars</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">4:55</span></div>
+              <div class="track-row"><span class="tr-num">7</span><span class="tr-title">Coastal Memory</span><span class="tr-meta" style="margin-right:8px;color:#2a3a50;">FLAC</span><span class="tr-dur">3:28</span></div>
+            </div>
+          </div>
+        </div>
+        <!-- right sidebar - info tab -->
+        <div class="right-sidebar">
+          <div class="rs-tabs">
+            <button class="rs-tab">Queue</button>
+            <button class="rs-tab active">Info</button>
+          </div>
+          <div class="rs-content">
+            <div>
+              <div class="rs-section-label">Artist</div>
+              <div class="rs-artist">Shadow Shore</div>
+              <div class="rs-tags">
+                <span class="rs-tag">post-rock</span>
+                <span class="rs-tag">ambient</span>
+                <span class="rs-tag">atmospheric</span>
+                <span class="rs-tag">shoegaze</span>
+              </div>
+              <div class="rs-bio">Shadow Shore is an atmospheric post-rock project known for expansive, cinematic soundscapes that blur the line between ambient and rock. Their work often evokes vast coastal landscapes and the feeling of late-evening solitude.</div>
+            </div>
+            <div>
+              <div class="rs-section-label">Lyrics</div>
+              <div class="rs-lyrics">The light fades into grey
+Across the water's edge
+I watch the tide recede
+Along the harbour ledge
+
+A twilight carries on
+The last of what remains
+Before the stars appear
+Above the coastal plains</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying">
+        <div class="np-left">
+          <div class="np-art"><img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=80&q=80" alt=""></div>
+          <div class="np-info">
+            <div class="np-title">Twilight Glow</div>
+            <div class="np-artist">Shadow Shore · Twilight Resonance</div>
+          </div>
+        </div>
+        <div class="np-center">
+          <div class="np-controls">
+            <button class="np-btn">⏮</button>
+            <div class="np-play">⏸</div>
+            <button class="np-btn">⏭</button>
+          </div>
+          <div class="np-seek">
+            <span class="np-time">1:42</span>
+            <div class="seek-bar"><div class="seek-fill" style="width:38%"></div></div>
+            <span class="np-time right">4:22</span>
+          </div>
+        </div>
+        <div class="np-right">
+          <span class="vol-icon">🔉</span>
+          <div class="vol-bar"><div class="vol-fill"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════ VIEW 3: SETTINGS ═══════════════════════════════ -->
+  <div>
+    <div class="view-title">View 3 — Settings (bespoke form layout)</div>
+    <div class="app" style="height:520px;">
+      <div class="topbar">
+        <span class="brand">CASSETTE<span class="slash">//</span>DESKTOP</span>
+        <div class="topnav">
+          <a href="#">Library</a>
+          <a href="#">Downloads</a>
+          <a href="#" class="active">Settings</a>
+        </div>
+        <div class="topbar-right">
+          <button class="topbar-btn">Mini Player</button>
+          <button class="topbar-btn">Commands</button>
+        </div>
+      </div>
+      <div class="body">
+        <div class="sidebar">
+          <div class="sidebar-logo"><span class="icon">TAPE</span><span class="name">Cassette</span></div>
+          <div class="nav-item"><span class="icon">LIB</span>Library</div>
+          <div class="nav-item"><span class="icon">DL</span>Downloads</div>
+          <div class="nav-item"><span class="icon">PL</span>Playlists</div>
+          <div class="nav-item"><span class="icon">AR</span>Artists</div>
+          <div class="nav-divider"></div>
+          <div class="nav-item"><span class="icon">IM</span>Import</div>
+          <div class="nav-item"><span class="icon">TL</span>Tools</div>
+          <div class="nav-item active"><span class="icon">CFG</span>Settings</div>
+          <div class="sidebar-footer"><div class="sidebar-stat"><strong>24,974</strong> tracks</div></div>
+        </div>
+        <div class="settings-main">
+          <div class="settings-nav">
+            <div class="settings-nav-item active">Library</div>
+            <div class="settings-nav-item">Providers</div>
+            <div class="settings-nav-item">Enrichment</div>
+            <div class="settings-nav-item">Tools</div>
+            <div class="settings-nav-item">Last.fm</div>
+          </div>
+          <div class="settings-content">
+
+            <!-- Library roots -->
+            <div class="settings-section">
+              <div class="settings-section-title">Library Roots</div>
+              <div class="settings-section-sub">Folders Cassette scans for music files.</div>
+              <div style="display:flex;flex-direction:column;gap:4px;">
+                <div class="library-root-row">
+                  <span class="library-root-path">A:/music</span>
+                  <span class="library-root-remove">Remove</span>
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:2px;">
+                <button class="scan-btn">+ Add Folder</button>
+                <button class="scan-btn">Scan Library</button>
+              </div>
+            </div>
+
+            <!-- Providers status -->
+            <div class="settings-section">
+              <div class="settings-section-title">Provider Status</div>
+              <div class="provider-grid">
+                <div class="provider-card configured"><div class="provider-name">Deezer</div><div class="provider-status ok"><span class="provider-dot dot-ok"></span>Configured</div></div>
+                <div class="provider-card configured"><div class="provider-name">Qobuz</div><div class="provider-status ok"><span class="provider-dot dot-ok"></span>Configured</div></div>
+                <div class="provider-card configured"><div class="provider-name">Soulseek</div><div class="provider-status ok"><span class="provider-dot dot-ok"></span>Configured</div></div>
+                <div class="provider-card unconfigured"><div class="provider-name">Real-Debrid</div><div class="provider-status missing"><span class="provider-dot dot-missing"></span>Not configured</div></div>
+                <div class="provider-card configured"><div class="provider-name">Usenet</div><div class="provider-status ok"><span class="provider-dot dot-ok"></span>Configured</div></div>
+                <div class="provider-card unconfigured"><div class="provider-name">yt-dlp</div><div class="provider-status missing"><span class="provider-dot dot-missing"></span>Not configured</div></div>
+              </div>
+            </div>
+
+            <!-- Deezer config -->
+            <div class="settings-section">
+              <div class="settings-section-title">Deezer</div>
+              <div class="field-group">
+                <div class="field field-full">
+                  <label>ARL Cookie</label>
+                  <input type="password" value="••••••••••••••••••••••••">
+                </div>
+              </div>
+            </div>
+
+            <!-- Enrichment -->
+            <div class="settings-section">
+              <div class="settings-section-title">Enrichment APIs</div>
+              <div class="field-group">
+                <div class="field">
+                  <label>Last.fm API Key</label>
+                  <input type="password" value="••••••••">
+                </div>
+                <div class="field">
+                  <label>Last.fm Username</label>
+                  <input type="text" placeholder="your_username">
+                </div>
+                <div class="field">
+                  <label>Genius Token</label>
+                  <input type="password" value="••••••••">
+                </div>
+                <div class="field">
+                  <label>Discogs Token</label>
+                  <input type="password" value="••••••••">
+                </div>
+              </div>
+            </div>
+
+            <div class="save-row">
+              <button class="btn-save">Save Settings</button>
+              <button class="btn-ghost">Persist Effective Config</button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+      <div class="nowplaying">
+        <div class="np-left">
+          <div class="np-art"><div class="np-art-ph">🎵</div></div>
+          <div class="np-info">
+            <div class="np-title" style="color:var(--text-3);">No track playing</div>
+          </div>
+        </div>
+        <div class="np-center">
+          <div class="np-controls">
+            <button class="np-btn">⏮</button>
+            <div class="np-play" style="background:var(--bg-card);color:var(--text-3);box-shadow:none;">▶</div>
+            <button class="np-btn">⏭</button>
+          </div>
+          <div class="np-seek">
+            <span class="np-time">0:00</span>
+            <div class="seek-bar"><div class="seek-fill" style="width:0%"></div></div>
+            <span class="np-time right">0:00</span>
+          </div>
+        </div>
+        <div class="np-right">
+          <span class="vol-icon">🔉</span>
+          <div class="vol-bar"><div class="vol-fill"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

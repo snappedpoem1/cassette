@@ -78,11 +78,21 @@ impl Player {
         }
     }
 
-    pub fn load(&self, path: String) { self.send(PlayerCommand::Load(path)); }
-    pub fn play(&self)               { self.send(PlayerCommand::Play); }
-    pub fn pause(&self)              { self.send(PlayerCommand::Pause); }
-    pub fn stop(&self)               { self.send(PlayerCommand::Stop); }
-    pub fn seek(&self, secs: f64)    { self.send(PlayerCommand::Seek(secs)); }
+    pub fn load(&self, path: String) {
+        self.send(PlayerCommand::Load(path));
+    }
+    pub fn play(&self) {
+        self.send(PlayerCommand::Play);
+    }
+    pub fn pause(&self) {
+        self.send(PlayerCommand::Pause);
+    }
+    pub fn stop(&self) {
+        self.send(PlayerCommand::Stop);
+    }
+    pub fn seek(&self, secs: f64) {
+        self.send(PlayerCommand::Seek(secs));
+    }
 
     pub fn set_volume(&self, vol: f32) {
         *self.volume.lock().unwrap() = vol.clamp(0.0, 1.0);
@@ -124,7 +134,9 @@ impl Player {
 }
 
 impl Default for Player {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Player Thread ─────────────────────────────────────────────────────────────
@@ -175,10 +187,16 @@ fn player_thread(
                 let cons = cons_cb.lock().unwrap();
                 let n = cons.read(data).unwrap_or(0);
                 drop(cons);
-                for s in &mut data[..n] { *s *= vol; }
-                for s in &mut data[n..] { *s = 0.0; }
+                for s in &mut data[..n] {
+                    *s *= vol;
+                }
+                for s in &mut data[n..] {
+                    *s = 0.0;
+                }
             } else {
-                for s in data.iter_mut() { *s = 0.0; }
+                for s in data.iter_mut() {
+                    *s = 0.0;
+                }
             }
         },
         |e| eprintln!("[player] stream error: {e}"),
@@ -211,7 +229,9 @@ fn player_thread(
             Some(PlayerCommand::Load(path)) => {
                 // Stop existing decode thread
                 decode_stop.store(true, Ordering::Relaxed);
-                if let Some(t) = decode_thread.take() { let _ = t.join(); }
+                if let Some(t) = decode_thread.take() {
+                    let _ = t.join();
+                }
                 decode_stop.store(false, Ordering::Relaxed);
                 is_playing.store(false, Ordering::Relaxed);
                 position_bits.store(0f64.to_bits(), Ordering::Relaxed);
@@ -230,10 +250,12 @@ fn player_thread(
                 let evt = evt_tx.clone();
                 let p = path.clone();
 
-                decode_thread = Some(std::thread::Builder::new()
-                    .name("cassette-decode".into())
-                    .spawn(move || decode_loop(p, prod, stop, pos, play, evt, None))
-                    .expect("spawn decode thread"));
+                decode_thread = Some(
+                    std::thread::Builder::new()
+                        .name("cassette-decode".into())
+                        .spawn(move || decode_loop(p, prod, stop, pos, play, evt, None))
+                        .expect("spawn decode thread"),
+                );
 
                 is_playing.store(true, Ordering::Relaxed);
                 let _ = evt_tx.try_send(PlayerEvent::Playing);
@@ -253,7 +275,9 @@ fn player_thread(
 
             Some(PlayerCommand::Stop) => {
                 decode_stop.store(true, Ordering::Relaxed);
-                if let Some(t) = decode_thread.take() { let _ = t.join(); }
+                if let Some(t) = decode_thread.take() {
+                    let _ = t.join();
+                }
                 decode_stop.store(false, Ordering::Relaxed);
                 is_playing.store(false, Ordering::Relaxed);
                 position_bits.store(0f64.to_bits(), Ordering::Relaxed);
@@ -269,7 +293,9 @@ fn player_thread(
                 if let Some(ref path) = current_path {
                     // Stop current decode thread
                     decode_stop.store(true, Ordering::Relaxed);
-                    if let Some(t) = decode_thread.take() { let _ = t.join(); }
+                    if let Some(t) = decode_thread.take() {
+                        let _ = t.join();
+                    }
                     decode_stop.store(false, Ordering::Relaxed);
 
                     // Drain ring buffer so stale audio doesn't play after seek
@@ -291,10 +317,12 @@ fn player_thread(
                     let p = path.clone();
                     let was_playing = is_playing.load(Ordering::Relaxed);
 
-                    decode_thread = Some(std::thread::Builder::new()
-                        .name("cassette-decode".into())
-                        .spawn(move || decode_loop(p, prod, stop, pos, play, evt, Some(secs)))
-                        .expect("spawn decode thread"));
+                    decode_thread = Some(
+                        std::thread::Builder::new()
+                            .name("cassette-decode".into())
+                            .spawn(move || decode_loop(p, prod, stop, pos, play, evt, Some(secs)))
+                            .expect("spawn decode thread"),
+                    );
 
                     if was_playing {
                         is_playing.store(true, Ordering::Relaxed);
@@ -332,12 +360,18 @@ fn decode_loop(
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(&path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
 
     let probed = match symphonia::default::get_probe().format(
-        &hint, mss, &FormatOptions::default(), &MetadataOptions::default(),
+        &hint,
+        mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -347,7 +381,11 @@ fn decode_loop(
     };
 
     let mut format = probed.format;
-    let track = match format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL) {
+    let track = match format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+    {
         Some(t) => t.clone(),
         None => {
             let _ = evt_tx.try_send(PlayerEvent::Error("No audio track found".into()));
@@ -370,7 +408,13 @@ fn decode_loop(
 
     if let Some(seek_secs) = seek_to {
         let seek_time = Time::new(seek_secs as u64, seek_secs.fract());
-        if let Err(e) = format.seek(SeekMode::Coarse, SeekTo::Time { time: seek_time, track_id: Some(track_id) }) {
+        if let Err(e) = format.seek(
+            SeekMode::Coarse,
+            SeekTo::Time {
+                time: seek_time,
+                track_id: Some(track_id),
+            },
+        ) {
             let _ = evt_tx.try_send(PlayerEvent::Error(format!("Seek failed: {e}")));
             return;
         }
@@ -380,7 +424,9 @@ fn decode_loop(
     let mut sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>> = None;
 
     loop {
-        if stop.load(Ordering::Relaxed) { break; }
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
 
         if !is_playing.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -390,14 +436,17 @@ fn decode_loop(
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
                 let _ = evt_tx.try_send(PlayerEvent::TrackEnded);
                 break;
             }
             Err(_) => break,
         };
 
-        if packet.track_id() != track_id { continue; }
+        if packet.track_id() != track_id {
+            continue;
+        }
 
         if let Some(tb) = time_base {
             let ts = packet.ts();
@@ -413,7 +462,8 @@ fn decode_loop(
         let spec = *decoded.spec();
         if sample_buf.is_none() {
             sample_buf = Some(symphonia::core::audio::SampleBuffer::<f32>::new(
-                decoded.capacity() as u64, spec,
+                decoded.capacity() as u64,
+                spec,
             ));
         }
         if let Some(ref mut sb) = sample_buf {
@@ -424,7 +474,9 @@ fn decode_loop(
             let prod = prod.lock().unwrap();
             let mut written = 0;
             while written < samples.len() {
-                if stop.load(Ordering::Relaxed) { return; }
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 match prod.write(&samples[written..]) {
                     Ok(n) => written += n,
                     Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
@@ -438,13 +490,24 @@ fn probe_duration(path: &str) -> Result<f64> {
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| anyhow!("{e}"))?;
-    let track = probed.format.tracks().iter()
+    let track = probed
+        .format
+        .tracks()
+        .iter()
         .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
         .ok_or_else(|| anyhow!("no track"))?;
     if let (Some(tb), Some(frames)) = (track.codec_params.time_base, track.codec_params.n_frames) {

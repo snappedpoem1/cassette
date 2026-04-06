@@ -4,8 +4,8 @@ use crate::director::download::staging::{check_existing_staged_file, compute_sta
 use crate::director::error::DirectorError;
 use crate::director::sources::SourceProvider;
 use crate::director::types::{HashAlgorithm, StagedFile};
-use crate::library::{LibraryManager, Module};
 use crate::librarian::models::DesiredTrack;
+use crate::library::{LibraryManager, Module};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

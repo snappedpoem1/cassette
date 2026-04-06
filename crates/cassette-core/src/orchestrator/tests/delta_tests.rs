@@ -41,5 +41,8 @@ async fn delta_generation_creates_missing_download_action() {
         .expect("deltas");
 
     assert_eq!(deltas.len(), 1);
-    assert!(matches!(deltas[0].action_type, DeltaActionType::MissingDownload));
+    assert!(matches!(
+        deltas[0].action_type,
+        DeltaActionType::MissingDownload
+    ));
 }

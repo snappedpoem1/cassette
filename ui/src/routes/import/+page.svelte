@@ -11,6 +11,7 @@
   let selectedAlbums = new Set<number>();
   let queuedCount: number | null = null;
   let queuedTrackEstimate: number | null = null;
+  let importedTrackCount: number | null = null;
   let filterMode: 'missing' | 'all' = 'missing';
   let minPlays = 3;
   let persistedStatus: SpotifyImportStatus | null = null;
@@ -31,15 +32,42 @@
     }
   }
 
+  async function pickTrackJson() {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      title: 'Select Spotify Track Export JSON'
+    });
+    if (selected) {
+      await importTrackJson(selected as string);
+    }
+  }
+
   async function loadHistory(path: string) {
     isLoading = true;
     error = null;
     importResult = null;
     queuedCount = null;
+    importedTrackCount = null;
     selectedAlbums = new Set();
     try {
       importResult = await api.parseSpotifyHistory(path);
       persistedStatus = await api.getSpotifyImportStatus();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  async function importTrackJson(path: string) {
+    isLoading = true;
+    error = null;
+    queuedCount = null;
+    importedTrackCount = null;
+    try {
+      importedTrackCount = await api.importSpotifyDesiredTracks(path);
     } catch (e) {
       error = String(e);
     } finally {
@@ -121,17 +149,28 @@
   </div>
 
   <div class="import-section">
+    <div class="import-story">
+      <div class="source-label">Spotify intake</div>
+      <div class="source-desc">
+        Both Spotify lanes now feed the same identity-first desired-state pipeline.
+        Use streaming history when you want album backlog coverage, or import direct track JSON
+        when you already have exact Spotify track payloads.
+      </div>
+    </div>
+  </div>
+
+  <div class="import-section import-grid">
     <div class="import-source">
-      <div class="source-label">Spotify Extended Streaming History</div>
+      <div class="source-label">Album backlog from streaming history</div>
       <div class="source-desc">
         Select the folder containing your <code>Streaming_History_Audio_*.json</code> files from Spotify's data export.
       </div>
       <div class="source-help">
-        <strong>How this works:</strong>
+        <strong>What this does:</strong>
         <ul>
-          <li>1. Load your Spotify export JSON files.</li>
+          <li>1. Load your Spotify history export JSON files.</li>
           <li>2. Review albums marked <em>Missing</em>.</li>
-          <li>3. Queue selected albums for acquisition in Downloads.</li>
+          <li>3. Queue selected albums into the same acquisition pipeline used everywhere else.</li>
         </ul>
       </div>
       {#if persistedStatus}
@@ -146,10 +185,35 @@
         {isLoading ? 'Parsing...' : 'Select Folder'}
       </button>
     </div>
+
+    <div class="import-source">
+      <div class="source-label">Direct desired-track JSON</div>
+      <div class="source-desc">
+        Import a Spotify track payload file when you want the sidecar to carry exact track IDs,
+        album IDs, artist IDs, duration, ISRC, and raw source evidence up front.
+      </div>
+      <div class="source-help">
+        <strong>What this does:</strong>
+        <ul>
+          <li>1. Load a JSON export containing Spotify track payloads.</li>
+          <li>2. Persist desired tracks into the control-plane sidecar.</li>
+          <li>3. Let reconciliation and planner flows pick them up with richer identity evidence.</li>
+        </ul>
+      </div>
+      <button class="btn btn-primary" on:click={pickTrackJson} disabled={isLoading}>
+        {isLoading ? 'Importing...' : 'Select JSON'}
+      </button>
+    </div>
   </div>
 
   {#if error}
     <div class="import-error">{error}</div>
+  {/if}
+
+  {#if importedTrackCount !== null}
+    <div class="dl-notice">
+      Imported {importedTrackCount} Spotify desired track{importedTrackCount === 1 ? '' : 's'} into the unified intake lane.
+    </div>
   {/if}
 
   {#if queuedCount !== null}
@@ -265,9 +329,21 @@
 .import-page { display: flex; flex-direction: column; min-height: 100%; }
 
 .import-section { padding: 0 1.5rem 1rem; }
+.import-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+.import-story {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  max-width: 960px;
+}
 .import-source {
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; max-width: 560px;
+  padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; min-height: 100%;
 }
 .source-label { font-weight: 600; font-size: 0.95rem; }
 .source-desc { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; }
@@ -344,4 +420,3 @@
 .col-album { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .col-time, .col-plays { text-align: center; color: var(--text-secondary); }
 </style>
-

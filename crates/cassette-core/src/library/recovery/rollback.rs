@@ -14,7 +14,11 @@ impl LibraryManager {
             match self.undo_event(&event).await {
                 Ok(_) => {
                     rolled_back += 1;
-                    tracing::info!(operation_id = operation_id, event_id = event.event_id, "Event rolled back");
+                    tracing::info!(
+                        operation_id = operation_id,
+                        event_id = event.event_id,
+                        "Event rolled back"
+                    );
                 }
                 Err(error) => {
                     failed_rollbacks += 1;

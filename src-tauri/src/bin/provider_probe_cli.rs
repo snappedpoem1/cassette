@@ -18,17 +18,18 @@ fn app_db_path() -> Result<PathBuf, String> {
 }
 
 fn present(value: Option<String>) -> Option<String> {
-    value.map(|item| item.trim().to_string())
+    value
+        .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
 }
 
 async fn probe_slskd(db: &Db) -> ProbeResult {
     let url = present(db.get_setting("slskd_url").ok().flatten())
         .unwrap_or_else(|| "http://localhost:5030".to_string());
-    let username = present(db.get_setting("slskd_user").ok().flatten())
-        .unwrap_or_else(|| "slskd".to_string());
-    let password = present(db.get_setting("slskd_pass").ok().flatten())
-        .unwrap_or_else(|| "slskd".to_string());
+    let username =
+        present(db.get_setting("slskd_user").ok().flatten()).unwrap_or_else(|| "slskd".to_string());
+    let password =
+        present(db.get_setting("slskd_pass").ok().flatten()).unwrap_or_else(|| "slskd".to_string());
 
     let client = reqwest::Client::new();
     let session = client
@@ -61,7 +62,10 @@ async fn probe_slskd(db: &Db) -> ProbeResult {
             }
         }
     };
-    let token = body.get("token").and_then(Value::as_str).unwrap_or_default();
+    let token = body
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if token.is_empty() {
         return ProbeResult {
             provider: "slskd",

@@ -93,7 +93,10 @@ impl StrategyPlanner {
             }
         }
 
-        let provider_order = ordered.into_iter().map(|descriptor| descriptor.id).collect();
+        let provider_order = ordered
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect();
         let parallel_n = config.parallel_provider_count.max(1);
         let selection_mode = match task.strategy {
             AcquisitionStrategy::SingleTrackPriority => CandidateSelectionMode::FirstValidWins,
@@ -103,10 +106,8 @@ impl StrategyPlanner {
             _ => CandidateSelectionMode::CompareAllCandidates,
         };
 
-        let collect_multiple_candidates = !matches!(
-            selection_mode,
-            CandidateSelectionMode::FirstValidWins
-        );
+        let collect_multiple_candidates =
+            !matches!(selection_mode, CandidateSelectionMode::FirstValidWins);
 
         // For compare modes, first evaluate the top-ranked provider and only continue
         // comparing other providers when the first valid candidate does not meet the
@@ -194,9 +195,15 @@ mod tests {
             &DirectorConfig::default(),
         );
 
-        assert_eq!(plan.selection_mode, CandidateSelectionMode::CompareAllCandidates);
+        assert_eq!(
+            plan.selection_mode,
+            CandidateSelectionMode::CompareAllCandidates
+        );
         // HighQualityOnly: Qobuz before Deezer
-        assert_eq!(plan.provider_order, vec!["qobuz".to_string(), "deezer".to_string()]);
+        assert_eq!(
+            plan.provider_order,
+            vec!["qobuz".to_string(), "deezer".to_string()]
+        );
         assert!(plan.require_lossless);
     }
 
@@ -216,7 +223,11 @@ mod tests {
         // ObscureFallbackHeavy: Real Debrid and Slskd promoted before Qobuz
         assert_eq!(
             plan.provider_order,
-            vec!["real_debrid".to_string(), "slskd".to_string(), "qobuz".to_string()]
+            vec![
+                "real_debrid".to_string(),
+                "slskd".to_string(),
+                "qobuz".to_string()
+            ]
         );
     }
 

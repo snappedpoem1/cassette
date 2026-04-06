@@ -116,14 +116,18 @@ pub async fn test_manager() -> LibraryManager {
 }
 
 pub async fn seed_basic_catalog(manager: &LibraryManager) {
-    sqlx::query("INSERT INTO artists(id, canonical_name, normalized_name) VALUES(1, 'Artist', 'artist')")
-        .execute(manager.db_pool())
-        .await
-        .expect("artist");
-    sqlx::query("INSERT INTO albums(id, artist_id, title, normalized_title) VALUES(1, 1, 'Album', 'album')")
-        .execute(manager.db_pool())
-        .await
-        .expect("album");
+    sqlx::query(
+        "INSERT INTO artists(id, canonical_name, normalized_name) VALUES(1, 'Artist', 'artist')",
+    )
+    .execute(manager.db_pool())
+    .await
+    .expect("artist");
+    sqlx::query(
+        "INSERT INTO albums(id, artist_id, title, normalized_title) VALUES(1, 1, 'Album', 'album')",
+    )
+    .execute(manager.db_pool())
+    .await
+    .expect("album");
     sqlx::query("INSERT INTO tracks(id, album_id, artist_id, title, normalized_title, duration_ms, isrc, spotify_id) VALUES(1, 1, 1, 'Song', 'song', 200000, 'ISRC123', 'SPOTIFY123')")
         .execute(manager.db_pool())
         .await

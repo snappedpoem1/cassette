@@ -46,9 +46,7 @@ async fn ensure_sidecar_column(
     column: &str,
     column_type: &str,
 ) -> Result<()> {
-    let sql = format!(
-        "ALTER TABLE sidecar.{table} ADD COLUMN {column} {column_type}",
-    );
+    let sql = format!("ALTER TABLE sidecar.{table} ADD COLUMN {column} {column_type}",);
     match sqlx::query(&sql).execute(pool).await {
         Ok(_) => Ok(()),
         Err(error) => {
@@ -307,7 +305,10 @@ async fn create_unified_control_tables(pool: &sqlx::SqlitePool) -> Result<()> {
 }
 
 async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path) -> Result<()> {
-    let attach = format!("ATTACH DATABASE '{}' AS sidecar", sqlite_literal(sidecar_path));
+    let attach = format!(
+        "ATTACH DATABASE '{}' AS sidecar",
+        sqlite_literal(sidecar_path)
+    );
     sqlx::query(&attach).execute(pool).await?;
 
     let has_artists = sidecar_table_exists(pool, "artists").await?;
@@ -320,7 +321,8 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     let has_delta_queue = sidecar_table_exists(pool, "delta_queue").await?;
     let has_sync_runs = sidecar_table_exists(pool, "sync_runs").await?;
     let has_acquisition_requests = sidecar_table_exists(pool, "acquisition_requests").await?;
-    let has_acquisition_request_events = sidecar_table_exists(pool, "acquisition_request_events").await?;
+    let has_acquisition_request_events =
+        sidecar_table_exists(pool, "acquisition_request_events").await?;
 
     // Older sidecar files can predate some hardening columns. Add nullable columns so
     // convergence stays backwards-compatible and does not fail on SELECT projection.
@@ -329,7 +331,13 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
         ensure_sidecar_column(pool, "local_files", "acoustid_fingerprint", "TEXT").await?;
         ensure_sidecar_column(pool, "local_files", "fingerprint_attempted_at", "TIMESTAMP").await?;
         ensure_sidecar_column(pool, "local_files", "fingerprint_error", "TEXT").await?;
-        ensure_sidecar_column(pool, "local_files", "fingerprint_source_mtime_ms", "INTEGER").await?;
+        ensure_sidecar_column(
+            pool,
+            "local_files",
+            "fingerprint_source_mtime_ms",
+            "INTEGER",
+        )
+        .await?;
     }
     if has_delta_queue {
         ensure_sidecar_column(pool, "delta_queue", "source_operation_id", "TEXT").await?;
@@ -341,7 +349,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     let mut tx = pool.begin().await?;
 
     if has_artists {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_artists (id, canonical_name, normalized_name, spotify_id, discogs_id, created_at, updated_at)
          SELECT id, canonical_name, normalized_name, spotify_id, discogs_id, created_at, updated_at
          FROM sidecar.artists",
@@ -351,7 +359,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_albums {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_albums (id, artist_id, title, normalized_title, release_date, spotify_id, discogs_id, cover_art_path, created_at, updated_at)
          SELECT id, artist_id, title, normalized_title, release_date, spotify_id, discogs_id, cover_art_path, created_at, updated_at
          FROM sidecar.albums",
@@ -361,7 +369,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_tracks {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_tracks (id, album_id, artist_id, title, normalized_title, track_number, disc_number, duration_ms, isrc, spotify_id, discogs_id, created_at, updated_at)
          SELECT id, album_id, artist_id, title, normalized_title, track_number, disc_number, duration_ms, isrc, spotify_id, discogs_id, created_at, updated_at
          FROM sidecar.tracks",
@@ -371,7 +379,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_local_files {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_local_files (id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate, bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash, acoustid_fingerprint, fingerprint_attempted_at, fingerprint_error, fingerprint_source_mtime_ms, integrity_status, quality_tier, last_scanned_at, created_at, updated_at)
          SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate, bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash, acoustid_fingerprint, fingerprint_attempted_at, fingerprint_error, fingerprint_source_mtime_ms, integrity_status, quality_tier, last_scanned_at, created_at, updated_at
          FROM sidecar.local_files",
@@ -381,7 +389,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_scan_checkpoints {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_scan_checkpoints (id, root_path, last_run_id, last_scanned_path, status, files_seen, files_indexed, created_at, updated_at)
          SELECT id, root_path, last_run_id, last_scanned_path, status, files_seen, files_indexed, created_at, updated_at
          FROM sidecar.scan_checkpoints",
@@ -391,7 +399,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_desired_tracks {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_desired_tracks (id, source_name, source_track_id, source_album_id, source_artist_id, artist_name, album_title, track_title, track_number, disc_number, duration_ms, isrc, raw_payload_json, imported_at)
          SELECT id, source_name, source_track_id, source_album_id, source_artist_id, artist_name, album_title, track_title, track_number, disc_number, duration_ms, isrc, raw_payload_json, imported_at
          FROM sidecar.desired_tracks",
@@ -401,7 +409,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_reconciliation_results {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_reconciliation_results (id, desired_track_id, matched_track_id, matched_local_file_id, reconciliation_status, quality_assessment, reason, created_at)
          SELECT id, desired_track_id, matched_track_id, matched_local_file_id, reconciliation_status, quality_assessment, reason, created_at
          FROM sidecar.reconciliation_results",
@@ -411,7 +419,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_delta_queue {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_delta_queue (id, desired_track_id, action_type, priority, reason, target_quality, source_operation_id, created_at, claimed_at, claim_run_id, processed_at)
          SELECT id, desired_track_id, action_type, priority, reason, target_quality, source_operation_id, created_at, claimed_at, claim_run_id, processed_at
          FROM sidecar.delta_queue",
@@ -421,7 +429,7 @@ async fn merge_sidecar_into_unified(pool: &sqlx::SqlitePool, sidecar_path: &Path
     }
 
     if has_sync_runs {
-    sqlx::query(
+        sqlx::query(
         "INSERT OR IGNORE INTO control_sync_runs (id, run_id, started_at, ended_at, status, phase_reached, files_scanned, files_upserted, desired_tracks_imported, reconciliation_completed, delta_queue_entries, error_message, created_at)
          SELECT id, run_id, started_at, ended_at, status, phase_reached, files_scanned, files_upserted, desired_tracks_imported, reconciliation_completed, delta_queue_entries, error_message, created_at
          FROM sidecar.sync_runs",

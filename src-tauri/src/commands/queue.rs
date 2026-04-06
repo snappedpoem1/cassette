@@ -17,9 +17,7 @@ pub fn clear_queue(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn add_to_queue(state: State<'_, AppState>, track_id: i64, position: Option<i64>) {
     let db = state.db.lock().unwrap();
-    let pos = position.unwrap_or_else(|| {
-        db.get_max_queue_position().unwrap_or(-1) + 1
-    });
+    let pos = position.unwrap_or_else(|| db.get_max_queue_position().unwrap_or(-1) + 1);
     let _ = db.add_to_queue(track_id, pos);
 }
 

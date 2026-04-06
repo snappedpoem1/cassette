@@ -5,6 +5,11 @@
 **Last Updated**: 2026-04-05
 **Owner**: Christian (Capn)
 
+Scope framing:
+
+- Cassette is a personal-use project for a single owner.
+- Any "release", "shipping", or "production" wording in this repo refers to personal reliability/readiness on the owner's machine, not commercial product rollout.
+
 ---
 
 ## Project Overview
@@ -114,7 +119,7 @@ Spotify history/import helpers, settings, provider status, and library organizat
 | Area | Location | Status | What Is True Now | Main Gaps |
 |---|---|---|---|---|
 | Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Packaging proof incomplete |
-| UI | `ui` | Active | Library, downloads, settings, artists, playlists, tools routes exist | Long-session UX polish; richer provider health and troubleshooting views |
+| UI | `ui` | Active | Music-first Home route, dedicated `/library`, artist-first `/artists`, downloads command center, settings, playlists, and tools routes exist | Long-session UX polish; richer provider health and troubleshooting views |
 | Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |

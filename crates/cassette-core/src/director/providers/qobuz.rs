@@ -1,7 +1,7 @@
 use crate::director::error::ProviderError;
 use crate::director::models::{
-    CandidateAcquisition, NormalizedTrack, ProviderCapabilities, ProviderDescriptor, ProviderHealthState,
-    ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
+    CandidateAcquisition, NormalizedTrack, ProviderCapabilities, ProviderDescriptor,
+    ProviderHealthState, ProviderHealthStatus, ProviderSearchCandidate, TrackTask,
 };
 use crate::director::provider::Provider;
 use crate::director::strategy::StrategyPlan;
@@ -125,7 +125,8 @@ impl Provider for QobuzProvider {
             .into_iter()
             .map(|album| {
                 let mut confidence = 0.40_f32;
-                confidence += normalized_match_confidence(&album.artist, &task.target.artist) * 0.30;
+                confidence +=
+                    normalized_match_confidence(&album.artist, &task.target.artist) * 0.30;
                 if let Some(target_album) = task.target.album.as_deref() {
                     confidence += normalized_match_confidence(&album.title, target_album) * 0.20;
                 }
@@ -160,9 +161,11 @@ impl Provider for QobuzProvider {
         };
         self.ensure_session().await?;
         let session_guard = self.session.read().await;
-        let session = session_guard.as_ref().ok_or_else(|| ProviderError::AuthFailed {
-            provider_id: "qobuz".to_string(),
-        })?;
+        let session = session_guard
+            .as_ref()
+            .ok_or_else(|| ProviderError::AuthFailed {
+                provider_id: "qobuz".to_string(),
+            })?;
         let client = &session.client;
         let user_auth_token = &session.user_auth_token;
 
@@ -192,13 +195,14 @@ impl Provider for QobuzProvider {
             });
         }
 
-        let album_body = album_response
-            .json::<Value>()
-            .await
-            .map_err(|error| ProviderError::Network {
-                provider_id: "qobuz".to_string(),
-                message: error.to_string(),
-            })?;
+        let album_body =
+            album_response
+                .json::<Value>()
+                .await
+                .map_err(|error| ProviderError::Network {
+                    provider_id: "qobuz".to_string(),
+                    message: error.to_string(),
+                })?;
         let tracks = album_body
             .pointer("/tracks/items")
             .and_then(Value::as_array)
@@ -210,8 +214,12 @@ impl Provider for QobuzProvider {
         let track_item = tracks
             .iter()
             .find(|item| {
-                normalize(item.get("title").and_then(Value::as_str).unwrap_or_default())
-                    .contains(&normalize(&task.target.title))
+                normalize(
+                    item.get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+                .contains(&normalize(&task.target.title))
             })
             .or_else(|| tracks.first())
             .ok_or_else(|| ProviderError::NotFound {
@@ -407,7 +415,13 @@ fn normalize(value: &str) -> String {
     normalize_match_noise(value)
         .to_ascii_lowercase()
         .chars()
-        .map(|character| if character.is_alphanumeric() { character } else { ' ' })
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -465,7 +479,12 @@ fn sanitize(value: &str) -> String {
 
 fn qobuz_query_candidates(task: &TrackTask) -> Vec<String> {
     let mut queries = Vec::new();
-    if let Some(album) = task.target.album.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(album) = task
+        .target
+        .album
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         queries.push(format!("{} {}", task.target.artist, album));
     }
     queries.push(build_query(

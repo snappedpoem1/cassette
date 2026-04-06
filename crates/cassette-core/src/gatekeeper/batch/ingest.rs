@@ -1,8 +1,8 @@
+use crate::gatekeeper::batch::summary::summarize;
 use crate::gatekeeper::config::GatekeeperConfig;
 use crate::gatekeeper::error::Result;
 use crate::gatekeeper::mod_types::{BatchIngestOutcome, IngressOutcome};
 use crate::gatekeeper::orchestrator::ingest_single_file;
-use crate::gatekeeper::batch::summary::summarize;
 use std::path::PathBuf;
 
 pub async fn ingest_files(

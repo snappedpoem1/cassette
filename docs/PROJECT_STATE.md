@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-05
+Last updated: 2026-04-06
 
 ## Architecture
 
@@ -19,6 +19,8 @@ Last updated: 2026-04-05
 - Library root scanning with recursive audio file discovery
 - Track metadata extraction (artist, album, title, track/disc number, year, duration, sample rate, bit depth, bitrate, format, file size)
 - Cover art path detection
+- Runtime scan metadata now trims empty tag values, falls back to cleaned filename titles, and reuses filename track/disc prefixes when embedded numbers are missing or zero
+- Runtime cover-art detection now accepts a broader deterministic sidecar-art set (`cover/folder/artwork/front/album` across jpg/jpeg/png/webp, case-insensitive) and falls back to an embedded-art cache when no sibling artwork file exists
 - Search across tracks by title/artist/album
 - Play count and skip count tracking
 - Library organization (move files to `Artist/Album/NN-Title` structure)
@@ -36,14 +38,31 @@ Last updated: 2026-04-05
 - Playlist CRUD
 - Now-playing context from Last.fm plus Last.fm recent-scrobble sync into local artist/song/play-history tables
 - Synced/plain lyrics from LRCLIB
+- Runtime now caches synced/plain lyrics in the app DB by normalized artist/title/album identity, treats rows older than 30 days as stale, and refreshes stale/partial rows on demand during now-playing lookups
 
 ### Desktop UX Stabilization (2026-04-05)
 
 - Settings now exposes a persist-loaded-secrets action that writes effective in-memory/env-loaded provider credentials into runtime settings (`persist_effective_config`)
+- Settings now exposes bundled `slskd` runtime status plus refresh/restart/stop controls, and runtime startup will attempt to launch bundled `slskd.exe` before treating Soulseek as unavailable
 - Tools route now includes guided metadata correction via artist/album dropdowns and clearer organize/ingest outcome messaging
 - Duplicates route now supports deterministic sort order plus a `Handle All` action for batch duplicate cleanup
 - Artists route now groups name variants with normalized artist keys to reduce split-folder behavior from punctuation/spelling style drift
 - Spotify extended-history album summary now uses observed distinct track coverage versus local album track count to reduce false `in_library` positives on incomplete local albums
+- Library track inspection now surfaces persisted ISRC, MusicBrainz recording/release/release-group IDs, canonical artist/release IDs, derived edition bucket/markers, and file-path evidence from the active runtime DB
+
+### Music-First System Spine (2026-04-06)
+
+- Home route (`/`) is now the music-first front door with current-playback framing plus a "while you were away" narrative summary derived from recent task outcomes, blocked work, and missing backlog state
+- Deep library browsing moved to `/library`, preserving album/track drilldown and track identity inspection without forcing the old library screen to remain the landing page
+- Artist-first collection browsing remains the default library worldview through `/artists`, now backed by a shared normalization/clustering helper instead of route-local duplicate logic
+- The desktop shell now carries an always-visible bottom status strip with provider/service/queue/scan signals layered above the player bar
+- Downloads is now organized into Missing, In Progress, Blocked, and Completed lanes with request-level review/timeline detail preserved inline
+- Downloads now includes a provider troubleshooting snapshot with down/unknown totals, per-provider health messages, config-aware hints, and last-check visibility for faster local recovery decisions
+- Import now presents one Spotify intake story: streaming-history album backlog and direct desired-track JSON both feed the same identity-first desired-state/control-plane path
+- Trust Ledger v1 now derives plain-language request reason cards from existing acquisition timeline rows, Director terminal history, candidate review evidence, operation events, and gatekeeper audit rows instead of introducing a second persistence layer
+- Downloads request lineage now carries trust summary plus correlated operation-event/gatekeeper evidence context, and Home surfaces recent trust pressure through reason-code strips/distribution summaries
+- Downloads request rows now surface edition-intelligence hints (`musicbrainz_release_group_id`, `edition_policy`) alongside trust/queue state so planner identity choices stay visible after submission
+- Settings now exposes Policy Profiles (`playback_first`, `balanced_auto`, `aggressive_overnight`) and applying a profile hot-reloads Director config in-place with deterministic, logged runtime behavior changes
 
 ### Acquisition Pipeline (Director Engine)
 - Two-pass waterfall orchestration with per-provider semaphores
@@ -60,6 +79,7 @@ Last updated: 2026-04-05
 - Search-result caching in the director waterfall with strategy-aware cache keys and provider-epoch invalidation
 - Concurrent provider health polling with skip-on-down behavior
 - Runtime provider stabilization cools down rate-limited and temporary-outage providers, disables auth-failed providers for the rest of the run, and treats provider-busy as capacity pressure instead of provider-down
+- Runtime policy profiles now tune Director worker concurrency, provider parallelism, retry cadence, timeout/cooldown envelopes, and per-provider concurrency limits deterministically at runtime
 - Broadcast event channels for progress, results, and provider health
 - Deezer full-track acquisition is live-proven on this machine
 - Deezer session caching now uses a recoverable `RwLock<Option<...>>` path instead of permanently caching auth failure
@@ -97,10 +117,15 @@ Current provider-role reset:
 | LRCLIB | Synced/plain lyrics lookup | None |
 | Spotify | History import, search, discography seeds | Optional OAuth |
 
+### Release Automation
+
+- CI workflows include a manual `Release Candidate` lane (`.github/workflows/release-candidate.yml`) that runs the CI gate, optionally runs perf regression gating, builds installers, and uploads bundles with a SHA256 manifest artifact.
+
 Role clarification:
 
 - MusicBrainz is the canonical identity spine.
 - Spotify is the intent/import seed and fallback metadata input in the shared resolver, not canonical truth.
+- Runtime canonical-artist lookup now reuses the same shared normalization spine used by the librarian so `&`/punctuation variants converge more deterministically during track upsert.
 
 ### Data Pipeline
 - Sidecar-owned acquisition requests now persist in `cassette_librarian.db` with request status, task linkage, request signatures, normalized target fields, and event timeline rows
@@ -114,6 +139,7 @@ Role clarification:
 - Resolver regression tests now guard the active album-expansion paths so Tauri queueing, `engine_pipeline_cli --import-spotify-missing`, and `batch_download_cli` cannot silently drift back to ad hoc MB-only resolution
 - Request and task signatures now retain richer source identity (`source_track_id`, `source_album_id`, `source_artist_id`) alongside ISRC, MusicBrainz IDs, and canonical IDs when available
 - Read-only planner commands now exist for pre-acquisition search and rationale: `plan_acquisition`, `get_candidate_set`, and `get_request_rationale`
+- Request trust distribution is queryable through the Tauri command surface (`get_trust_reason_distribution`) for explainability and telemetry views
 - Planner candidate sets now persist into runtime candidate/search tables before byte acquisition starts, and planner runs refresh request-scoped source-alias and identity-evidence rows
 - Planner review mutations now exist in the command surface via `approve_planned_request` and `reject_planned_request`, and those approvals now submit to Director with audit events and pending-task persistence
 - Active queue submissions now use planner-first flow (`plan_acquisition` -> `approve_planned_request`) for song requests and album/artist expansion requests; remaining bypass and operator lanes are still pending cutover
@@ -127,7 +153,7 @@ Role clarification:
 - Provider search outcomes and negative-result memory persist in `director_provider_searches`, `director_provider_attempts`, and `director_provider_memory`
 - Provider search/candidate evidence, per-provider response snapshots, identity evidence, and source aliases now also persist in `provider_search_evidence`, `provider_candidate_evidence`, `provider_response_cache`, `identity_resolution_evidence`, and `source_aliases`
 - Director search now consults persisted provider memory before network search: fresh dead-end memory can skip a provider entirely, and fresh cached candidate payloads can hydrate the in-memory search cache for identical requests
-- Release-group identity and edition-level planning are still not threaded through the active queue/planner path strongly enough to call that layer complete
+- Release-group identity and edition-level planner context now thread through active request signatures and source-alias evidence (`musicbrainz_release_group_id` is part of request signature composition, and `musicbrainz.release_group_id` aliases are persisted for planner/director request boundaries)
 - Runtime `tracks` rows now persist sovereignty/evidence fields (`isrc`, MusicBrainz IDs, canonical artist/release IDs, `quality_tier`, `content_hash`) instead of silently dropping them on upsert
 - Canonical identity persistence now includes `canonical_recordings` in the active runtime DB
 - Sidecar canonical identity persistence now includes `canonical_artists`, `canonical_releases`, and `canonical_recordings` for request-planning ownership
@@ -300,7 +326,7 @@ Latest verification snapshot on 2026-04-03:
 - `./scripts/verify_trust_spine.ps1` completed successfully
 - `cargo tauri build` completed and produced both Windows bundles
 - `cargo run -p cassette --bin db_converge_cli -- --overwrite` produced `cassette_unified.db` with counts: `desired_tracks=4`, `delta_queue=11`, `acquisition_requests=0`
-- Desktop smoke output in this run reported `slskd localhost:5030 = False` (environment-dependent service availability)
+- Desktop smoke now validates the managed `slskd` startup contract through `slskd_runtime_probe_cli`, so verification no longer depends on a raw `localhost:5030` port check by itself
 
 ## Torrent CLI Failure Feedback Loop (2026-04-03)
 
@@ -321,6 +347,9 @@ Skips albums already in `desired_tracks` to avoid duplicates. Respects MusicBrai
 - `cargo test --workspace` is a reliable gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure was isolated to the Tauri lib-test harness missing the desktop manifest; the pure `src-tauri` assertions now live in `src-tauri/tests/pure_logic.rs`.
 - `MetadataRepairOnly` currently depends on `runtime_db_path` and matching local-track identity evidence; requests without that context fail fast with explicit diagnostics
 - Discogs and Last.fm enrichment clients now have live API-backed implementations; runtime now uses Last.fm for now-playing plus explicit history sync, while a full automatic background enrichment queue worker is still pending
+- Artwork hit-rate is stronger for embedded art and common sidecar art names, and tag-writing now falls back to Cover Art Archive front-art for MusicBrainz release IDs when provider art is missing
+- Lyrics are durably cached in the runtime DB with a 30-day stale-on-read refresh policy, but there is still no background prefetch worker
+- Bundled `slskd` lifecycle is now managed by Cassette at startup, and smoke verification now reuses that startup contract through `slskd_runtime_probe_cli`; a fresh desktop-session proof is still useful when verifying app-owned child-process behavior end-to-end
 - Bandcamp source now resolves Bandcamp URLs from desired-track payloads instead of hard-failing as a placeholder resolver
 - Candidate persistence now feeds the Downloads pre-acquisition review panel (timeline plus approve/reject), while exclusion decisions and richer explicit override lanes are still pending
 - Fingerprint accumulation is now bounded and incremental, not a full-library canonical backfill worker; large libraries will converge over repeated syncs rather than one sweep
@@ -425,6 +454,44 @@ Run command: `engine_pipeline_cli --resume --stale-claim-minutes 1 --limit 5 --s
 **Phase 4 — queue closure:**
 - Rows 200-202: `processed_at` stamped, `claimed_at` preserved (audit trail intact)
 
+## Fresh Coordinator Recovery/Resume Proof — 2026-04-06
+
+Run command: `engine_pipeline_cli --resume --limit 1 --skip-fingerprint-backfill --skip-post-sync --skip-organize-subset`
+
+**Pre-proof state (seeded deterministic row):**
+- `desired_tracks`: 1 seeded row (`source_track_id=proof-track-20260406`) mapped to an existing local track identity
+- `delta_queue`: 1 `missing_download` row seeded with stale claim (`claim_run_id=stale-proof-run`, `claimed_at` two hours old, `processed_at NULL`)
+
+**Observed run behavior:**
+- Librarian resume entered queue-only fast path (`files_scanned=0`, `files_upserted=0`)
+- Coordinator reclaimed stale lease: `Reclaimed 1 stale queue claims`
+- Bounded claim and execution: `claimed=1`
+- Director result: `delta-1-belly of the beast` finalized via Deezer
+- Queue closure: seeded row stamped `processed_at=2026-04-06 19:49:54` with `claim_run_id=engine-run-981a1048-48ec-4655-885c-d8e8a7e4b6e4`
+
+**Runtime evidence snapshot:**
+- Sidecar (`cassette_librarian.db`) `delta_queue`: `id=1`, `source_operation_id=proof-recovery-20260406`, `processed_at` set, claim fields retained
+- Runtime (`cassette.db`) `director_task_history`: `task_id=delta-1-belly of the beast`, `disposition=Finalized`, `provider=deezer`, `updated_at=2026-04-06 19:49:54`
+
+## Spotify Ingest Replay Proof (Fixed Sample) — 2026-04-06
+
+Run command: `engine_pipeline_cli --resume --limit 0 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill`
+
+**Proof design:**
+- Seeded two deterministic sidecar cohorts from runtime tracks (`n=50` each):
+    - `spotify_replay_legacy`: minimal identity (`artist_name + track_title`)
+    - `spotify_replay_rich`: richer identity (`artist + album + title + track/disc + duration`)
+
+**Observed reconciliation outcomes:**
+- `spotify_replay_legacy`: `weak_match=50`
+- `spotify_replay_rich`: `strong_match=50`
+
+**Interpretation:**
+- Rich identity fields in the unified ingest path materially improved reconciliation strength on the fixed sample replay.
+
+**Post-proof hygiene:**
+- Seed rows were removed from `desired_tracks`, `reconciliation_results`, and `delta_queue` after evidence capture.
+
 **No re-acquisition of DENIAL IS A RIVER (row 1):**
 - `delta_queue` row 1: `processed_at=2026-03-31 20:35:36` — unchanged
 - `director_task_history`: only one `delta-1-denial is a river` row, disposition=Finalized from original run
@@ -439,13 +506,15 @@ Run command: `engine_pipeline_cli --resume --stale-claim-minutes 1 --limit 5 --s
 
 ## Verification Snapshot
 
-Verified on 2026-04-02:
+Verified on 2026-04-06:
 
-- `cargo check --workspace` passes, with existing dead-code warnings in `src-tauri/src/bin/torrent_album_cli.rs`
+- `cargo check --workspace` passes
 - `cargo test -p cassette-core` passes
 - `cargo test --workspace` passes
-- `npm run build` passes in `ui/` (with existing Svelte accessibility warnings on `src/routes/downloads/+page.svelte`)
+- `npm run build` passes in `ui/`
 - `.\scripts\smoke_desktop.ps1` passes
+- `cargo test -p cassette --test pure_logic -- --nocapture` passes with the music-first home, dedicated library route, status strip, and artist-first copy assertions
+- Runtime metadata hardening now has regression coverage for normalized lyrics-cache lookups, bounded canonical-ID backfill, cleaned filename-title fallback, broader cover-art filename detection, and deterministic Cover Art Archive fallback selection
 - `.\scripts\verify_trust_spine.ps1` exists for the request-contract, audit-trace, core-test, UI-build, and smoke verification pass
 - `src-tauri/tests/pure_logic.rs` now carries the Windows-safe `src-tauri` pure-logic assertions (Spotify import parsing, now-playing parsing, pending recovery planning, and sidecar bootstrap) so the test suite no longer depends on the Tauri lib harness startup path
 - `engine_pipeline_cli` and `tag_rescue_cli` compile and test as part of the workspace
@@ -475,6 +544,7 @@ Verified on 2026-04-02:
 - `get_director_debug_stats` command added: returns pending task count, per-provider success/fail breakdown, and recent task results
 - Downloads UI: Backlog panel with start/stop/limit controls and live progress display; Debug panel with per-provider stats and scrollable recent results list
 - Downloads UI now also exposes recent control-plane requests, per-request timeline events, and request-level candidate/provenance inspection
+- Home + shell UX now expose music-first daily-use surfaces: while-you-were-away summary, artist-first collection entry, and persistent status strip
 - Tauri command surface now includes `create_acquisition_request`, `list_acquisition_requests`, `get_acquisition_request_timeline`, `get_request_candidate_review`, and `get_request_lineage`
 - Audit completeness proof updated: `validation::logging` now includes representative tests for operation-to-gatekeeper correlation, strict full-path lineage filtering, and gatekeeper failure/completion event trails
 - `get_file_lineage` now uses strict full-path matching when a full path is provided (with JSON-escaped path support), preventing basename collisions from polluting audit traces

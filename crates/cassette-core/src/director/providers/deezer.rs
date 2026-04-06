@@ -59,12 +59,13 @@ impl DeezerProvider {
             provider_id: "deezer".to_string(),
             message: format!("auth failed: {error}"),
         })?;
-        let session = deezer_get_user_data(&client)
-            .await
-            .map_err(|message| ProviderError::Other {
-                provider_id: "deezer".to_string(),
-                message: format!("auth failed: {message}"),
-            })?;
+        let session =
+            deezer_get_user_data(&client)
+                .await
+                .map_err(|message| ProviderError::Other {
+                    provider_id: "deezer".to_string(),
+                    message: format!("auth failed: {message}"),
+                })?;
         *guard = Some(DeezerSessionCache {
             client,
             api_token: session.api_token,
@@ -110,7 +111,11 @@ impl Provider for DeezerProvider {
     ) -> Result<Vec<ProviderSearchCandidate>, ProviderError> {
         let session = self.session_snapshot().await?;
 
-        let query = build_query(&task.target.artist, &task.target.title, task.target.album.as_deref());
+        let query = build_query(
+            &task.target.artist,
+            &task.target.title,
+            task.target.album.as_deref(),
+        );
         let response = session
             .client
             .get("https://api.deezer.com/search/track")
@@ -201,7 +206,10 @@ impl Provider for DeezerProvider {
                     artist,
                     title,
                     album,
-                    duration_secs: item.get("duration").and_then(Value::as_u64).map(|value| value as f64),
+                    duration_secs: item
+                        .get("duration")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as f64),
                     extension_hint: Some("flac".to_string()),
                     bitrate_kbps: None,
                     cover_art_url,
@@ -230,13 +238,16 @@ impl Provider for DeezerProvider {
             })?;
 
         // 2. Get encrypted media CDN URL (tries FLAC → 320 → 128)
-        let (media_url, extension) =
-            deezer_get_media_url(&session.client, &session.license_token, &track_data.track_token)
-                .await
-                .map_err(|message| ProviderError::UnsupportedContent {
-                    provider_id: "deezer".to_string(),
-                    message,
-                })?;
+        let (media_url, extension) = deezer_get_media_url(
+            &session.client,
+            &session.license_token,
+            &track_data.track_token,
+        )
+        .await
+        .map_err(|message| ProviderError::UnsupportedContent {
+            provider_id: "deezer".to_string(),
+            message,
+        })?;
 
         // 3. Download encrypted stream
         let response = session
@@ -296,7 +307,13 @@ fn normalize(value: &str) -> String {
     normalize_match_noise(value)
         .to_ascii_lowercase()
         .chars()
-        .map(|character| if character.is_alphanumeric() { character } else { ' ' })
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()

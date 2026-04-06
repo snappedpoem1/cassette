@@ -3,7 +3,9 @@ mod commands;
 mod now_playing;
 mod pending_recovery;
 mod runtime_bootstrap;
+mod slskd_runtime;
 mod spotify_history;
+mod trust_ledger;
 pub mod state;
 
 use state::AppState;
@@ -229,6 +231,7 @@ pub fn run() {
             commands::library::get_album_tracks,
             commands::library::get_artists,
             commands::library::get_track_count,
+            commands::library::get_track_identity_context,
             commands::queue::get_queue,
             commands::queue::clear_queue,
             commands::queue::add_to_queue,
@@ -253,6 +256,7 @@ pub fn run() {
             commands::downloads::cancel_download,
             commands::downloads::build_library_acquisition_queue,
             commands::downloads::start_spotify_missing_batch,
+            commands::downloads::get_missing_spotify_albums,
             commands::downloads::get_download_jobs,
             commands::downloads::search_download_metadata,
             commands::downloads::get_artist_discography,
@@ -265,6 +269,7 @@ pub fn run() {
             commands::downloads::get_acquisition_request_timeline,
             commands::downloads::get_request_candidate_review,
             commands::downloads::get_request_lineage,
+            commands::downloads::get_trust_reason_distribution,
             commands::downloads::start_backlog_run,
             commands::downloads::stop_backlog_run,
             commands::downloads::get_backlog_status,
@@ -286,8 +291,13 @@ pub fn run() {
             commands::import::get_spotify_import_status,
             commands::settings::get_setting,
             commands::settings::set_setting,
+            commands::settings::get_policy_profile,
+            commands::settings::set_policy_profile,
             commands::settings::get_config,
             commands::settings::get_provider_statuses,
+            commands::settings::get_slskd_runtime_status,
+            commands::settings::restart_slskd_runtime,
+            commands::settings::stop_slskd_runtime,
             commands::settings::save_config,
             commands::settings::persist_effective_config,
             commands::organize::organize_library,

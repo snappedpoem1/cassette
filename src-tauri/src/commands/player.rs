@@ -3,7 +3,10 @@ use crate::state::AppState;
 use cassette_core::librarian::enrich::discogs::DiscogsClient;
 use cassette_core::librarian::enrich::lastfm::LastFmClient;
 use cassette_core::models::{NowPlayingContext, PlaybackState};
+use chrono::{Duration, NaiveDateTime, Utc};
 use tauri::State;
+
+const LYRICS_CACHE_TTL_DAYS: i64 = 30;
 
 #[tauri::command]
 pub fn player_load(state: State<'_, AppState>, path: String) {
@@ -89,7 +92,10 @@ pub fn player_next(state: State<'_, AppState>) {
             ps.queue_position = next_pos;
             if was_playing {
                 if let Err(e) = db.increment_play_count(track.id) {
-                    tracing::warn!("[player_next] failed to increment play count for track {}: {e}", track.id);
+                    tracing::warn!(
+                        "[player_next] failed to increment play count for track {}: {e}",
+                        track.id
+                    );
                 }
                 if let Err(e) = db.record_play_history_event(
                     "local_playback",
@@ -99,7 +105,10 @@ pub fn player_next(state: State<'_, AppState>) {
                     None,
                     Some(track.id),
                 ) {
-                    tracing::warn!("[player_next] failed to record play-history event for track {}: {e}", track.id);
+                    tracing::warn!(
+                        "[player_next] failed to record play-history event for track {}: {e}",
+                        track.id
+                    );
                 }
             }
         }
@@ -173,12 +182,29 @@ pub async fn get_now_playing_context(
         )
     };
 
-    let lastfm_client = LastFmClient::new(
-        lastfm_key.or_else(|| std::env::var("LASTFM_API_KEY").ok().filter(|value| !value.trim().is_empty())),
-    );
-    let discogs_client = DiscogsClient::new(
-        discogs_token.or_else(|| std::env::var("DISCOGS_TOKEN").ok().filter(|value| !value.trim().is_empty())),
-    );
+    let cached_lyrics = {
+        let db = state.db.lock().unwrap();
+        db.get_cached_track_lyrics(&artist, &title, album.as_deref())
+            .ok()
+            .flatten()
+    };
+
+    if let Some(cached_lyrics) = cached_lyrics.clone() {
+        ctx.lyrics = cached_lyrics.lyrics;
+        ctx.synced_lyrics = cached_lyrics.synced_lyrics;
+        ctx.lyrics_source = Some(cached_lyrics.source);
+    }
+
+    let lastfm_client = LastFmClient::new(lastfm_key.or_else(|| {
+        std::env::var("LASTFM_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }));
+    let discogs_client = DiscogsClient::new(discogs_token.or_else(|| {
+        std::env::var("DISCOGS_TOKEN")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }));
 
     if let Some(info) = lastfm_client.fetch_artist_context(&client, &artist).await {
         if ctx.artist_summary.is_none() {
@@ -191,7 +217,10 @@ pub async fn get_now_playing_context(
     }
 
     if let Some(ref alb) = album {
-        if let Some(info) = lastfm_client.fetch_album_context(&client, &artist, alb).await {
+        if let Some(info) = lastfm_client
+            .fetch_album_context(&client, &artist, alb)
+            .await
+        {
             if ctx.album_summary.is_none() {
                 ctx.album_summary = info.summary;
             }
@@ -220,17 +249,39 @@ pub async fn get_now_playing_context(
                     parts.push(format!("country: {country}"));
                 }
                 if !parts.is_empty() {
-                    ctx.album_summary = Some(format!("Discogs release metadata ({})", parts.join(" | ")));
+                    ctx.album_summary =
+                        Some(format!("Discogs release metadata ({})", parts.join(" | ")));
                 }
             }
         }
     }
 
-    let lyrics_result = fetch_lrclib_lyrics(&client, &artist, &title, album.as_deref()).await;
-    if let Some(lr) = lyrics_result {
-        ctx.lyrics = lr.plain;
-        ctx.synced_lyrics = lr.synced;
-        ctx.lyrics_source = Some("LRCLIB".into());
+    let needs_lyrics_fetch = cached_lyrics.as_ref().map_or(true, |cached| {
+        lyrics_cache_is_stale(&cached.fetched_at)
+            || cached.lyrics.is_none()
+            || cached.synced_lyrics.is_none()
+    });
+    if needs_lyrics_fetch {
+        let lyrics_result = fetch_lrclib_lyrics(&client, &artist, &title, album.as_deref()).await;
+        if let Some(lr) = lyrics_result {
+            let plain = lr.plain.clone();
+            let synced = lr.synced.clone();
+            {
+                let db = state.db.lock().unwrap();
+                let _ = db.upsert_track_lyrics(
+                    None,
+                    &artist,
+                    &title,
+                    album.as_deref(),
+                    plain.as_deref(),
+                    synced.as_deref(),
+                    "LRCLIB",
+                );
+            }
+            ctx.lyrics = plain.or(ctx.lyrics);
+            ctx.synced_lyrics = synced.or(ctx.synced_lyrics);
+            ctx.lyrics_source = Some("LRCLIB".into());
+        }
     }
 
     Ok(ctx)
@@ -276,7 +327,8 @@ pub async fn sync_lastfm_history(
         .map(|value| value.to_string())
         .or(configured_username)
         .ok_or_else(|| {
-            "Last.fm username missing. Pass username or set lastfm_username / LASTFM_USERNAME.".to_string()
+            "Last.fm username missing. Pass username or set lastfm_username / LASTFM_USERNAME."
+                .to_string()
         })?;
 
     let history_limit = limit.unwrap_or(200).clamp(1, 200);
@@ -370,5 +422,25 @@ fn merge_unique_tags(existing: &mut Vec<String>, incoming: Vec<String>) {
             continue;
         }
         existing.push(normalized.to_string());
+    }
+}
+
+fn lyrics_cache_is_stale(fetched_at: &str) -> bool {
+    let Ok(parsed) = NaiveDateTime::parse_from_str(fetched_at.trim(), "%Y-%m-%d %H:%M:%S") else {
+        return true;
+    };
+    let age = Utc::now().naive_utc() - parsed;
+    age > Duration::days(LYRICS_CACHE_TTL_DAYS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lyrics_cache_is_stale;
+
+    #[test]
+    fn lyrics_cache_ttl_marks_old_rows_as_stale() {
+        assert!(lyrics_cache_is_stale("2024-01-01 00:00:00"));
+        assert!(!lyrics_cache_is_stale("2999-01-01 00:00:00"));
+        assert!(lyrics_cache_is_stale("not-a-datetime"));
     }
 }

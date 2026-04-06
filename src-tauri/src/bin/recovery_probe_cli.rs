@@ -94,15 +94,18 @@ fn seed_probe_db(db_path: &Path, library_root: &Path, staging_root: &Path) -> Re
     db.upsert_director_pending_task(&stale, "Queued")
         .map_err(|error| error.to_string())?;
     std::thread::sleep(Duration::from_secs(1));
-    db.save_director_task_result(&DirectorTaskResult {
-        task_id: stale.task_id.clone(),
-        disposition: FinalizedTrackDisposition::Cancelled,
-        finalized: None,
-        attempts: Vec::new(),
-        error: Some("stale pending row after cancellation".to_string()),
-        candidate_records: Vec::new(),
-        provider_searches: Vec::new(),
-    }, Some(&stale))
+    db.save_director_task_result(
+        &DirectorTaskResult {
+            task_id: stale.task_id.clone(),
+            disposition: FinalizedTrackDisposition::Cancelled,
+            finalized: None,
+            attempts: Vec::new(),
+            error: Some("stale pending row after cancellation".to_string()),
+            candidate_records: Vec::new(),
+            provider_searches: Vec::new(),
+        },
+        Some(&stale),
+    )
     .map_err(|error| error.to_string())?;
 
     Ok(())
@@ -145,7 +148,7 @@ fn build_probe_director(
     Director::new(
         config,
         vec![Arc::new(LocalArchiveProvider::new(vec![
-            staging_root.to_path_buf(),
+            staging_root.to_path_buf()
         ]))],
     )
     .start()
@@ -153,10 +156,8 @@ fn build_probe_director(
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let root = std::env::temp_dir().join(format!(
-        "cassette-recovery-probe-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("cassette-recovery-probe-{}", uuid::Uuid::new_v4()));
     let library_root = root.join("library");
     let staging_root = root.join("staging");
     let db_path = root.join("cassette.db");
@@ -228,7 +229,10 @@ async fn main() -> Result<(), String> {
         )
     })??;
 
-    if !matches!(recovered_result.disposition, FinalizedTrackDisposition::Finalized) {
+    if !matches!(
+        recovered_result.disposition,
+        FinalizedTrackDisposition::Finalized
+    ) {
         return Err(format!(
             "recovered task reached {:?} instead of Finalized",
             recovered_result.disposition

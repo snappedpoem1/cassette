@@ -1,15 +1,23 @@
-use crate::librarian::models::{DeltaActionType, LocalFile, MatchOutcome, NewDeltaQueueItem, NewReconciliationResult, ReconciliationStatus};
+use crate::librarian::models::{
+    DeltaActionType, LocalFile, MatchOutcome, NewDeltaQueueItem, NewReconciliationResult,
+    ReconciliationStatus,
+};
 
 pub fn quality_assessment(file: Option<&LocalFile>) -> Option<String> {
     file.and_then(|f| f.quality_tier.clone())
 }
 
-pub fn classify_delta(outcome: &MatchOutcome, matched_file: Option<&LocalFile>) -> (NewReconciliationResult, NewDeltaQueueItem) {
+pub fn classify_delta(
+    outcome: &MatchOutcome,
+    matched_file: Option<&LocalFile>,
+) -> (NewReconciliationResult, NewDeltaQueueItem) {
     let quality = quality_assessment(matched_file);
 
     let action = match outcome.status {
         ReconciliationStatus::Missing => DeltaActionType::MissingDownload,
-        ReconciliationStatus::WeakMatch | ReconciliationStatus::ManualReview => DeltaActionType::ManualReview,
+        ReconciliationStatus::WeakMatch | ReconciliationStatus::ManualReview => {
+            DeltaActionType::ManualReview
+        }
         ReconciliationStatus::Duplicate => DeltaActionType::DuplicateReview,
         ReconciliationStatus::ExactMatch | ReconciliationStatus::StrongMatch => {
             if quality.as_deref() == Some("upgrade_candidate") {
@@ -44,7 +52,10 @@ pub fn classify_delta(outcome: &MatchOutcome, matched_file: Option<&LocalFile>) 
         action_type: action,
         priority,
         reason: outcome.reason.clone(),
-        target_quality: if matches!(action, DeltaActionType::UpgradeQuality | DeltaActionType::MissingDownload) {
+        target_quality: if matches!(
+            action,
+            DeltaActionType::UpgradeQuality | DeltaActionType::MissingDownload
+        ) {
             Some("lossless_preferred".to_string())
         } else {
             None

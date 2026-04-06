@@ -1,17 +1,18 @@
 use crate::pending_recovery::build_pending_recovery_plan;
 use crate::runtime_bootstrap::open_runtime_and_control_db;
+use crate::slskd_runtime::SlskdRuntimeManager;
 use anyhow::Result;
 use cassette_core::{
     acquisition::{AcquisitionRequest, AcquisitionRequestStatus},
     db::Db,
     director::{
+        models::ProviderHealthState,
         providers::{
             DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
             UsenetProvider, YtDlpProvider,
         },
-        models::ProviderHealthState,
-        Director, DirectorConfig, DirectorEvent, DirectorProgress, DirectorSubmission,
-        DirectorHandle, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy,
+        Director, DirectorConfig, DirectorEvent, DirectorHandle, DirectorProgress,
+        DirectorSubmission, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy,
         TempRecoveryPolicy, TrackTask,
     },
     librarian::db::LibrarianDb,
@@ -25,10 +26,49 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use toml::Table as TomlTable;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
-use tracing::warn;
+use toml::Table as TomlTable;
+use tracing::{info, warn};
+
+const STARTUP_CANONICAL_BACKFILL_LIMIT: usize = 250;
+pub const POLICY_PROFILE_SETTING_KEY: &str = "policy_profile";
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum PolicyProfile {
+    PlaybackFirst,
+    BalancedAuto,
+    AggressiveOvernight,
+}
+
+impl PolicyProfile {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::PlaybackFirst => "playback_first",
+            Self::BalancedAuto => "balanced_auto",
+            Self::AggressiveOvernight => "aggressive_overnight",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PlaybackFirst => "Playback-First",
+            Self::BalancedAuto => "Balanced Auto",
+            Self::AggressiveOvernight => "Aggressive Overnight",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "playback_first" | "playback-first" | "playback" => Some(Self::PlaybackFirst),
+            "balanced_auto" | "balanced-auto" | "balanced" => Some(Self::BalancedAuto),
+            "aggressive_overnight" | "aggressive-overnight" | "aggressive" => {
+                Some(Self::AggressiveOvernight)
+            }
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct BacklogRunStatus {
@@ -50,11 +90,14 @@ pub struct AppState {
     pub download_jobs: Arc<Mutex<HashMap<String, DownloadJob>>>,
     pub cancelled_downloads: Arc<Mutex<HashSet<String>>>,
     pub director_handle: Arc<Mutex<DirectorHandle>>,
-    pub director_submitter: DirectorSubmission,
+    pub director_submitter: Arc<Mutex<DirectorSubmission>>,
     pub download_config: DownloadConfig,
+    pub runtime_db_path: Option<PathBuf>,
     pub http_client: reqwest::Client,
     pub backlog_status: Arc<Mutex<BacklogRunStatus>>,
     pub backlog_cancel: Arc<AtomicBool>,
+    pub slskd_runtime: Arc<Mutex<SlskdRuntimeManager>>,
+    pub app_handle: Option<AppHandle>,
 }
 
 impl AppState {
@@ -69,6 +112,7 @@ impl AppState {
             control_db,
             director_handle,
             download_config,
+            Some(db_path.to_path_buf()),
             app_handle,
         ))
     }
@@ -87,6 +131,7 @@ impl AppState {
             control_db,
             director_handle,
             download_config,
+            Some(db_path.to_path_buf()),
             app_handle,
         ))
     }
@@ -96,8 +141,24 @@ impl AppState {
         control_db: LibrarianDb,
         director_handle: DirectorHandle,
         download_config: DownloadConfig,
+        runtime_db_path: Option<PathBuf>,
         app_handle: Option<AppHandle>,
     ) -> Self {
+        let app_handle_for_state = app_handle.clone();
+        match db.backfill_missing_track_canonical_ids(STARTUP_CANONICAL_BACKFILL_LIMIT) {
+            Ok(updated) if updated > 0 => info!(
+                updated,
+                limit = STARTUP_CANONICAL_BACKFILL_LIMIT,
+                "runtime canonical-id backfill updated tracks during startup"
+            ),
+            Ok(_) => {}
+            Err(error) => warn!(
+                error = %error,
+                limit = STARTUP_CANONICAL_BACKFILL_LIMIT,
+                "runtime canonical-id backfill failed during startup"
+            ),
+        }
+
         let director_submitter = director_handle.submitter.clone();
         let event_rx = director_handle.subscribe();
         let result_rx = director_handle.subscribe_results();
@@ -111,6 +172,22 @@ impl AppState {
                 reqwest::Client::new()
             });
 
+        let mut slskd_runtime = SlskdRuntimeManager::default();
+        let slskd_status = slskd_runtime.ensure_started(app_handle.as_ref(), &db, &download_config);
+        if slskd_status.ready {
+            info!(
+                url = %slskd_status.url,
+                spawned_by_app = slskd_status.spawned_by_app,
+                "slskd runtime ready during startup"
+            );
+        } else {
+            warn!(
+                url = %slskd_status.url,
+                message = %slskd_status.message.unwrap_or_else(|| "slskd unavailable".to_string()),
+                "slskd runtime was not ready during startup"
+            );
+        }
+
         let state = Self {
             db: Arc::new(Mutex::new(db)),
             control_db: Arc::new(control_db),
@@ -119,11 +196,14 @@ impl AppState {
             download_jobs: Arc::new(Mutex::new(HashMap::new())),
             cancelled_downloads: Arc::new(Mutex::new(HashSet::new())),
             director_handle: Arc::new(Mutex::new(director_handle)),
-            director_submitter,
+            director_submitter: Arc::new(Mutex::new(director_submitter)),
             download_config,
+            runtime_db_path,
             http_client,
             backlog_status: Arc::new(Mutex::new(BacklogRunStatus::default())),
             backlog_cancel: Arc::new(AtomicBool::new(false)),
+            slskd_runtime: Arc::new(Mutex::new(slskd_runtime)),
+            app_handle: app_handle_for_state,
         };
 
         spawn_director_event_listener(
@@ -149,7 +229,10 @@ impl AppState {
     }
 
     pub fn persist_pending_task(&self, task: &TrackTask, progress: DirectorProgress) -> Result<()> {
-        let db = self.db.lock().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         db.upsert_director_pending_task(task, director_progress_label(progress))
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         Ok(())
@@ -185,7 +268,7 @@ impl AppState {
             )
             .await;
 
-        match self.director_submitter.submit(task).await {
+        match self.submit_director_task(task).await {
             Ok(()) => {
                 let _ = self
                     .control_db
@@ -216,8 +299,114 @@ impl AppState {
         }
     }
 
+    pub fn current_director_submitter(&self) -> Result<DirectorSubmission> {
+        self.director_submitter
+            .lock()
+            .map(|submitter| submitter.clone())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+
+    pub async fn submit_director_task(&self, task: TrackTask) -> Result<()> {
+        let submitter = self.current_director_submitter()?;
+        submitter
+            .submit(task)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+
+    pub fn get_policy_profile(&self) -> PolicyProfile {
+        let Ok(db) = self.db.lock() else {
+            return PolicyProfile::BalancedAuto;
+        };
+        resolve_policy_profile(&db)
+    }
+
+    pub fn apply_policy_profile(&self, profile: PolicyProfile) -> Result<()> {
+        let profile_id = profile.id().to_string();
+
+        let old_handle = {
+            let db = self
+                .db
+                .lock()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let _ = db.set_setting(POLICY_PROFILE_SETTING_KEY, &profile_id);
+            let new_handle = build_director(
+                &db,
+                &self.download_config,
+                self.runtime_db_path.clone(),
+            );
+            let new_submitter = new_handle.submitter.clone();
+            drop(db);
+
+            let old_handle = {
+                let mut handle = self
+                    .director_handle
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                std::mem::replace(&mut *handle, new_handle)
+            };
+
+            {
+                let mut submitter = self
+                    .director_submitter
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                *submitter = new_submitter.clone();
+            }
+
+            let (event_rx, result_rx, provider_health_rx) = {
+                let handle = self
+                    .director_handle
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                (
+                    handle.subscribe(),
+                    handle.subscribe_results(),
+                    handle.subscribe_health(),
+                )
+            };
+
+            spawn_director_event_listener(
+                self.app_handle.clone(),
+                Arc::clone(&self.db),
+                Arc::clone(&self.control_db),
+                Arc::clone(&self.download_jobs),
+                Arc::clone(&self.cancelled_downloads),
+                event_rx,
+            );
+            spawn_director_result_listener(
+                self.app_handle.clone(),
+                Arc::clone(&self.db),
+                Arc::clone(&self.control_db),
+                Arc::clone(&self.download_jobs),
+                Arc::clone(&self.cancelled_downloads),
+                result_rx,
+            );
+            spawn_director_health_listener(provider_health_rx, self.app_handle.clone());
+
+            old_handle
+        };
+
+        info!(
+            policy_profile = %profile.id(),
+            policy_label = %profile.label(),
+            "applied runtime policy profile and hot-reloaded director"
+        );
+
+        tokio::spawn(async move {
+            if let Err(error) = old_handle.shutdown().await {
+                warn!(error = %error, "failed to shut down previous director handle after profile update");
+            }
+        });
+
+        Ok(())
+    }
+
     pub fn delete_pending_task(&self, task_id: &str) -> Result<()> {
-        let db = self.db.lock().map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         db.delete_director_pending_task(task_id)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         Ok(())
@@ -299,7 +488,13 @@ impl AppState {
             }
         }
 
-        let submitter = self.director_submitter.clone();
+        let submitter = match self.current_director_submitter() {
+            Ok(submitter) => submitter,
+            Err(error) => {
+                warn!(error = %error, "failed to clone director submitter for pending task replay");
+                return;
+            }
+        };
         tokio::spawn(async move {
             for pending_task in recovery_plan.resumable_tasks {
                 let task_id = pending_task.task.task_id.clone();
@@ -360,9 +555,10 @@ pub(crate) fn build_runtime_provider_stack(
     let ytdlp_binary = read_setting(db, "ytdlp_path")
         .or_else(|| download_config.ytdlp_path.clone())
         .unwrap_or_else(|| "yt-dlp".to_string());
-    let sevenzip_binary = read_setting(db, "sevenzip_path").or_else(|| download_config.sevenzip_path.clone());
+    let sevenzip_binary =
+        read_setting(db, "sevenzip_path").or_else(|| download_config.sevenzip_path.clone());
 
-    let config = DirectorConfig {
+    let mut config = DirectorConfig {
         library_root: PathBuf::from(&library_root),
         temp_root: PathBuf::from(&staging_root).join(".director-temp"),
         runtime_db_path,
@@ -421,6 +617,9 @@ pub(crate) fn build_runtime_provider_stack(
         ..DirectorConfig::default()
     };
 
+    let policy_profile = resolve_policy_profile(db);
+    apply_policy_profile_to_director_config(&mut config, policy_profile);
+
     let mut providers: Vec<Arc<dyn cassette_core::director::Provider>> = vec![
         Arc::new(QobuzProvider::new(remote_provider_config.clone())),
         Arc::new(DeezerProvider::new(remote_provider_config.clone())),
@@ -464,15 +663,101 @@ pub(crate) fn build_runtime_provider_stack(
         .or_else(|| download_config.jackett_api_key.clone())
         .filter(|k| !k.trim().is_empty());
     if let (Some(jurl), Some(jkey), Some(ref rdkey)) = (jackett_url, jackett_api_key, &rd_key) {
-        providers.push(Arc::new(cassette_core::director::providers::JackettProvider::new(
-            jurl,
-            jkey,
-            rdkey.clone(),
-            sevenzip_binary,
-        )));
+        providers.push(Arc::new(
+            cassette_core::director::providers::JackettProvider::new(
+                jurl,
+                jkey,
+                rdkey.clone(),
+                sevenzip_binary,
+            ),
+        ));
     }
 
+    apply_policy_profile_to_provider_policies(&mut config.provider_policies, policy_profile);
+
+    info!(
+        policy_profile = %policy_profile.id(),
+        policy_label = %policy_profile.label(),
+        worker_concurrency = config.worker_concurrency,
+        max_concurrent_downloads = config.max_concurrent_downloads,
+        parallel_provider_count = config.parallel_provider_count,
+        retry_attempts = config.retry_policy.max_attempts_per_provider,
+        "resolved runtime policy profile for director"
+    );
+
     (config, providers)
+}
+
+fn resolve_policy_profile(db: &Db) -> PolicyProfile {
+    read_setting(db, POLICY_PROFILE_SETTING_KEY)
+        .as_deref()
+        .and_then(PolicyProfile::parse)
+        .unwrap_or(PolicyProfile::BalancedAuto)
+}
+
+fn apply_policy_profile_to_director_config(config: &mut DirectorConfig, profile: PolicyProfile) {
+    match profile {
+        PolicyProfile::PlaybackFirst => {
+            config.worker_concurrency = 6;
+            config.parallel_provider_count = 2;
+            config.max_concurrent_downloads = 8;
+            config.retry_policy.max_attempts_per_provider = 1;
+            config.retry_policy.base_backoff_millis = 1_000;
+            config.provider_timeout_secs = 240;
+            config.provider_health_interval_secs = 30;
+            config.provider_busy_cooldown_secs = 30;
+            config.provider_temp_outage_cooldown_secs = 180;
+            config.provider_rate_limit_cooldown_secs = 360;
+            config.validation_failure_bail_threshold = 2;
+            config.search_cache_ttl_secs = 45 * 60;
+        }
+        PolicyProfile::BalancedAuto => {
+            // Keep the balanced defaults declared by the runtime stack.
+        }
+        PolicyProfile::AggressiveOvernight => {
+            config.worker_concurrency = 16;
+            config.parallel_provider_count = 4;
+            config.max_concurrent_downloads = 24;
+            config.retry_policy.max_attempts_per_provider = 3;
+            config.retry_policy.base_backoff_millis = 500;
+            config.provider_timeout_secs = 420;
+            config.provider_health_interval_secs = 12;
+            config.provider_busy_cooldown_secs = 10;
+            config.provider_temp_outage_cooldown_secs = 90;
+            config.provider_rate_limit_cooldown_secs = 180;
+            config.validation_failure_bail_threshold = 4;
+            config.search_cache_ttl_secs = 20 * 60;
+            config.search_cache_capacity = 10_000;
+        }
+    }
+}
+
+fn apply_policy_profile_to_provider_policies(
+    policies: &mut [ProviderPolicy],
+    profile: PolicyProfile,
+) {
+    for policy in policies {
+        policy.max_concurrency = match profile {
+            PolicyProfile::PlaybackFirst => match policy.provider_id.as_str() {
+                "qobuz" | "deezer" | "local_archive" | "yt_dlp" | "jackett" | "real_debrid" => {
+                    policy.max_concurrency.min(2).max(1)
+                }
+                "slskd" | "usenet" => 1,
+                _ => policy.max_concurrency.max(1),
+            },
+            PolicyProfile::BalancedAuto => policy.max_concurrency.max(1),
+            PolicyProfile::AggressiveOvernight => match policy.provider_id.as_str() {
+                "qobuz" => policy.max_concurrency.max(3),
+                "deezer" => policy.max_concurrency.max(6),
+                "local_archive" => policy.max_concurrency.max(4),
+                "yt_dlp" => policy.max_concurrency.max(3),
+                "jackett" | "real_debrid" => policy.max_concurrency.max(5),
+                "slskd" => policy.max_concurrency.max(3),
+                "usenet" => policy.max_concurrency.max(2),
+                _ => policy.max_concurrency.max(1),
+            },
+        };
+    }
 }
 
 fn build_director(
@@ -486,7 +771,8 @@ fn build_director(
 
 fn load_remote_provider_config(db: &Db, download_config: &DownloadConfig) -> RemoteProviderConfig {
     RemoteProviderConfig {
-        qobuz_email: read_setting(db, "qobuz_email").or_else(|| download_config.qobuz_email.clone()),
+        qobuz_email: read_setting(db, "qobuz_email")
+            .or_else(|| download_config.qobuz_email.clone()),
         qobuz_password: read_setting(db, "qobuz_password")
             .or_else(|| download_config.qobuz_password.clone()),
         qobuz_password_hash: read_setting(db, "qobuz_password_hash"),
@@ -607,15 +893,17 @@ fn spawn_director_result_listener(
             }
 
             if let Ok(db) = db.lock() {
-                let request = db
-                    .get_pending_director_task(&result.task_id)
-                    .ok()
-                    .flatten();
-                let _ = db.save_director_task_result(&result, request.as_ref().map(|task| &task.task));
+                let request = db.get_pending_director_task(&result.task_id).ok().flatten();
+                let _ =
+                    db.save_director_task_result(&result, request.as_ref().map(|task| &task.task));
                 let _ = db.delete_director_pending_task(&result.task_id);
                 if let Some(finalized) = &result.finalized {
-                    if let Ok(mut track) = cassette_core::library::read_track_metadata(&finalized.path) {
-                        cassette_core::library::enrich_track_with_director_result(&mut track, &result);
+                    if let Ok(mut track) =
+                        cassette_core::library::read_track_metadata(&finalized.path)
+                    {
+                        cassette_core::library::enrich_track_with_director_result(
+                            &mut track, &result,
+                        );
                         let _ = db.upsert_track(&track);
                     }
                 }
@@ -717,7 +1005,8 @@ fn bootstrap_download_config(db: &Db) -> DownloadConfig {
         config.library_base = detect_library_base().unwrap_or_else(|| "A:\\Music".to_string());
     }
     if config.staging_folder.trim().is_empty() {
-        config.staging_folder = detect_staging_folder().unwrap_or_else(|| "A:\\Staging".to_string());
+        config.staging_folder =
+            detect_staging_folder().unwrap_or_else(|| "A:\\Staging".to_string());
     }
     if config.slskd_url.is_none() {
         config.slskd_url = Some("http://localhost:5030".to_string());
@@ -807,10 +1096,7 @@ fn detect_library_base() -> Option<String> {
     first_existing_path(
         env_value
             .into_iter()
-            .chain([
-                "A:\\music".to_string(),
-                "A:\\Music".to_string(),
-            ])
+            .chain(["A:\\music".to_string(), "A:\\Music".to_string()])
             .collect::<Vec<_>>(),
     )
 }
@@ -820,16 +1106,15 @@ fn detect_staging_folder() -> Option<String> {
     first_existing_path(
         env_value
             .into_iter()
-            .chain([
-                "A:\\Staging".to_string(),
-                "A:\\staging".to_string(),
-            ])
+            .chain(["A:\\Staging".to_string(), "A:\\staging".to_string()])
             .collect::<Vec<_>>(),
     )
 }
 
 fn first_existing_path(candidates: Vec<String>) -> Option<String> {
-    candidates.into_iter().find(|candidate| Path::new(candidate).exists())
+    candidates
+        .into_iter()
+        .find(|candidate| Path::new(candidate).exists())
 }
 
 #[derive(Default)]
@@ -846,13 +1131,18 @@ fn load_streamrip_config() -> StreamripConfig {
         return StreamripConfig::default();
     };
 
-    let path = PathBuf::from(app_data).join("streamrip").join("config.toml");
+    let path = PathBuf::from(app_data)
+        .join("streamrip")
+        .join("config.toml");
     let Ok(contents) = fs::read_to_string(&path) else {
         return StreamripConfig::default();
     };
 
     let Ok(doc) = contents.parse::<TomlTable>() else {
-        tracing::warn!("streamrip config.toml could not be parsed as TOML: {}", path.display());
+        tracing::warn!(
+            "streamrip config.toml could not be parsed as TOML: {}",
+            path.display()
+        );
         return StreamripConfig::default();
     };
 
@@ -861,8 +1151,16 @@ fn load_streamrip_config() -> StreamripConfig {
     };
     let toml_arr_csv = |section: &str, key: &str| -> Option<String> {
         let arr = doc.get(section)?.get(key)?.as_array()?;
-        let csv = arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(",");
-        if csv.is_empty() { None } else { Some(csv) }
+        let csv = arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        if csv.is_empty() {
+            None
+        } else {
+            Some(csv)
+        }
     };
 
     StreamripConfig {
@@ -885,7 +1183,9 @@ fn load_slskd_config() -> SlskdConfig {
         return SlskdConfig::default();
     };
 
-    let path = PathBuf::from(local_app_data).join("slskd").join("slskd.yml");
+    let path = PathBuf::from(local_app_data)
+        .join("slskd")
+        .join("slskd.yml");
     let Ok(contents) = fs::read_to_string(path) else {
         return SlskdConfig::default();
     };
@@ -900,9 +1200,13 @@ fn read_yaml_value(contents: &str, key: &str) -> Option<String> {
     contents.lines().find_map(|line| {
         let trimmed = line.trim();
         let prefix = format!("{key}:");
-        trimmed
-            .strip_prefix(&prefix)
-            .map(|value| value.trim().trim_matches('"').trim_matches('\'').to_string())
+        trimmed.strip_prefix(&prefix).map(|value| {
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
     })
 }
 

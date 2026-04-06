@@ -1,10 +1,10 @@
+use crate::librarian::import::spotify::parse_spotify_payload;
 use crate::validation::error::{Result, ValidationError};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashSet;
 use std::path::Path;
-use crate::librarian::import::spotify::parse_spotify_payload;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportSummary {
@@ -112,12 +112,11 @@ pub async fn import_spotify_export(
         imported += 1;
     }
 
-    let db_total_spotify_tracks = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM desired_tracks WHERE source_name = ?1",
-    )
-    .bind(source_name)
-    .fetch_one(db_pool)
-    .await? as usize;
+    let db_total_spotify_tracks =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM desired_tracks WHERE source_name = ?1")
+            .bind(source_name)
+            .fetch_one(db_pool)
+            .await? as usize;
 
     Ok(ImportSummary {
         total_input: tracks.len(),
@@ -214,9 +213,11 @@ async fn ensure_desired_tracks_table(db_pool: &sqlx::SqlitePool) -> Result<()> {
             .await;
     }
     if !has_column("imported_at") {
-        let _ = sqlx::query("ALTER TABLE desired_tracks ADD COLUMN imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-            .execute(db_pool)
-            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE desired_tracks ADD COLUMN imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        )
+        .execute(db_pool)
+        .await;
     }
 
     Ok(())

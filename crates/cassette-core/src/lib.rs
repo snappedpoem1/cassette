@@ -24,20 +24,21 @@
 //! - `metadata` - supporting metadata lookups and tag-fix flows
 //!
 pub mod acquisition;
+pub mod custodian;
 pub mod db;
 pub mod director;
 /// Compatibility-only provider settings/config surface.
 /// Runtime acquisition ownership lives under `director/providers/`.
 pub mod downloader;
-pub mod provider_settings;
-pub mod custodian;
 pub mod gatekeeper;
+pub mod identity;
 pub mod librarian;
 pub mod library;
 pub mod metadata;
 pub mod models;
 pub mod orchestrator;
 pub mod player;
+pub mod provider_settings;
 pub mod sources;
 pub mod validation;
 

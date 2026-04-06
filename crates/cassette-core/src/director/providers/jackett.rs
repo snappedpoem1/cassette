@@ -75,12 +75,14 @@ impl JackettProvider {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
-        let response = client.get(&url).send().await.map_err(|error| {
-            ProviderError::Network {
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|error| ProviderError::Network {
                 provider_id: PROVIDER_ID.to_string(),
                 message: format!("Jackett search failed: {error}"),
-            }
-        })?;
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -95,10 +97,13 @@ impl JackettProvider {
             });
         }
 
-        let text = response.text().await.map_err(|error| ProviderError::Network {
-            provider_id: PROVIDER_ID.to_string(),
-            message: format!("Jackett body read failed: {error}"),
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|error| ProviderError::Network {
+                provider_id: PROVIDER_ID.to_string(),
+                message: format!("Jackett body read failed: {error}"),
+            })?;
 
         Ok(parse_torznab_results(&text, artist, album))
     }
@@ -268,9 +273,7 @@ impl JackettProvider {
                     } else {
                         ProviderError::Other {
                             provider_id: PROVIDER_ID.to_string(),
-                            message: format!(
-                                "No torrent ID in addMagnet response: {add_response}"
-                            ),
+                            message: format!("No torrent ID in addMagnet response: {add_response}"),
                         }
                     }
                 })?
@@ -324,8 +327,7 @@ impl JackettProvider {
                 }
                 _ => {
                     if attempt % 12 == 0 {
-                        let progress =
-                            info.get("progress").and_then(Value::as_f64).unwrap_or(0.0);
+                        let progress = info.get("progress").and_then(Value::as_f64).unwrap_or(0.0);
                         info!(
                             torrent_id = %torrent_id,
                             status = %status,
@@ -590,10 +592,8 @@ impl Provider for JackettProvider {
         let cached = self.check_instant_availability(&hashes).await;
         if !cached.is_empty() {
             top.sort_by(|a, b| {
-                let a_hit = Self::magnet_hash(&a.1.magnet)
-                    .map_or(false, |h| cached.contains(&h));
-                let b_hit = Self::magnet_hash(&b.1.magnet)
-                    .map_or(false, |h| cached.contains(&h));
+                let a_hit = Self::magnet_hash(&a.1.magnet).map_or(false, |h| cached.contains(&h));
+                let b_hit = Self::magnet_hash(&b.1.magnet).map_or(false, |h| cached.contains(&h));
                 match (b_hit, a_hit) {
                     (true, false) => std::cmp::Ordering::Greater,
                     (false, true) => std::cmp::Ordering::Less,
@@ -631,7 +631,10 @@ impl Provider for JackettProvider {
 
         let hash_opt = Self::magnet_hash(magnet);
         let is_cached = if let Some(ref hash) = hash_opt {
-            !self.check_instant_availability(&[hash.clone()]).await.is_empty()
+            !self
+                .check_instant_availability(&[hash.clone()])
+                .await
+                .is_empty()
         } else {
             false
         };

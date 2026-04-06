@@ -15,9 +15,13 @@ impl SourceProvider for BandcampSource {
         extract_bandcamp_url(track).is_some()
     }
 
-    async fn resolve_download_url(&self, track: &DesiredTrack) -> Result<ResolvedTrack, SourceError> {
-        let url = extract_bandcamp_url(track)
-            .ok_or_else(|| SourceError::NotAvailable("No Bandcamp URL in desired payload".to_string()))?;
+    async fn resolve_download_url(
+        &self,
+        track: &DesiredTrack,
+    ) -> Result<ResolvedTrack, SourceError> {
+        let url = extract_bandcamp_url(track).ok_or_else(|| {
+            SourceError::NotAvailable("No Bandcamp URL in desired payload".to_string())
+        })?;
 
         Ok(ResolvedTrack {
             download_url: url.clone(),

@@ -106,7 +106,9 @@ fn main() -> Result<(), String> {
                         let elapsed = start.elapsed().as_secs_f64();
                         let rate = done as f64 / elapsed;
                         let eta = (total - done) as f64 / rate;
-                        eprint!("\r  reading tags: {done}/{total} ({rate:.0}/s, ~{eta:.0}s left)   ");
+                        eprint!(
+                            "\r  reading tags: {done}/{total} ({rate:.0}/s, ~{eta:.0}s left)   "
+                        );
                     }
                     Some(result)
                 })
@@ -143,7 +145,11 @@ fn main() -> Result<(), String> {
 
     // Step 2: get all tracks and run organize
     let tracks = db.get_all_tracks_unfiltered().map_err(|e| e.to_string())?;
-    println!("Organizing {} tracks (dry_run={})...\n", tracks.len(), !live);
+    println!(
+        "Organizing {} tracks (dry_run={})...\n",
+        tracks.len(),
+        !live
+    );
 
     let result = organizer::organize_tracks(&library_base, &tracks, !live);
 

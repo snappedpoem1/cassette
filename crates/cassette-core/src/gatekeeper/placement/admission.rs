@@ -1,6 +1,8 @@
 use crate::gatekeeper::config::GatekeeperConfig;
 use crate::gatekeeper::error::Result;
-use crate::gatekeeper::mod_types::{AdmissionDecision, DuplicatePolicyOutcome, QuarantineReason, QualityAssessment};
+use crate::gatekeeper::mod_types::{
+    AdmissionDecision, DuplicatePolicyOutcome, QualityAssessment, QuarantineReason,
+};
 use crate::gatekeeper::placement::collision::detect_duplicates;
 use crate::librarian::models::DesiredTrack;
 use std::path::{Path, PathBuf};
@@ -46,7 +48,11 @@ pub async fn decide_and_place(
                 ));
             }
             DuplicatePolicyOutcome::ManualReview | DuplicatePolicyOutcome::KeepExisting => {
-                let qpath = build_quarantine_path(source_path, QuarantineReason::DuplicateDetected, config)?;
+                let qpath = build_quarantine_path(
+                    source_path,
+                    QuarantineReason::DuplicateDetected,
+                    config,
+                )?;
                 copy_to_path(source_path, &qpath).await?;
                 let decision = AdmissionDecision::Quarantined {
                     reason: QuarantineReason::DuplicateDetected,
@@ -133,10 +139,18 @@ fn build_canonical_path(
         format!("{}.{}", title, ext)
     };
 
-    Ok(config.canonical_library_root.join(artist).join(album).join(file_name))
+    Ok(config
+        .canonical_library_root
+        .join(artist)
+        .join(album)
+        .join(file_name))
 }
 
-fn build_quarantine_path(source_path: &Path, reason: QuarantineReason, config: &GatekeeperConfig) -> Result<PathBuf> {
+fn build_quarantine_path(
+    source_path: &Path,
+    reason: QuarantineReason,
+    config: &GatekeeperConfig,
+) -> Result<PathBuf> {
     let name = source_path
         .file_name()
         .and_then(|x| x.to_str())

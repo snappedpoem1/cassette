@@ -110,7 +110,10 @@ impl TempManager {
                 Ok(bytes) => serde_json::from_slice::<TempMarker>(&bytes).ok(),
                 Err(_) => None,
             };
-            let is_stale = marker.as_ref().map(|value| value.created_at < cutoff).unwrap_or(true);
+            let is_stale = marker
+                .as_ref()
+                .map(|value| value.created_at < cutoff)
+                .unwrap_or(true);
             if !is_stale {
                 continue;
             }

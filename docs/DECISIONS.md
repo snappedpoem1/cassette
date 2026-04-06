@@ -2,7 +2,27 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-04-03
+**Last Updated**: 2026-04-06
+
+---
+
+## Decision 0: Personal-Use Scope, Not Productization
+
+**Status**: approved (confirmed 2026-04-06)  
+**Rationale**:
+
+- Cassette is a single-owner system built for personal workflows and trust.
+- Project language that sounds like product release planning must be interpreted as personal readiness/reliability gates.
+- This keeps implementation and documentation focused on utility, reversibility, auditability, and maintainability rather than commercialization narratives.
+
+**Tradeoffs**:
+
+- Some common engineering shorthand (for example, "shipping blocker") can read as product-centric unless clarified.
+- Documentation discipline is required to keep this framing explicit.
+
+**Revisit Condition**:
+
+- Only if project ownership and intended usage model materially change.
 
 ---
 
@@ -239,11 +259,53 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 **Revisit Condition**:
 
-- Only if the system moves away from single-machine SQLite control-plane assumptions
+---
+
+## Decision 13: Trust Ledger v1 Derives Reason Codes From Existing Evidence Tables
+
+**Status**: approved (applied 2026-04-06)  
+**Rationale**:
+
+- Cassette already persisted the core evidence needed for trust reconstruction across `acquisition_request_events`, `director_task_history`, candidate review rows, `operation_events`, and `gatekeeper_audit_log`.
+- Adding a second trust-ledger storage table this early would duplicate truth and create drift risk.
+- Deriving normalized reason codes at read time keeps Trust Ledger v1 reversible, auditable, and small enough to land without blocking Stage A momentum.
+
+**Tradeoffs**:
+
+- Reason codes are only as good as the normalization layer, so vocabulary drift must be tested.
+- Some request-list views use lightweight derivation and therefore show a thinner evidence picture than full lineage views.
+
+**Revisit Condition**:
+
+- Revisit if Trust Ledger queries become too expensive, if planner/runtime/gatekeeper vocabularies diverge beyond easy normalization, or if Stage B dead-letter workflows need persisted trust snapshots for offline replay.
+
+- If a stronger durable work bus supersedes queue-lease semantics while preserving auditability.
 
 ---
 
-## Decision 13: Organizer Safety Is Enforced Before Live Mutation
+## Decision 13: Contract-First Music System Planning
+
+**Status**: approved (confirmed 2026-04-06)  
+**Rationale**:
+
+- Feature-only roadmaps were insufficient to encode the true product intent.
+- Cassette now uses two explicit planning contracts:
+  - Operating Contract (autonomy, persistence, safe aggression, in-app service ownership, explainability)
+  - Experience Contract (music-first calm shell, artist-first worldview, collection-intelligence center, non-intrusive depth)
+- These contracts reduce scope drift and force UX/core cohesion.
+
+**Tradeoffs**:
+
+- Slightly more planning overhead before implementation.
+- Requires docs and backlog discipline to map tasks to contract clauses.
+
+**Revisit Condition**:
+
+- If user priorities materially shift away from autonomy-first, artist-first, and music-first system behavior.
+
+---
+
+## Decision 14: Organizer Safety Is Enforced Before Live Mutation
 
 **Status**: approved (applied 2026-03-30)  
 **Rationale**:
@@ -263,7 +325,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 14: `director/providers/` Is The Canonical Runtime Downloader Path
+## Decision 15: `director/providers/` Is The Canonical Runtime Downloader Path
 
 **Status**: approved (applied 2026-03-30)  
 **Rationale**:
@@ -283,7 +345,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 15: Sidecar Scan Progress Must Be Durable And Cheap To Resume
+## Decision 16: Sidecar Scan Progress Must Be Durable And Cheap To Resume
 
 **Status**: approved (applied 2026-03-30)
 **Rationale**:
@@ -303,7 +365,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 16: Startup Recovery Must Prefer Newer Terminal History Over Stale Pending Rows
+## Decision 17: Startup Recovery Must Prefer Newer Terminal History Over Stale Pending Rows
 
 **Status**: approved (applied 2026-03-28)
 **Rationale**:
@@ -326,7 +388,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 17: Terminal Director History Must Preserve The Original Request Payload
+## Decision 18: Terminal Director History Must Preserve The Original Request Payload
 
 **Status**: approved (applied 2026-03-28)
 **Rationale**:
@@ -349,7 +411,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 18: Active Runtime Provenance Should Converge On A Request-Signature Spine
+## Decision 19: Active Runtime Provenance Should Converge On A Request-Signature Spine
 
 **Status**: approved (applied 2026-03-28)
 **Rationale**:
@@ -372,7 +434,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 19: Useful Provider Evidence Is Retained Even When The Immediate Task Does Not Need It
+## Decision 20: Useful Provider Evidence Is Retained Even When The Immediate Task Does Not Need It
 
 **Status**: approved (applied 2026-04-02)
 **Rationale**:
@@ -395,7 +457,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 20: Organizer Moves Must Converge App And Sidecar Path Truth Together
+## Decision 21: Organizer Moves Must Converge App And Sidecar Path Truth Together
 
 **Status**: approved (applied 2026-04-02)
 **Rationale**:
@@ -415,7 +477,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 21: Persisted Provider Memory Must Act As A Runtime Control Plane, Not A Write-Only Audit Trail
+## Decision 22: Persisted Provider Memory Must Act As A Runtime Control Plane, Not A Write-Only Audit Trail
 
 **Status**: approved (applied 2026-04-02)
 **Rationale**:
@@ -436,7 +498,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 22: Fingerprint Evidence Must Accumulate In `local_files` Through Bounded Backfill
+## Decision 23: Fingerprint Evidence Must Accumulate In `local_files` Through Bounded Backfill
 
 **Status**: approved (applied 2026-04-02)
 **Rationale**:
@@ -457,7 +519,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 23: The Sidecar Owns Acquisition Request Lifecycle Before Any Physical DB Merge
+## Decision 24: The Sidecar Owns Acquisition Request Lifecycle Before Any Physical DB Merge
 
 **Status**: approved (applied 2026-04-02)
 **Rationale**:
@@ -478,7 +540,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 24: Windows Workspace Tests Must Not Depend On The Tauri Lib Harness
+## Decision 25: Windows Workspace Tests Must Not Depend On The Tauri Lib Harness
 
 **Status**: approved (applied 2026-04-02)
 **Rationale**:
@@ -498,7 +560,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 25: Jackett Is The Torrent Search Owner; Real-Debrid Is The Resolver
+## Decision 26: Jackett Is The Torrent Search Owner; Real-Debrid Is The Resolver
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -519,7 +581,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 26: Torrent CLI Failures Feed Back Into The Coordinator Via The Sidecar
+## Decision 27: Torrent CLI Failures Feed Back Into The Coordinator Via The Sidecar
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -540,7 +602,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 27: `default-run = "cassette"` Is Required For Tauri Build
+## Decision 28: `default-run = "cassette"` Is Required For Tauri Build
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -559,7 +621,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 28: Cassette Is Identity-First, Not A Generic Downloader Bundle
+## Decision 29: Cassette Is Identity-First, Not A Generic Downloader Bundle
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -580,7 +642,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 29: Keep The Dual-Store Runtime Shape Intentionally
+## Decision 30: Keep The Dual-Store Runtime Shape Intentionally
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -600,7 +662,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 30: Planner Surface Ships Read-Only Before Approval Mutations
+## Decision 31: Planner Surface Ships Read-Only Before Approval Mutations
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -620,7 +682,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
-## Decision 31: Bypass Lanes Are Temporary Operator Debt, Not Product Architecture
+## Decision 32: Bypass Lanes Are Temporary Operator Debt, Not Product Architecture
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -636,11 +698,31 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 **Revisit Condition**:
 
+---
+
+## Decision 33: Keep Bandcamp In Resolver-Only Scope For Now
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Current runtime behavior already supports Bandcamp URLs provided in request payloads, which closes the immediate hard-fail gap without introducing a second acquisition owner.
+- Expanding Bandcamp to a full search/acquire provider now would dilute the identity-first convergence focus and increase maintenance surface while higher-priority planner/identity work remains open.
+- Resolver-only scope keeps ownership clear: Bandcamp contributes payload URL resolution, while canonical acquisition ownership stays with the active provider waterfall.
+
+**Tradeoffs**:
+
+- Bandcamp content discovery is still dependent on payload-supplied URLs rather than first-class search coverage.
+- Users do not yet get Bandcamp as an equivalent search lane beside Qobuz/Deezer/Jackett/Usenet flows.
+
+**Revisit Condition**:
+
+- Revisit only after planner-stage cutover and release-group identity threading are complete, and only if a concrete usage need shows resolver-only scope is insufficient.
+
 - Once planner-backed submission and review are the default UI/runtime path and the remaining bypass commands are either demoted or retired.
 
 ---
 
-## Decision 32: Album/Artist Projection IDs Must Be Deterministic Across Restarts
+## Decision 33: Album/Artist Projection IDs Must Be Deterministic Across Restarts
 
 **Status**: approved (applied 2026-04-03)
 **Rationale**:
@@ -658,6 +740,147 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Revisit Condition**:
 
 - If album/release entities receive first-class persisted IDs in the canonical schema, migrate projection surfaces to those authoritative keys
+
+---
+
+## Decision 34: Runtime Lyrics Should Cache By Normalized Track Identity
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Lyrics were previously fetched ad hoc from LRCLIB during now-playing lookups and then discarded.
+- That made synced/plain lyric availability nondeterministic across repeated plays and paid the network cost over and over for the same track.
+- The runtime now persists lyrics by normalized artist/title/album identity, treats rows older than 30 days as stale, and refreshes stale or partial rows on the next now-playing lookup.
+
+**Tradeoffs**:
+
+- There is still no background lyrics prefetch worker, so refresh remains user-path/on-demand.
+- The cache is identity-based, not a perfect one-row-per-file mapping, so normalization quality matters.
+
+**Revisit Condition**:
+
+- If Cassette grows a background enrichment worker or a stronger canonical recording spine for lyrics ownership, keep the durable cache behavior and move only the refresh/execution surface
+
+---
+
+## Decision 35: Runtime Metadata Tagging Should Fall Back To Cover Art Archive For MusicBrainz Releases
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Provider candidates do not consistently return usable artwork, even when Cassette already knows the canonical MusicBrainz release ID.
+- The tag-writing path already has the final normalized task payload, so it can make a narrow deterministic fallback decision without changing provider search or scoring behavior.
+- When provider art is absent, Cassette now tries Cover Art Archive front-art URLs derived from the MusicBrainz release ID before giving up on embedded artwork.
+
+**Tradeoffs**:
+
+- This adds one more network fallback in the metadata-tagging path for MusicBrainz-backed releases.
+- Non-MusicBrainz release IDs intentionally skip the fallback to avoid guessing across providers.
+
+**Revisit Condition**:
+
+- If canonical releases begin persisting richer artwork ownership or multiple-artwork selection policy, keep the deterministic fallback order and move only the source of truth
+
+---
+
+## Decision 36: Desktop Runtime Should Own Bundled slskd Lifecycle
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Treating `slskd` as an external prerequisite made Cassette feel like a checklist instead of one desktop system.
+- The repo already ships a bundled `slskd.exe`, and the desktop app already knows the runtime settings and local machine defaults needed to launch it.
+- Cassette now attempts to start bundled `slskd.exe` during app startup when the configured endpoint is not already reachable, and the settings view exposes runtime status plus restart/stop controls.
+
+**Tradeoffs**:
+
+- Desktop startup now owns one more child-process lifecycle and one more place where local machine state can fail.
+- The smoke script still checks port `5030` independently, so it does not yet prove the managed-runtime path by itself.
+
+**Revisit Condition**:
+
+- If `slskd` is eventually replaced, embedded more deeply, or moved behind a different local broker, preserve the “Cassette owns the daemon lifecycle” contract rather than returning to manual background babysitting
+
+---
+
+## Decision 37: Home Is The Music-First Front Door; Deep Library Lives Behind Dedicated Routes
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- The old `/` route was still acting like a generic library browser even after the product direction was explicitly reset around music-first daily use.
+- A dedicated Home route lets Cassette summarize playback, background work, and missing-music state without deleting the deeper library tooling.
+- Moving deep browse behavior to `/library` preserves the inspection-heavy library view, while `/artists` remains the artist-first collection lens and `/downloads` remains the command center.
+
+**Tradeoffs**:
+
+- One more route exists in the renderer, so navigation labels and tests had to move with it.
+- Some users may need a moment to relearn that `Home` is the dashboard and `Library` is the deep browser.
+
+**Revisit Condition**:
+
+- If the desktop shell ever converges to a different primary information architecture, keep the music-first front-door contract unless there is a stronger daily-use replacement.
+
+---
+
+## Decision 38: Smoke Verification Must Reuse The Managed slskd Runtime Contract
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Cassette now owns bundled `slskd` lifecycle, so a bare `localhost:5030` socket ping was no longer an honest proof of the real runtime contract.
+- Verification now uses `slskd_runtime_probe_cli`, which calls the same `SlskdRuntimeManager` startup path that the desktop app uses for bundled `slskd.exe`.
+- This keeps smoke evidence aligned with the actual machine contract: resolved URL, app-dir, downloads-dir, readiness, and whether Cassette had to spawn the daemon.
+
+**Tradeoffs**:
+
+- Smoke verification now depends on one small Rust probe binary instead of a pure PowerShell socket check.
+- The probe validates the managed runtime contract, but it is still not identical to a full desktop-session proof with the Tauri shell open.
+
+**Revisit Condition**:
+
+- If managed daemon ownership moves out of the desktop runtime or the startup contract changes, keep the verification tied to the real owner instead of drifting back to infrastructure-only checks.
+
+---
+
+## Decision 39: Spotify Intake Is One Operator Story With Multiple Entry Modes
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Spotify history album backlog and direct desired-track JSON import were both useful, but presenting them as separate ad hoc lanes made the intake story feel split-brain.
+- Cassette now treats them as two entry modes into one identity-first Spotify intake surface: album backlog for broad collection recovery, direct desired-track payloads for richer exact-track evidence.
+- The control-plane source contract now defaults direct payload imports to the `spotify_library` lane so the sidecar and coordinator keep speaking the same operator language.
+
+**Tradeoffs**:
+
+- The intake UI is a little denser because it now explains both entry modes in one place.
+- The remaining replay-proof work is still separate; a unified operator story does not itself prove reconciliation hit-rate gains.
+
+**Revisit Condition**:
+
+- If Spotify intake splits into materially different execution owners in the future, preserve one visible operator story unless the runtime truth genuinely diverges.
+
+---
+
+## Decision 40: Music OS Convergence Uses Shared Multipliers And Isolation Boundaries
+
+**Status**: approved (applied 2026-04-06)
+**Rationale**:
+
+- Cassette has reached the point where isolated feature additions produce diminishing returns unless they converge onto shared system spines.
+- The operating model now explicitly prioritizes capabilities that multiply across at least five surfaces when practical (for example planner quality, acquisition quality, UX explainability, telemetry/regression analysis, and recovery diagnostics).
+- New high-impact capabilities that can destabilize core behavior (for example heavy visual effects, GPU enrichment, adaptive orchestration) must be isolated behind deterministic fallback boundaries so playback continuity, queue closure determinism, file safety, and audit completeness are never compromised.
+- This codifies the transition from "modular feature set" to "personal Music OS" without relaxing core trust guarantees.
+
+**Tradeoffs**:
+
+- More up-front planning and dependency sequencing before implementation work lands.
+- Some attractive features may be delayed if they fail either the multiplier test or the isolation test.
+
+**Revisit Condition**:
+
+- If runtime architecture changes enough that shared multipliers no longer provide cross-layer leverage, or if a new core safety model supersedes current deterministic isolation boundaries.
 
 ---
 

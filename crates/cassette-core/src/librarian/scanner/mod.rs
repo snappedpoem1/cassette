@@ -3,11 +3,11 @@ pub mod hashing;
 pub mod integrity;
 pub mod walker;
 
+use crate::gatekeeper::validation::fingerprint::compute_fingerprint;
 use crate::librarian::config::{LibrarianConfig, ScanMode};
 use crate::librarian::db::LibrarianDb;
 use crate::librarian::error::{LibrarianError, Result};
 use crate::librarian::models::{IntegrityStatus, ScanStats};
-use crate::gatekeeper::validation::fingerprint::compute_fingerprint;
 use crate::librarian::scanner::audio::{parse_audio_file, to_new_local_file};
 use crate::librarian::scanner::hashing::blake3_hash_file;
 use crate::librarian::scanner::walker::discover_audio_files;
@@ -18,7 +18,11 @@ use tracing::{debug, info, warn};
 
 const CHECKPOINT_FLUSH_INTERVAL: i64 = 100;
 
-pub async fn scan_library(db: &LibrarianDb, config: &LibrarianConfig, run_id: &str) -> Result<ScanStats> {
+pub async fn scan_library(
+    db: &LibrarianDb,
+    config: &LibrarianConfig,
+    run_id: &str,
+) -> Result<ScanStats> {
     let mut stats = ScanStats::default();
     let mut roots = config.library_roots.clone();
     roots.sort();
@@ -123,7 +127,11 @@ async fn scan_root(
         ScanMode::Resume => checkpoint
             .as_ref()
             .and_then(|value| value.last_scanned_path.clone())
-            .filter(|_| checkpoint.as_ref().is_some_and(|value| value.status == "in_progress")),
+            .filter(|_| {
+                checkpoint
+                    .as_ref()
+                    .is_some_and(|value| value.status == "in_progress")
+            }),
         _ => None,
     };
     let starting_files_seen = match config.scan_mode {
@@ -220,7 +228,13 @@ async fn scan_root(
             None
         };
 
-        let mut local_file = to_new_local_file(&path, file_size, file_mtime_ms, parsed.clone(), hash.clone());
+        let mut local_file = to_new_local_file(
+            &path,
+            file_size,
+            file_mtime_ms,
+            parsed.clone(),
+            hash.clone(),
+        );
 
         if let (Some(artist), Some(title), Some(norm_artist), Some(norm_title)) = (
             parsed.artist.as_deref(),
@@ -281,7 +295,11 @@ async fn scan_root(
         if let Some(hash) = local_file.content_hash.as_deref() {
             let duplicates = db.find_duplicate_hashes(hash).await?;
             if duplicates.len() > 1 {
-                debug!(hash, duplicates = duplicates.len(), "detected duplicate content hash");
+                debug!(
+                    hash,
+                    duplicates = duplicates.len(),
+                    "detected duplicate content hash"
+                );
             }
         }
 
@@ -347,8 +365,8 @@ async fn maybe_flush_checkpoint(
 #[cfg(test)]
 mod tests {
     use super::{backfill_missing_fingerprints, scan_library};
-    use crate::librarian::{LibrarianConfig, LibrarianDb, ScanMode};
     use crate::librarian::models::{IntegrityStatus, NewLocalFile};
+    use crate::librarian::{LibrarianConfig, LibrarianDb, ScanMode};
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::tempdir;
 
@@ -407,12 +425,16 @@ mod tests {
         config.library_roots = vec![root.path().to_path_buf()];
         config.scan_mode = ScanMode::Full;
 
-        let first = scan_library(&db, &config, "run-1").await.expect("first scan");
+        let first = scan_library(&db, &config, "run-1")
+            .await
+            .expect("first scan");
         assert_eq!(first.scanned_files, 2);
         assert_eq!(first.skipped_files, 0);
 
         config.scan_mode = ScanMode::DeltaOnly;
-        let second = scan_library(&db, &config, "run-2").await.expect("second scan");
+        let second = scan_library(&db, &config, "run-2")
+            .await
+            .expect("second scan");
         assert_eq!(second.scanned_files, 0);
         assert_eq!(second.skipped_files, 2);
     }
@@ -461,7 +483,10 @@ mod tests {
             .expect("checkpoint lookup")
             .expect("checkpoint row");
         assert_eq!(checkpoint.status, "completed");
-        assert_eq!(checkpoint.last_scanned_path.as_deref(), Some(third_string.as_str()));
+        assert_eq!(
+            checkpoint.last_scanned_path.as_deref(),
+            Some(third_string.as_str())
+        );
     }
 
     #[tokio::test]
@@ -497,13 +522,12 @@ mod tests {
             .expect("backfill fingerprints");
         assert_eq!(backfilled, 1);
 
-        let fingerprint: Option<String> = sqlx::query_scalar(
-            "SELECT acoustid_fingerprint FROM local_files WHERE file_path = ?1",
-        )
-        .bind(path.to_string_lossy().to_string())
-        .fetch_one(db.pool())
-        .await
-        .expect("fingerprint lookup");
+        let fingerprint: Option<String> =
+            sqlx::query_scalar("SELECT acoustid_fingerprint FROM local_files WHERE file_path = ?1")
+                .bind(path.to_string_lossy().to_string())
+                .fetch_one(db.pool())
+                .await
+                .expect("fingerprint lookup");
         assert!(fingerprint.is_some());
     }
 
@@ -549,13 +573,12 @@ mod tests {
             .expect("remaining rows");
         assert!(remaining.is_empty());
 
-        let fingerprint_error: Option<String> = sqlx::query_scalar(
-            "SELECT fingerprint_error FROM local_files WHERE file_path = ?1",
-        )
-        .bind(missing_path)
-        .fetch_one(db.pool())
-        .await
-        .expect("fingerprint error lookup");
+        let fingerprint_error: Option<String> =
+            sqlx::query_scalar("SELECT fingerprint_error FROM local_files WHERE file_path = ?1")
+                .bind(missing_path)
+                .fetch_one(db.pool())
+                .await
+                .expect("fingerprint error lookup");
         assert_eq!(fingerprint_error.as_deref(), Some("file_missing"));
     }
 

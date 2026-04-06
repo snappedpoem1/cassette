@@ -1,8 +1,5 @@
 pub fn sanitize_component(input: &str) -> String {
-    let replaced = input
-        .replace('/', "~")
-        .replace('\\', "~")
-        .replace(':', "-");
+    let replaced = input.replace('/', "~").replace('\\', "~").replace(':', "-");
 
     let mut value = sanitize_filename::sanitize(&replaced);
     if value.is_empty() {

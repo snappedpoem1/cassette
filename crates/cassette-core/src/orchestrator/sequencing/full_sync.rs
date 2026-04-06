@@ -95,8 +95,8 @@ pub async fn run_full_library_sync_with_manager(
 }
 
 async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
-        sqlx::query(
-                r#"
+    sqlx::query(
+        r#"
                 CREATE TABLE IF NOT EXISTS desired_tracks (
                     id INTEGER PRIMARY KEY,
                     source_name TEXT NOT NULL,
@@ -114,13 +114,13 @@ async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
                     imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 "#,
-        )
-        .execute(pool)
-        .await
-        .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
 
-        sqlx::query(
-                r#"
+    sqlx::query(
+        r#"
                 CREATE TABLE IF NOT EXISTS reconciliation_results (
                     id INTEGER PRIMARY KEY,
                     desired_track_id INTEGER NOT NULL REFERENCES desired_tracks(id),
@@ -132,13 +132,13 @@ async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 "#,
-        )
-        .execute(pool)
-        .await
-        .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
 
-        sqlx::query(
-                r#"
+    sqlx::query(
+        r#"
                 CREATE TABLE IF NOT EXISTS delta_queue (
                     id INTEGER PRIMARY KEY,
                     desired_track_id INTEGER NOT NULL REFERENCES desired_tracks(id),
@@ -153,10 +153,10 @@ async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
                     processed_at TIMESTAMP
                 )
                 "#,
-        )
-        .execute(pool)
-        .await
-        .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
 
     let columns = sqlx::query("PRAGMA table_info(delta_queue)")
         .fetch_all(pool)
@@ -173,10 +173,12 @@ async fn ensure_orchestrator_tables(pool: &sqlx::SqlitePool) -> Result<()> {
                 .unwrap_or(false)
         });
         if !has_column {
-            sqlx::query(&format!("ALTER TABLE delta_queue ADD COLUMN {column_name} {column_type}"))
-                .execute(pool)
-                .await
-                .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
+            sqlx::query(&format!(
+                "ALTER TABLE delta_queue ADD COLUMN {column_name} {column_type}"
+            ))
+            .execute(pool)
+            .await
+            .map_err(|e| OrchestratorError::DatabaseError(e.to_string()))?;
         }
     }
 

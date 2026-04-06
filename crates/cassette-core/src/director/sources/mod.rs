@@ -44,7 +44,10 @@ pub enum SourceError {
 pub trait SourceProvider: Send + Sync {
     fn name(&self) -> &'static str;
     fn can_handle(&self, track: &DesiredTrack) -> bool;
-    async fn resolve_download_url(&self, track: &DesiredTrack) -> Result<ResolvedTrack, SourceError>;
+    async fn resolve_download_url(
+        &self,
+        track: &DesiredTrack,
+    ) -> Result<ResolvedTrack, SourceError>;
     async fn check_availability(&self, track: &DesiredTrack) -> Result<bool, SourceError>;
 }
 

@@ -9,6 +9,14 @@ Canonical docs live under `docs/`. If another instruction says "read TODO.md" or
 
 ## Core Principles
 
+### 0. Personal-Project Posture
+
+Cassette is a single-owner personal system, not a productization effort.
+
+- Do not optimize for commercialization narratives, launch theater, or team-scale process overhead.
+- Interpret words like "release", "ship", and "production" as personal-machine reliability/readiness gates.
+- Prefer practical trust, reversibility, and daily utility over product-facing polish.
+
 ### 1. Auditability Over Cleverness
 
 Every meaningful system action should be reconstructible later.

@@ -1,6 +1,10 @@
 use crate::librarian::models::IntegrityStatus;
 
-pub fn assess_integrity(has_audio_stream: bool, has_required_metadata: bool, suspicious: bool) -> IntegrityStatus {
+pub fn assess_integrity(
+    has_audio_stream: bool,
+    has_required_metadata: bool,
+    suspicious: bool,
+) -> IntegrityStatus {
     if suspicious {
         return IntegrityStatus::Suspicious;
     }

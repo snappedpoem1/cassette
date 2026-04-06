@@ -95,7 +95,8 @@ impl Provider for LocalArchiveProvider {
                         .and_then(|value| value.to_str())
                         .unwrap_or_default();
                     let normalized_name = normalize(filename);
-                    if normalized_name.contains(&artist_key) && normalized_name.contains(&title_key) {
+                    if normalized_name.contains(&artist_key) && normalized_name.contains(&title_key)
+                    {
                         let extension = path
                             .extension()
                             .and_then(|value| value.to_str())
@@ -139,12 +140,12 @@ impl Provider for LocalArchiveProvider {
             .unwrap_or("candidate.bin");
         let destination = temp_context.active_dir.join(filename);
 
-        copy_with_lock_retry(&source, &destination).await.map_err(|error| {
-            ProviderError::Network {
+        copy_with_lock_retry(&source, &destination)
+            .await
+            .map_err(|error| ProviderError::Network {
                 provider_id: "local_archive".to_string(),
                 message: error.to_string(),
-            }
-        })?;
+            })?;
 
         let file_size = tokio::fs::metadata(&destination)
             .await
@@ -162,9 +163,13 @@ impl Provider for LocalArchiveProvider {
     }
 }
 
-async fn copy_with_lock_retry(source: &PathBuf, destination: &PathBuf) -> Result<u64, std::io::Error> {
+async fn copy_with_lock_retry(
+    source: &PathBuf,
+    destination: &PathBuf,
+) -> Result<u64, std::io::Error> {
     let mut last_error = None;
-    for delay_ms in std::iter::once(0_u64).chain(LOCAL_ARCHIVE_COPY_RETRY_DELAYS_MS.iter().copied()) {
+    for delay_ms in std::iter::once(0_u64).chain(LOCAL_ARCHIVE_COPY_RETRY_DELAYS_MS.iter().copied())
+    {
         if delay_ms > 0 {
             sleep(Duration::from_millis(delay_ms)).await;
         }
@@ -200,10 +205,15 @@ fn normalize(value: &str) -> String {
     value
         .to_ascii_lowercase()
         .chars()
-        .map(|character| if character.is_alphanumeric() { character } else { ' ' })
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
 }
-

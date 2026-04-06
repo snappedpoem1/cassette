@@ -80,7 +80,11 @@ impl Provider for YtDlpProvider {
             });
         }
 
-        let query = build_query(&task.target.artist, &task.target.title, task.target.album.as_deref());
+        let query = build_query(
+            &task.target.artist,
+            &task.target.title,
+            task.target.album.as_deref(),
+        );
 
         // Search YouTube first, then SoundCloud as fallback for remixes/DJ/community content
         let mut candidates = vec![ProviderSearchCandidate {
@@ -120,7 +124,8 @@ impl Provider for YtDlpProvider {
         temp_context: &TaskTempContext,
         _strategy: &StrategyPlan,
     ) -> Result<CandidateAcquisition, ProviderError> {
-        let output_stem = sanitize_component(&format!("{} - {}", task.target.artist, task.target.title));
+        let output_stem =
+            sanitize_component(&format!("{} - {}", task.target.artist, task.target.title));
         let output_template = temp_context
             .active_dir
             .join(format!("{output_stem}.%(ext)s"));
@@ -190,19 +195,31 @@ impl Provider for YtDlpProvider {
         // Select the file with the most recent mtime — avoids depending on OS directory
         // iteration order, which is undefined and silently wrong on some filesystems.
         let mut newest = None::<(PathBuf, std::time::SystemTime)>;
-        while let Some(entry) = entries.next_entry().await.map_err(|error| ProviderError::Other {
-            provider_id: "yt_dlp".to_string(),
-            message: error.to_string(),
-        })? {
+        while let Some(entry) =
+            entries
+                .next_entry()
+                .await
+                .map_err(|error| ProviderError::Other {
+                    provider_id: "yt_dlp".to_string(),
+                    message: error.to_string(),
+                })?
+        {
             let path = entry.path();
-            if !path.is_file() { continue; }
-            let mtime = tokio::fs::metadata(&path).await
+            if !path.is_file() {
+                continue;
+            }
+            let mtime = tokio::fs::metadata(&path)
+                .await
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .unwrap_or(std::time::UNIX_EPOCH);
             match &newest {
-                None => { newest = Some((path, mtime)); }
-                Some((_, prev_mtime)) if mtime > *prev_mtime => { newest = Some((path, mtime)); }
+                None => {
+                    newest = Some((path, mtime));
+                }
+                Some((_, prev_mtime)) if mtime > *prev_mtime => {
+                    newest = Some((path, mtime));
+                }
                 _ => {}
             }
         }
@@ -234,7 +251,11 @@ impl Provider for YtDlpProvider {
     }
 }
 
-fn normalize_command_failure(stdout: &[u8], stderr: &[u8], status: std::process::ExitStatus) -> String {
+fn normalize_command_failure(
+    stdout: &[u8],
+    stderr: &[u8],
+    status: std::process::ExitStatus,
+) -> String {
     let stderr = String::from_utf8_lossy(stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(stdout).trim().to_string();
     if !stderr.is_empty() {

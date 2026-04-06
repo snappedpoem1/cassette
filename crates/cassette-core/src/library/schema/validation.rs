@@ -43,10 +43,11 @@ pub async fn ensure_schema_current(pool: &SqlitePool) -> Result<SchemaVersion> {
         }
 
         for trigger_sql in INVARIANT_TRIGGERS {
-            let trigger_name = sqlx::query("SELECT name FROM sqlite_master WHERE type = 'trigger' AND sql = ?1")
-                .bind(*trigger_sql)
-                .fetch_optional(tx.as_mut())
-                .await?;
+            let trigger_name =
+                sqlx::query("SELECT name FROM sqlite_master WHERE type = 'trigger' AND sql = ?1")
+                    .bind(*trigger_sql)
+                    .fetch_optional(tx.as_mut())
+                    .await?;
             if trigger_name.is_none() {
                 sqlx::query(trigger_sql).execute(tx.as_mut()).await?;
             }
@@ -55,10 +56,11 @@ pub async fn ensure_schema_current(pool: &SqlitePool) -> Result<SchemaVersion> {
         tx.commit().await?;
     }
 
-    let current_after = sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM schema_version")
-        .fetch_one(pool)
-        .await?
-        .unwrap_or(0) as u32;
+    let current_after =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM schema_version")
+            .fetch_one(pool)
+            .await?
+            .unwrap_or(0) as u32;
 
     if current_after > SCHEMA_VERSION {
         return Err(ManagerError::SchemaMismatch {

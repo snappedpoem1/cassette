@@ -29,20 +29,26 @@ async fn mark_processed_preserves_claim_fields() {
     let adapter = DeltaQueueAdapter::new(manager.db_pool().clone());
     adapter.mark_processed(10).await.expect("mark processed");
 
-    let row = sqlx::query(
-        "SELECT processed_at, claimed_at, claim_run_id FROM delta_queue WHERE id = 10",
-    )
-    .fetch_one(manager.db_pool())
-    .await
-    .expect("fetch");
+    let row =
+        sqlx::query("SELECT processed_at, claimed_at, claim_run_id FROM delta_queue WHERE id = 10")
+            .fetch_one(manager.db_pool())
+            .await
+            .expect("fetch");
 
     let processed_at: Option<String> = row.try_get("processed_at").unwrap();
     let claimed_at: Option<String> = row.try_get("claimed_at").unwrap();
     let claim_run_id: Option<String> = row.try_get("claim_run_id").unwrap();
 
     assert!(processed_at.is_some(), "processed_at should be set");
-    assert!(claimed_at.is_some(), "claimed_at must be preserved after mark_processed");
-    assert_eq!(claim_run_id.as_deref(), Some("run-abc"), "claim_run_id must be preserved");
+    assert!(
+        claimed_at.is_some(),
+        "claimed_at must be preserved after mark_processed"
+    );
+    assert_eq!(
+        claim_run_id.as_deref(),
+        Some("run-abc"),
+        "claim_run_id must be preserved"
+    );
 }
 
 // A claimed-but-unprocessed row must survive delta_queue regeneration.

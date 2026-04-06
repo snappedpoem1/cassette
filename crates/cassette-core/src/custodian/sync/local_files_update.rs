@@ -40,24 +40,27 @@ pub async fn ensure_custodian_columns(db_pool: &sqlx::SqlitePool) -> Result<()> 
             .await?;
     }
     if !has_duplicate_of_id {
-        sqlx::query("ALTER TABLE local_files ADD COLUMN duplicate_of_id INTEGER REFERENCES local_files(id)")
-            .execute(db_pool)
-            .await?;
+        sqlx::query(
+            "ALTER TABLE local_files ADD COLUMN duplicate_of_id INTEGER REFERENCES local_files(id)",
+        )
+        .execute(db_pool)
+        .await?;
     }
 
     Ok(())
 }
 
 fn normalize_prefix(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "\\").to_ascii_lowercase()
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase()
 }
 
 fn path_is_within_roots(path: &str, roots: &[PathBuf]) -> bool {
     let normalized_path = path.replace('/', "\\").to_ascii_lowercase();
     roots.iter().any(|root| {
         let normalized_root = normalize_prefix(root);
-        normalized_path == normalized_root
-            || normalized_path.starts_with(&(normalized_root + "\\"))
+        normalized_path == normalized_root || normalized_path.starts_with(&(normalized_root + "\\"))
     })
 }
 
@@ -71,8 +74,8 @@ pub async fn load_candidates(
          WHERE last_processed_at IS NULL
          ORDER BY id",
     )
-        .fetch_all(db_pool)
-        .await?;
+    .fetch_all(db_pool)
+    .await?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {

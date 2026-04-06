@@ -22,9 +22,11 @@ async fn execute_atomic_rolls_back_on_error() {
 
     assert!(result.is_err());
 
-    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operation_log WHERE operation_id = 'x1'")
-        .fetch_one(manager.db_pool())
-        .await
-        .expect("count");
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM operation_log WHERE operation_id = 'x1'",
+    )
+    .fetch_one(manager.db_pool())
+    .await
+    .expect("count");
     assert_eq!(count, 0);
 }

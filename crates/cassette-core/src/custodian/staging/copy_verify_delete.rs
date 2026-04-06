@@ -65,7 +65,9 @@ mod tests {
         let staging = dir.path().join("staging");
         let destination = dir.path().join("sorted").join("dest.mp3");
 
-        tokio::fs::write(&source, b"audio-bytes").await.expect("write");
+        tokio::fs::write(&source, b"audio-bytes")
+            .await
+            .expect("write");
         staged_copy_verify(&source, &staging, &destination, true, false, false)
             .await
             .expect("stage copy");

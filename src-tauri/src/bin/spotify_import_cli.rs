@@ -34,7 +34,10 @@ fn collect_spotify_history_files(path: &Path) -> Result<Vec<PathBuf>, String> {
         return Ok(vec![path.to_path_buf()]);
     }
 
-    Err("Path must be a directory containing Spotify history JSON files, or a single JSON file".into())
+    Err(
+        "Path must be a directory containing Spotify history JSON files, or a single JSON file"
+            .into(),
+    )
 }
 
 fn parse_spotify_entries(json_files: &[PathBuf]) -> Result<Vec<SpotifyStreamEntry>, String> {
@@ -92,7 +95,8 @@ fn summarize_spotify_albums(
     let mut albums: Vec<SpotifyAlbumHistory> = album_map
         .into_values()
         .map(|mut s| {
-            s.in_library = library_set.contains_key(&(s.artist.to_lowercase(), s.album.to_lowercase()));
+            s.in_library =
+                library_set.contains_key(&(s.artist.to_lowercase(), s.album.to_lowercase()));
             s
         })
         .collect();
@@ -106,9 +110,11 @@ fn main() -> Result<(), String> {
         .next()
         .ok_or_else(|| "Usage: spotify_import_cli <spotify_history_dir_or_json>".to_string())?;
 
-    let app_data = std::env::var("APPDATA")
-        .map_err(|_| "APPDATA env var is not set".to_string())?;
-    let db_path = PathBuf::from(app_data).join("dev.cassette.app").join("cassette.db");
+    let app_data =
+        std::env::var("APPDATA").map_err(|_| "APPDATA env var is not set".to_string())?;
+    let db_path = PathBuf::from(app_data)
+        .join("dev.cassette.app")
+        .join("cassette.db");
     let db = Db::open(&db_path).map_err(|e| e.to_string())?;
 
     let json_files = collect_spotify_history_files(Path::new(&source))?;

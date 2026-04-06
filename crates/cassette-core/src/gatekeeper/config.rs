@@ -33,8 +33,14 @@ impl Default for PolicySpine {
                 ("remix".to_string(), JunkFlag::IsRemix),
                 ("demo".to_string(), JunkFlag::IsDemo),
                 ("unofficial|bootleg".to_string(), JunkFlag::IsUnofficial),
-                ("alt\\.? version|alternate".to_string(), JunkFlag::IsAltVersion),
-                ("interlude|skit|speech".to_string(), JunkFlag::IsSkitOrSpeech),
+                (
+                    "alt\\.? version|alternate".to_string(),
+                    JunkFlag::IsAltVersion,
+                ),
+                (
+                    "interlude|skit|speech".to_string(),
+                    JunkFlag::IsSkitOrSpeech,
+                ),
             ],
         }
     }

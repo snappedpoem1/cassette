@@ -19,8 +19,7 @@ pub mod validation;
 mod tests;
 
 pub use config::{
-    DirectorConfig, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy,
-    TempRecoveryPolicy,
+    DirectorConfig, DuplicatePolicy, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
 };
 pub use engine::{Director, DirectorHandle, DirectorSubmission};
 pub use error::{DirectorError, FinalizationError, MetadataError, ProviderError, ValidationError};
@@ -28,11 +27,11 @@ pub use models::{
     AcquisitionStrategy, CandidateAcquisition, CandidateDisposition, CandidateQuality,
     CandidateScore, CandidateSelection, CandidateSelectionMode, DirectorEvent, DirectorProgress,
     DirectorTaskResult, FinalizedTrack, FinalizedTrackDisposition, NormalizedTrack,
-    ProviderAttemptRecord, ProviderCapabilities, ProviderDescriptor, ProviderSearchCandidate,
-    ProvenanceRecord, SelectionReason, TrackTask, TrackTaskSource, ValidationIssue,
+    ProvenanceRecord, ProviderAttemptRecord, ProviderCapabilities, ProviderDescriptor,
+    ProviderSearchCandidate, SelectionReason, TrackTask, TrackTaskSource, ValidationIssue,
     ValidationReport,
 };
-pub use sources::{ResolvedTrack, SourceError, SourceProvider};
 pub use provider::Provider;
+pub use sources::{ResolvedTrack, SourceError, SourceProvider};
 pub use strategy::{StrategyPlan, StrategyPlanner};
 pub use types::{BatchDownloadOutcome, HashAlgorithm, StagedFile};

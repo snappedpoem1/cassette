@@ -1,20 +1,19 @@
-use crate::album_resolver::{
-    resolve_album_track_tasks_from_remote_config,
-};
+use crate::album_resolver::resolve_album_track_tasks_from_remote_config;
 use crate::state::{AppState, BacklogRunStatus};
+use crate::trust_ledger::{derive_request_trust_summary, summarize_reason_distribution};
 use cassette_core::acquisition::{
     AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
 };
-use cassette_core::director::{
-    AcquisitionStrategy, NormalizedTrack, TrackTask,
-    TrackTaskSource,
-};
+use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use cassette_core::librarian::models::{AcquisitionRequestEvent, AcquisitionRequestRow};
 use cassette_core::models::{
     AcquisitionQueueReport, DownloadArtistDiscography, DownloadJob, DownloadMetadataSearchResult,
-    DownloadStatus,
+    DownloadStatus, SpotifyAlbumHistory,
 };
-use cassette_core::sources::{fetch_slskd_transfers, get_artist_discography as fetch_artist_discography, search_metadata as search_catalog_metadata, RemoteProviderConfig, SlskdConnectionConfig};
+use cassette_core::sources::{
+    fetch_slskd_transfers, get_artist_discography as fetch_artist_discography,
+    search_metadata as search_catalog_metadata, RemoteProviderConfig, SlskdConnectionConfig,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{Emitter, State};
@@ -29,12 +28,17 @@ pub struct AcquisitionRequestListItem {
     pub title: String,
     pub status: String,
     pub strategy: String,
+    pub musicbrainz_release_group_id: Option<String>,
+    pub edition_policy: Option<String>,
     pub task_id: Option<String>,
     pub request_signature: String,
     pub selected_provider: Option<String>,
     pub failure_class: Option<String>,
     pub final_path: Option<String>,
     pub execution_disposition: Option<String>,
+    pub trust_stage: String,
+    pub trust_reason_code: String,
+    pub trust_detail: String,
     pub updated_at: String,
     pub created_at: String,
 }
@@ -57,16 +61,19 @@ pub async fn start_download(
     album: Option<String>,
 ) -> Result<String, String> {
     let id = format!("job-{}", Uuid::new_v4());
-    let task = build_track_task(&id, &artist, &title, album.clone(), AcquisitionStrategy::Standard);
+    let task = build_track_task(
+        &id,
+        &artist,
+        &title,
+        album.clone(),
+        AcquisitionStrategy::Standard,
+    );
     let request = request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
     queue_track_request(state, request).await
 }
 
 #[tauri::command]
-pub async fn cancel_download(
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<bool, String> {
+pub async fn cancel_download(state: State<'_, AppState>, task_id: String) -> Result<bool, String> {
     let cancelled = state
         .cancel_download(task_id.as_str())
         .map_err(|error| error.to_string())?;
@@ -81,7 +88,8 @@ pub async fn start_album_downloads(
     let mut job_ids = Vec::new();
     let completed_keys = {
         let db = state.db.lock().map_err(|error| error.to_string())?;
-        db.get_completed_task_keys().map_err(|error| error.to_string())?
+        db.get_completed_task_keys()
+            .map_err(|error| error.to_string())?
     };
     for album in albums {
         let artist = album
@@ -304,7 +312,9 @@ pub async fn start_spotify_missing_batch(
             }
             Ok(_) => {
                 report.skipped += 1;
-                report.notes.push(format!("{artist} - {title}: no queueable tracks"));
+                report
+                    .notes
+                    .push(format!("{artist} - {title}: no queueable tracks"));
             }
             Err(error) => {
                 report.skipped += 1;
@@ -314,6 +324,16 @@ pub async fn start_spotify_missing_batch(
     }
 
     Ok(report)
+}
+
+#[tauri::command]
+pub async fn get_missing_spotify_albums(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<SpotifyAlbumHistory>, String> {
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    db.get_missing_spotify_albums(limit.unwrap_or(100))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -332,7 +352,10 @@ pub async fn get_download_jobs(state: State<'_, AppState>) -> Result<Vec<Downloa
                 continue;
             }
 
-            if let Some(existing) = jobs.iter_mut().find(|job| download_jobs_match(job, &transfer)) {
+            if let Some(existing) = jobs
+                .iter_mut()
+                .find(|job| download_jobs_match(job, &transfer))
+            {
                 if state.is_download_cancelled(&existing.id) {
                     continue;
                 }
@@ -526,7 +549,10 @@ fn request_from_track_task(
     }
 }
 
-fn validate_request_identity_contract(task: &TrackTask, request: &AcquisitionRequest) -> Result<(), String> {
+fn validate_request_identity_contract(
+    task: &TrackTask,
+    request: &AcquisitionRequest,
+) -> Result<(), String> {
     let expected_source_album_id = task
         .target
         .source_album_id
@@ -634,18 +660,25 @@ async fn queue_track_request(
 fn load_remote_provider_config(state: &AppState) -> Result<RemoteProviderConfig, String> {
     let db = state.db.lock().map_err(|error| error.to_string())?;
     Ok(RemoteProviderConfig {
-        qobuz_email: read_setting(&db, "qobuz_email").or_else(|| state.download_config.qobuz_email.clone()),
-        qobuz_password: read_setting(&db, "qobuz_password").or_else(|| state.download_config.qobuz_password.clone()),
+        qobuz_email: read_setting(&db, "qobuz_email")
+            .or_else(|| state.download_config.qobuz_email.clone()),
+        qobuz_password: read_setting(&db, "qobuz_password")
+            .or_else(|| state.download_config.qobuz_password.clone()),
         qobuz_password_hash: read_setting(&db, "qobuz_password_hash"),
         qobuz_app_id: read_setting(&db, "qobuz_app_id"),
         qobuz_app_secret: read_setting(&db, "qobuz_app_secret"),
         qobuz_user_auth_token: read_setting(&db, "qobuz_user_auth_token"),
         qobuz_secrets: read_setting(&db, "qobuz_secrets"),
-        deezer_arl: read_setting(&db, "deezer_arl").or_else(|| state.download_config.deezer_arl.clone()),
-        spotify_client_id: read_setting(&db, "spotify_client_id").or_else(|| state.download_config.spotify_client_id.clone()),
-        spotify_client_secret: read_setting(&db, "spotify_client_secret").or_else(|| state.download_config.spotify_client_secret.clone()),
-        spotify_access_token: read_setting(&db, "spotify_access_token").or_else(|| state.download_config.spotify_access_token.clone()),
-        discogs_token: read_setting(&db, "discogs_token").or_else(|| state.download_config.discogs_token.clone()),
+        deezer_arl: read_setting(&db, "deezer_arl")
+            .or_else(|| state.download_config.deezer_arl.clone()),
+        spotify_client_id: read_setting(&db, "spotify_client_id")
+            .or_else(|| state.download_config.spotify_client_id.clone()),
+        spotify_client_secret: read_setting(&db, "spotify_client_secret")
+            .or_else(|| state.download_config.spotify_client_secret.clone()),
+        spotify_access_token: read_setting(&db, "spotify_access_token")
+            .or_else(|| state.download_config.spotify_access_token.clone()),
+        discogs_token: read_setting(&db, "discogs_token")
+            .or_else(|| state.download_config.discogs_token.clone()),
     })
 }
 
@@ -686,7 +719,8 @@ fn download_jobs_match(job: &DownloadJob, transfer: &DownloadJob) -> bool {
     let artist = normalize_job_text(&job.artist);
     let title = normalize_job_text(&job.title);
 
-    (!artist.is_empty() && haystack.contains(&artist)) && (!title.is_empty() && haystack.contains(&title))
+    (!artist.is_empty() && haystack.contains(&artist))
+        && (!title.is_empty() && haystack.contains(&title))
 }
 
 async fn queue_discography_with_rules(
@@ -760,7 +794,9 @@ async fn queue_discography_with_rules(
             }
             Ok(_) => {
                 report.skipped += 1;
-                report.notes.push(format!("{artist} - {title}: no queueable tracks"));
+                report
+                    .notes
+                    .push(format!("{artist} - {title}: no queueable tracks"));
             }
             Err(error) => {
                 report.skipped += 1;
@@ -835,7 +871,10 @@ fn release_type_allowed(
     include_eps: bool,
     include_compilations: bool,
 ) -> bool {
-    let Some(raw) = release_type.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(raw) = release_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return true;
     };
     let normalized = raw.to_ascii_lowercase();
@@ -930,6 +969,7 @@ pub async fn list_acquisition_requests(
             .transpose()
             .map_err(|error| error.to_string())?
             .flatten();
+        let trust = derive_request_trust_summary(&row, &[], execution.as_ref(), &[], &[], &[]);
 
         items.push(AcquisitionRequestListItem {
             id: row.id,
@@ -939,12 +979,21 @@ pub async fn list_acquisition_requests(
             title: row.title,
             status: row.status,
             strategy: row.strategy,
+            musicbrainz_release_group_id: row.musicbrainz_release_group_id,
+            edition_policy: row.edition_policy,
             task_id: row.task_id,
             request_signature: row.request_signature,
             selected_provider: execution.as_ref().and_then(|value| value.provider.clone()),
-            failure_class: execution.as_ref().and_then(|value| value.failure_class.clone()),
-            final_path: execution.as_ref().and_then(|value| value.final_path.clone()),
+            failure_class: execution
+                .as_ref()
+                .and_then(|value| value.failure_class.clone()),
+            final_path: execution
+                .as_ref()
+                .and_then(|value| value.final_path.clone()),
             execution_disposition: execution.as_ref().map(|value| value.disposition.clone()),
+            trust_stage: trust.stage,
+            trust_reason_code: trust.reason_code,
+            trust_detail: trust.detail,
             updated_at: execution
                 .as_ref()
                 .map(|value| value.updated_at.clone())
@@ -1004,19 +1053,46 @@ pub async fn get_request_lineage(
         .await
         .map_err(|error| error.to_string())?;
 
-    let (execution, provenance, candidate_review) = if let Some(task_id) = request.task_id.as_deref() {
-        let db = state.db.lock().map_err(|error| error.to_string())?;
-        (
-            db.get_task_execution_summary(task_id)
-                .map_err(|error| error.to_string())?,
-            db.get_task_provenance(task_id)
-                .map_err(|error| error.to_string())?,
-            db.get_candidate_review(task_id)
-                .map_err(|error| error.to_string())?,
-        )
-    } else {
-        (None, None, Vec::new())
-    };
+    let (execution, provenance, candidate_review, operation_events, gatekeeper_audit) =
+        if let Some(task_id) = request.task_id.as_deref() {
+            let db = state.db.lock().map_err(|error| error.to_string())?;
+            let execution = db
+                .get_task_execution_summary(task_id)
+                .map_err(|error| error.to_string())?;
+            let final_path = execution
+                .as_ref()
+                .and_then(|value| value.final_path.clone());
+            (
+                execution,
+                db.get_task_provenance(task_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_candidate_review(task_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_operation_events_for_context(final_path.as_deref(), request.desired_track_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_gatekeeper_audit_for_context(final_path.as_deref(), request.desired_track_id)
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            let db = state.db.lock().map_err(|error| error.to_string())?;
+            (
+                None,
+                None,
+                Vec::new(),
+                db.get_operation_events_for_context(None, request.desired_track_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_gatekeeper_audit_for_context(None, request.desired_track_id)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+    let trust = derive_request_trust_summary(
+        &request,
+        &timeline,
+        execution.as_ref(),
+        &candidate_review,
+        &operation_events,
+        &gatekeeper_audit,
+    );
 
     Ok(serde_json::json!({
         "request": request,
@@ -1024,13 +1100,59 @@ pub async fn get_request_lineage(
         "execution": execution,
         "provenance": provenance,
         "candidate_review": candidate_review,
+        "operation_events": operation_events,
+        "gatekeeper_audit": gatekeeper_audit,
+        "trust": trust,
     }))
+}
+
+#[tauri::command]
+pub async fn get_trust_reason_distribution(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::trust_ledger::TrustReasonDistributionEntry>, String> {
+    let rows = state
+        .control_db
+        .list_acquisition_requests(None, limit.unwrap_or(100))
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let db = state.db.lock().map_err(|error| error.to_string())?;
+    let mut summaries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let execution = row
+            .task_id
+            .as_deref()
+            .map(|task_id| db.get_task_execution_summary(task_id))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .flatten();
+        summaries.push(derive_request_trust_summary(
+            &row,
+            &[],
+            execution.as_ref(),
+            &[],
+            &[],
+            &[],
+        ));
+    }
+
+    Ok(summarize_reason_distribution(
+        &summaries,
+        limit.unwrap_or(8).min(24),
+    ))
 }
 
 fn normalize_job_text(value: &str) -> String {
     value
         .chars()
-        .map(|ch| if ch.is_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' })
+        .map(|ch| {
+            if ch.is_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
 }
 
@@ -1083,7 +1205,9 @@ pub async fn start_backlog_run(
         }
     }
 
-    state.backlog_cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .backlog_cancel
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 
     {
         let mut status = state.backlog_status.lock().map_err(|e| e.to_string())?;
@@ -1097,7 +1221,9 @@ pub async fn start_backlog_run(
     let db = Arc::clone(&state.db);
     let control_db = Arc::clone(&state.control_db);
     let download_jobs = Arc::clone(&state.download_jobs);
-    let submitter = state.director_submitter.clone();
+    let submitter = state
+        .current_director_submitter()
+        .map_err(|error| error.to_string())?;
     let backlog_status = Arc::clone(&state.backlog_status);
     let backlog_cancel = Arc::clone(&state.backlog_cancel);
     let remote_provider_config = load_remote_provider_config(&state)?;
@@ -1119,7 +1245,8 @@ pub async fn start_backlog_run(
             // Fetch next batch of missing albums from DB
             let missing_albums = {
                 let Ok(db) = db.lock() else { break };
-                db.get_missing_spotify_albums(batch + 20).unwrap_or_default()
+                db.get_missing_spotify_albums(batch + 20)
+                    .unwrap_or_default()
             };
             let completed_keys = {
                 let Ok(db) = db.lock() else { break };
@@ -1315,17 +1442,24 @@ pub async fn start_backlog_run(
             s.errors = errors.clone();
             s.finished_at = Some(finished_at.clone());
         }
-        let _ = app_handle.emit("director-backlog-progress", serde_json::json!({
-            "running": false,
-            "albums_queued": albums_queued,
-            "albums_skipped": albums_skipped,
-            "tracks_submitted": total_tracks,
-            "finished_at": finished_at,
-            "errors": errors,
-        }));
+        let _ = app_handle.emit(
+            "director-backlog-progress",
+            serde_json::json!({
+                "running": false,
+                "albums_queued": albums_queued,
+                "albums_skipped": albums_skipped,
+                "tracks_submitted": total_tracks,
+                "finished_at": finished_at,
+                "errors": errors,
+            }),
+        );
     });
 
-    let status = state.backlog_status.lock().map_err(|e| e.to_string())?.clone();
+    let status = state
+        .backlog_status
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     Ok(status)
 }
 
@@ -1369,9 +1503,18 @@ mod tests {
         let request = request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
 
         assert_eq!(request.scope, AcquisitionScope::Track);
-        assert_eq!(request.source_track_id.as_deref(), Some("spotify:track:123"));
-        assert_eq!(request.source_album_id.as_deref(), Some("spotify:album:456"));
-        assert_eq!(request.source_artist_id.as_deref(), Some("spotify:artist:789"));
+        assert_eq!(
+            request.source_track_id.as_deref(),
+            Some("spotify:track:123")
+        );
+        assert_eq!(
+            request.source_album_id.as_deref(),
+            Some("spotify:album:456")
+        );
+        assert_eq!(
+            request.source_artist_id.as_deref(),
+            Some("spotify:artist:789")
+        );
     }
 
     #[test]
@@ -1387,14 +1530,18 @@ mod tests {
 
         assert_eq!(request.scope, AcquisitionScope::Album);
         assert_eq!(request.source_album_id.as_deref(), Some("release-1"));
-        assert_eq!(request.source_artist_id.as_deref(), Some("spotify:artist:789"));
+        assert_eq!(
+            request.source_artist_id.as_deref(),
+            Some("spotify:artist:789")
+        );
         assert!(request.request_signature.is_some());
     }
 
     #[test]
     fn request_contract_validation_detects_identity_drops() {
         let task = sample_task();
-        let mut request = request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
+        let mut request =
+            request_from_track_task(&task, "manual", AcquisitionScope::Track, None, None);
         request.musicbrainz_release_group_id = None;
 
         let result = validate_request_identity_contract(&task, &request);
@@ -1404,7 +1551,9 @@ mod tests {
 
 #[tauri::command]
 pub async fn stop_backlog_run(state: State<'_, AppState>) -> Result<(), String> {
-    state.backlog_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    state
+        .backlog_cancel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut s) = state.backlog_status.lock() {
         if s.running {
             s.running = false;
@@ -1417,7 +1566,11 @@ pub async fn stop_backlog_run(state: State<'_, AppState>) -> Result<(), String> 
 
 #[tauri::command]
 pub async fn get_backlog_status(state: State<'_, AppState>) -> Result<BacklogRunStatus, String> {
-    let status = state.backlog_status.lock().map_err(|e| e.to_string())?.clone();
+    let status = state
+        .backlog_status
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     Ok(status)
 }
 

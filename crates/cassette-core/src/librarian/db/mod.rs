@@ -60,7 +60,12 @@ impl LibrarianDb {
         Ok(())
     }
 
-    async fn ensure_column_exists(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+    async fn ensure_column_exists(
+        &self,
+        table: &str,
+        column: &str,
+        definition: &str,
+    ) -> Result<()> {
         let pragma = format!("PRAGMA table_info({table})");
         let rows = sqlx::query(&pragma).fetch_all(&self.pool).await?;
         let exists = rows.iter().any(|row| {
@@ -255,21 +260,19 @@ impl LibrarianDb {
 
         let release_id = match (request.canonical_release_id, request.album.as_deref()) {
             (Some(id), _) => Some(id),
-            (None, Some(album)) if !album.trim().is_empty() && artist_id.is_some() => {
-                Some(
-                    self.upsert_canonical_release(
-                        artist_id.expect("checked is_some"),
-                        album,
-                        request.musicbrainz_release_group_id.as_deref(),
-                        request.musicbrainz_release_id.as_deref(),
-                        None,
-                        request.year.map(i64::from),
-                        request.source_album_id.as_deref(),
-                        None,
-                    )
-                    .await?,
+            (None, Some(album)) if !album.trim().is_empty() && artist_id.is_some() => Some(
+                self.upsert_canonical_release(
+                    artist_id.expect("checked is_some"),
+                    album,
+                    request.musicbrainz_release_group_id.as_deref(),
+                    request.musicbrainz_release_id.as_deref(),
+                    None,
+                    request.year.map(i64::from),
+                    request.source_album_id.as_deref(),
+                    None,
                 )
-            }
+                .await?,
+            ),
             _ => None,
         };
 
@@ -410,8 +413,15 @@ impl LibrarianDb {
         .execute(&self.pool)
         .await?;
 
-        self.append_acquisition_request_event(row.id, Some(task_id), event_type, status, message, payload_json)
-            .await?;
+        self.append_acquisition_request_event(
+            row.id,
+            Some(task_id),
+            event_type,
+            status,
+            message,
+            payload_json,
+        )
+        .await?;
 
         self.get_acquisition_request(row.id).await
     }
@@ -777,7 +787,10 @@ impl LibrarianDb {
         Ok(id)
     }
 
-    pub async fn get_local_file_scan_state(&self, path: &str) -> Result<Option<LocalFileScanState>> {
+    pub async fn get_local_file_scan_state(
+        &self,
+        path: &str,
+    ) -> Result<Option<LocalFileScanState>> {
         let state = sqlx::query_as::<_, LocalFileScanState>(
             "SELECT file_path, file_size, file_mtime_ms
              FROM local_files
@@ -957,7 +970,9 @@ impl LibrarianDb {
     }
 
     pub async fn clear_reconciliation(&self) -> Result<()> {
-        sqlx::query("DELETE FROM reconciliation_results").execute(&self.pool).await?;
+        sqlx::query("DELETE FROM reconciliation_results")
+            .execute(&self.pool)
+            .await?;
         // Preserve claimed rows so mid-flight coordinator work is not wiped.
         sqlx::query("DELETE FROM delta_queue WHERE processed_at IS NULL AND claimed_at IS NULL")
             .execute(&self.pool)
@@ -1108,7 +1123,10 @@ impl LibrarianDb {
         Ok(out)
     }
 
-    pub async fn fuzzy_candidates_for_artist(&self, normalized_artist: &str) -> Result<Vec<(Track, LocalFile)>> {
+    pub async fn fuzzy_candidates_for_artist(
+        &self,
+        normalized_artist: &str,
+    ) -> Result<Vec<(Track, LocalFile)>> {
         let rows = sqlx::query(
             "SELECT
                 t.id as t_id,
@@ -1218,7 +1236,10 @@ impl LibrarianDb {
         Ok(rows)
     }
 
-    pub async fn list_local_files_missing_fingerprint(&self, limit: usize) -> Result<Vec<LocalFile>> {
+    pub async fn list_local_files_missing_fingerprint(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<LocalFile>> {
         let rows = sqlx::query_as::<_, LocalFile>(
             "SELECT id, track_id, file_path, file_name, extension, codec, bitrate, sample_rate,
                     bit_depth, channels, duration_ms, file_size, file_mtime_ms, content_hash,
@@ -1304,15 +1325,7 @@ impl LibrarianDb {
 }
 
 fn normalize_acquisition_text(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::identity::normalize_identity_text(value)
 }
 
 #[cfg(test)]

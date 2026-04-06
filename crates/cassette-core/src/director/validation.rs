@@ -1,6 +1,8 @@
 use crate::director::config::QualityPolicy;
 use crate::director::error::ValidationError;
-use crate::director::models::{CandidateQuality, NormalizedTrack, ValidationIssue, ValidationReport};
+use crate::director::models::{
+    CandidateQuality, NormalizedTrack, ValidationIssue, ValidationReport,
+};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,11 +14,13 @@ pub async fn validate_candidate(
     target: NormalizedTrack,
     quality_policy: QualityPolicy,
 ) -> Result<ValidationReport, ValidationError> {
-    tokio::task::spawn_blocking(move || validate_candidate_blocking(&path, &target, &quality_policy))
-        .await
-        .map_err(|error| ValidationError::Rejected {
-            message: error.to_string(),
-        })?
+    tokio::task::spawn_blocking(move || {
+        validate_candidate_blocking(&path, &target, &quality_policy)
+    })
+    .await
+    .map_err(|error| ValidationError::Rejected {
+        message: error.to_string(),
+    })?
 }
 
 fn validate_candidate_blocking(
@@ -36,9 +40,11 @@ fn validate_candidate_blocking(
     let mut file = File::open(path).map_err(|error| ValidationError::Rejected {
         message: error.to_string(),
     })?;
-    let read = file.read(&mut sniff).map_err(|error| ValidationError::Rejected {
-        message: error.to_string(),
-    })?;
+    let read = file
+        .read(&mut sniff)
+        .map_err(|error| ValidationError::Rejected {
+            message: error.to_string(),
+        })?;
     let head = String::from_utf8_lossy(&sniff[..read]).to_ascii_lowercase();
     if head.contains("<html") || head.contains("<!doctype html") {
         return Err(ValidationError::HtmlPayload);
@@ -65,23 +71,20 @@ fn validate_candidate_blocking(
     })?;
     let source = MediaSourceStream::new(Box::new(symphonia_file), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            source,
-            &Default::default(),
-            &Default::default(),
-        )
+        .format(&hint, source, &Default::default(), &Default::default())
         .map_err(|error| ValidationError::UnreadableContainer {
             message: error.to_string(),
         })?;
 
-    let track = probed
-        .format
-        .default_track()
-        .ok_or_else(|| ValidationError::UnreadableContainer {
-            message: "no default audio track".to_string(),
-        })?;
-    let audio_readable = track.codec_params.sample_rate.is_some() || track.codec_params.n_frames.is_some();
+    let track =
+        probed
+            .format
+            .default_track()
+            .ok_or_else(|| ValidationError::UnreadableContainer {
+                message: "no default audio track".to_string(),
+            })?;
+    let audio_readable =
+        track.codec_params.sample_rate.is_some() || track.codec_params.n_frames.is_some();
     let header_readable = true;
 
     let n_frames = track.codec_params.n_frames.unwrap_or_default();
@@ -113,7 +116,11 @@ fn validate_candidate_blocking(
         }
     }
 
-    let format_name = if ext.is_empty() { signature_format } else { Some(ext.clone()) };
+    let format_name = if ext.is_empty() {
+        signature_format
+    } else {
+        Some(ext.clone())
+    };
     let mut issues = Vec::<ValidationIssue>::new();
     if let Some(duration_secs) = duration_secs {
         if duration_secs <= 0.0 || duration_secs < quality_policy.minimum_duration_secs {

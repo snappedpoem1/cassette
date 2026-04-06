@@ -93,7 +93,8 @@ pub async fn run_librarian_sync(
     } else {
         if let Err(error) = validate_roots_accessible(&config.library_roots).await {
             let message = error.to_string();
-            let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message).await;
+            let _ =
+                update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message).await;
             error!(run_id = %run_id, phase = "scan", error = %message, "library roots inaccessible");
             return Err(error);
         }
@@ -102,12 +103,14 @@ pub async fn run_librarian_sync(
             Ok((scanned, upserted)) => {
                 counts.files_scanned = scanned;
                 counts.files_upserted = upserted;
-                let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Scan, &counts).await;
+                let _ =
+                    update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Scan, &counts).await;
                 info!(run_id = %run_id, files_scanned = scanned, files_upserted = upserted, "scan phase completed");
             }
             Err(error) => {
                 let message = error.to_string();
-                let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message).await;
+                let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::Scan, &message)
+                    .await;
                 error!(run_id = %run_id, phase = "scan", error = %message, "scan phase failed");
                 return Err(error);
             }
@@ -153,7 +156,9 @@ pub async fn run_librarian_sync(
             match import_desired_state(db_pool, &source, &run_id).await {
                 Ok(imported) => {
                     counts.desired_tracks_imported = imported;
-                    let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Import, &counts).await;
+                    let _ =
+                        update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Import, &counts)
+                            .await;
                     info!(run_id = %run_id, desired_tracks_imported = imported, "import phase completed");
                 }
                 Err(error) => {
@@ -173,12 +178,17 @@ pub async fn run_librarian_sync(
     match run_reconciliation_phase(db_pool, &run_id).await {
         Ok(reconciled) => {
             counts.reconciliation_results = reconciled;
-            let _ = update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Reconciliation, &counts).await;
+            let _ =
+                update_sync_run_phase(db_pool, sync_run_row_id, SyncPhase::Reconciliation, &counts)
+                    .await;
             info!(run_id = %run_id, reconciliation_results = reconciled, "reconciliation phase completed");
         }
         Err(error) => {
             let message = error.to_string();
-            errors.push((SyncPhase::Reconciliation.as_str().to_string(), message.clone()));
+            errors.push((
+                SyncPhase::Reconciliation.as_str().to_string(),
+                message.clone(),
+            ));
             counts.errors += 1;
             warn!(run_id = %run_id, phase = "reconciliation", error = %message, "reconciliation failed for some items; continuing to delta generation");
         }
@@ -192,7 +202,13 @@ pub async fn run_librarian_sync(
         }
         Err(error) => {
             let message = error.to_string();
-            let _ = update_sync_run_failed(db_pool, sync_run_row_id, SyncPhase::DeltaGeneration, &message).await;
+            let _ = update_sync_run_failed(
+                db_pool,
+                sync_run_row_id,
+                SyncPhase::DeltaGeneration,
+                &message,
+            )
+            .await;
             error!(run_id = %run_id, phase = "delta_generation", error = %message, "delta generation failed");
             return Err(error);
         }
@@ -228,8 +244,12 @@ pub async fn run_librarian_sync(
 }
 
 async fn initialize_database(db_pool: &SqlitePool) -> Result<()> {
-    sqlx::query("PRAGMA journal_mode=WAL;").execute(db_pool).await?;
-    sqlx::query("PRAGMA foreign_keys=ON;").execute(db_pool).await?;
+    sqlx::query("PRAGMA journal_mode=WAL;")
+        .execute(db_pool)
+        .await?;
+    sqlx::query("PRAGMA foreign_keys=ON;")
+        .execute(db_pool)
+        .await?;
 
     for sql in migrations::MIGRATIONS {
         sqlx::query(sql).execute(db_pool).await?;
@@ -283,9 +303,11 @@ async fn ensure_delta_queue_columns(db_pool: &SqlitePool) -> Result<()> {
                 .unwrap_or(false)
         });
         if !has_column {
-            sqlx::query(&format!("ALTER TABLE delta_queue ADD COLUMN {column_name} {column_type}"))
-                .execute(db_pool)
-                .await?;
+            sqlx::query(&format!(
+                "ALTER TABLE delta_queue ADD COLUMN {column_name} {column_type}"
+            ))
+            .execute(db_pool)
+            .await?;
         }
     }
     Ok(())
@@ -321,9 +343,11 @@ async fn ensure_local_file_columns(db_pool: &SqlitePool) -> Result<()> {
                 .unwrap_or(false)
         });
         if !has_column {
-            sqlx::query(&format!("ALTER TABLE local_files ADD COLUMN {column_name} {column_type}"))
-                .execute(db_pool)
-                .await?;
+            sqlx::query(&format!(
+                "ALTER TABLE local_files ADD COLUMN {column_name} {column_type}"
+            ))
+            .execute(db_pool)
+            .await?;
         }
     }
     sqlx::query(
@@ -673,33 +697,35 @@ mod tests {
         let pool = test_pool().await;
         initialize_database(&pool).await.expect("migrate");
 
-        let stale_row = create_sync_run(&pool, "stale-run").await.expect("create stale run");
+        let stale_row = create_sync_run(&pool, "stale-run")
+            .await
+            .expect("create stale run");
         sqlx::query("UPDATE sync_runs SET started_at = '2026-01-01T00:00:00+00:00' WHERE id = ?1")
             .bind(stale_row)
             .execute(&pool)
             .await
             .expect("age stale run");
 
-        let fresh_row = create_sync_run(&pool, "fresh-run").await.expect("create fresh run");
+        let fresh_row = create_sync_run(&pool, "fresh-run")
+            .await
+            .expect("create fresh run");
         let recovered = recover_stale_sync_runs(&pool, 15)
             .await
             .expect("recover stale runs");
         assert_eq!(recovered, 1);
 
-        let stale_status: String =
-            sqlx::query_scalar("SELECT status FROM sync_runs WHERE id = ?1")
-                .bind(stale_row)
-                .fetch_one(&pool)
-                .await
-                .expect("stale status");
+        let stale_status: String = sqlx::query_scalar("SELECT status FROM sync_runs WHERE id = ?1")
+            .bind(stale_row)
+            .fetch_one(&pool)
+            .await
+            .expect("stale status");
         assert_eq!(stale_status, "interrupted");
 
-        let fresh_status: String =
-            sqlx::query_scalar("SELECT status FROM sync_runs WHERE id = ?1")
-                .bind(fresh_row)
-                .fetch_one(&pool)
-                .await
-                .expect("fresh status");
+        let fresh_status: String = sqlx::query_scalar("SELECT status FROM sync_runs WHERE id = ?1")
+            .bind(fresh_row)
+            .fetch_one(&pool)
+            .await
+            .expect("fresh status");
         assert_eq!(fresh_status, "in_progress");
     }
 

@@ -14,6 +14,4 @@ pub mod scanner;
 pub use config::{DuplicatePolicy, LibrarianConfig, QualityConfig, ScanBehavior, ScanMode};
 pub use db::LibrarianDb;
 pub use error::{LibrarianError, Result};
-pub use orchestrator::{
-	run_librarian_sync, SyncCounts, SyncOutcome, SyncPhase, SyncStatus,
-};
+pub use orchestrator::{run_librarian_sync, SyncCounts, SyncOutcome, SyncPhase, SyncStatus};

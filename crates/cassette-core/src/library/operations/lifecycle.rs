@@ -69,7 +69,12 @@ impl LibraryManager {
             let active = self.active_operations.read().await;
             active
                 .get(operation_id)
-                .map(|ctx| (ctx.affected_files.len() as i64, ctx.affected_tracks.len() as i64))
+                .map(|ctx| {
+                    (
+                        ctx.affected_files.len() as i64,
+                        ctx.affected_tracks.len() as i64,
+                    )
+                })
                 .unwrap_or((0, 0))
         };
 
@@ -121,7 +126,10 @@ impl LibraryManager {
         let mut active = self.active_operations.write().await;
         active.remove(operation_id);
 
-        if matches!(status, OperationStatus::Success | OperationStatus::FailedAt(_) | OperationStatus::RolledBack) {
+        if matches!(
+            status,
+            OperationStatus::Success | OperationStatus::FailedAt(_) | OperationStatus::RolledBack
+        ) {
             sqlx::query("DELETE FROM file_locks WHERE operation_id = ?1")
                 .bind(operation_id)
                 .execute(&self.db_pool)

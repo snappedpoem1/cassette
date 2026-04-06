@@ -10,7 +10,9 @@ use crate::custodian::quality::codec_info::quality_score;
 use crate::custodian::quality::duplicates::{assert_supported_hash, classify_duplicate};
 use crate::custodian::quarantine::directory_structure::build_quarantine_path;
 use crate::custodian::quarantine::reason_codes::{quarantine_reason_for_status, QuarantineReason};
-use crate::custodian::sort::canonical_path::{build_canonical_path, canonical_metadata_from_report};
+use crate::custodian::sort::canonical_path::{
+    build_canonical_path, canonical_metadata_from_report,
+};
 use crate::custodian::staging::copy_verify_delete::staged_copy_verify;
 use crate::custodian::staging::verification::compute_hash;
 use crate::custodian::sync::delta_queue_sync::mark_quarantine_delta;
@@ -132,9 +134,11 @@ pub async fn run_custodian_cleanup(
             if let Some(hash) = hash.clone() {
                 if let Some(existing_path) = seen_hashes.get(&hash) {
                     summary.duplicates_detected += 1;
-                    let incoming_score = quality_score(report.codec.as_deref(), report.bitrate, report.bit_depth);
+                    let incoming_score =
+                        quality_score(report.codec.as_deref(), report.bitrate, report.bit_depth);
                     let existing_score = incoming_score;
-                    let decision = classify_duplicate(config.duplicate_policy, incoming_score, existing_score);
+                    let decision =
+                        classify_duplicate(config.duplicate_policy, incoming_score, existing_score);
 
                     actions.push(ManifestAction {
                         source_path: source.to_string_lossy().to_string(),
@@ -157,7 +161,8 @@ pub async fn run_custodian_cleanup(
             let mut db_updated = false;
             if destination.exists() {
                 summary.collisions_resolved += 1;
-                let incoming_score = quality_score(report.codec.as_deref(), report.bitrate, report.bit_depth);
+                let incoming_score =
+                    quality_score(report.codec.as_deref(), report.bitrate, report.bit_depth);
 
                 let existing_hash = if destination.exists() {
                     let hash_started = Instant::now();
@@ -167,7 +172,11 @@ pub async fn run_custodian_cleanup(
                 } else {
                     None
                 };
-                let existing_quality = if existing_hash.is_some() { incoming_score } else { 0 };
+                let existing_quality = if existing_hash.is_some() {
+                    incoming_score
+                } else {
+                    0
+                };
                 let outcome = resolve_collision(
                     config.collision_policy,
                     incoming_score,
@@ -211,7 +220,8 @@ pub async fn run_custodian_cleanup(
                         } else {
                             QuarantineReason::DuplicateReview
                         };
-                        let quarantine = build_quarantine_path(&config.quarantine_root, reason, &source);
+                        let quarantine =
+                            build_quarantine_path(&config.quarantine_root, reason, &source);
 
                         if !dry_run {
                             if let Some(parent) = quarantine.parent() {
@@ -240,7 +250,13 @@ pub async fn run_custodian_cleanup(
                                 None,
                             )
                             .await?;
-                            mark_quarantine_delta(&mut tx, candidate.id, candidate.track_id, reason.as_dir()).await?;
+                            mark_quarantine_delta(
+                                &mut tx,
+                                candidate.id,
+                                candidate.track_id,
+                                reason.as_dir(),
+                            )
+                            .await?;
                             tx.commit().await?;
                             db_time += db_started.elapsed();
                             db_updated = true;
@@ -349,7 +365,8 @@ pub async fn run_custodian_cleanup(
                     None,
                 )
                 .await?;
-                mark_quarantine_delta(&mut tx, candidate.id, candidate.track_id, reason.as_dir()).await?;
+                mark_quarantine_delta(&mut tx, candidate.id, candidate.track_id, reason.as_dir())
+                    .await?;
                 tx.commit().await?;
                 db_time += db_started.elapsed();
                 db_updated = true;
@@ -475,14 +492,17 @@ mod tests {
             same_volume_move: false,
             delete_source_after_verify: false,
             duplicate_policy: crate::custodian::collision::policies::DuplicatePolicy::ManualReview,
-            collision_policy: crate::custodian::collision::policies::CollisionPolicy::RenameIncoming,
+            collision_policy:
+                crate::custodian::collision::policies::CollisionPolicy::RenameIncoming,
             suspicious_size_tolerance: 1.5,
             allowed_formats: vec!["mp3".to_string(), "flac".to_string()],
             logging_level: "info".to_string(),
             manifest_dir: root.path().join("manifests"),
         };
 
-        let outcome = run_custodian_cleanup(&pool, &cfg, true).await.expect("custodian");
+        let outcome = run_custodian_cleanup(&pool, &cfg, true)
+            .await
+            .expect("custodian");
         assert_eq!(outcome.mode, "dry_run");
         assert!(file.exists());
         assert!(!cfg.staging_root.exists() || std::fs::read_dir(&cfg.staging_root).is_ok());

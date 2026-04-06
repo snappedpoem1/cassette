@@ -160,8 +160,10 @@ struct GroupPlan {
 fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let root = PathBuf::from(args.next().unwrap_or_else(|| "A:\\music".to_string()));
-    let output_dir =
-        PathBuf::from(args.next().unwrap_or_else(|| "tmp\\library_cleanup_manifest".to_string()));
+    let output_dir = PathBuf::from(
+        args.next()
+            .unwrap_or_else(|| "tmp\\library_cleanup_manifest".to_string()),
+    );
     let quarantine_root = PathBuf::from(args.next().unwrap_or_else(|| {
         root.parent()
             .unwrap_or_else(|| Path::new("."))
@@ -177,7 +179,8 @@ fn main() -> Result<(), String> {
     fs::create_dir_all(&output_dir).map_err(|e| format!("create output dir failed: {e}"))?;
 
     let audit_report = load_audit_report(Path::new("tmp").join("library_audit_report.json"));
-    let deadspot_report = load_deadspot_report(Path::new("tmp").join("library_deadspot_report.json"));
+    let deadspot_report =
+        load_deadspot_report(Path::new("tmp").join("library_deadspot_report.json"));
     let invalid_map = build_issue_map(&audit_report.invalid_examples);
     let suspicious_map = build_issue_map(&audit_report.suspicious_size_examples);
     let deadspot_map = build_deadspot_map(&deadspot_report.examples);
@@ -209,12 +212,9 @@ fn main() -> Result<(), String> {
 
         if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
             folder.audio_paths.push(path.clone());
-            if let Some(audio_entry) = build_audio_entry(
-                &path,
-                &invalid_map,
-                &suspicious_map,
-                &deadspot_map,
-            ) {
+            if let Some(audio_entry) =
+                build_audio_entry(&path, &invalid_map, &suspicious_map, &deadspot_map)
+            {
                 audio_entries.insert(path.clone(), audio_entry);
             }
         } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
@@ -256,7 +256,13 @@ fn main() -> Result<(), String> {
             .filter_map(|path| audio_entries.get(path))
             .collect();
         let plan = build_group_plan(&root, folder_path, &folder_audio);
-        folder_rows.push(build_folder_row(&root, folder_path, folder, &folder_audio, &plan));
+        folder_rows.push(build_folder_row(
+            &root,
+            folder_path,
+            folder,
+            &folder_audio,
+            &plan,
+        ));
         if !folder_audio.is_empty() {
             group_rows.push(build_group_row(&folder_audio, &plan));
         }
@@ -286,8 +292,20 @@ fn main() -> Result<(), String> {
             ))
     });
 
-    let summary = build_summary(&root, &output_dir, &quarantine_root, &folders, &manifest_rows);
-    write_outputs(&output_dir, &folder_rows, &group_rows, &manifest_rows, &summary)?;
+    let summary = build_summary(
+        &root,
+        &output_dir,
+        &quarantine_root,
+        &folders,
+        &manifest_rows,
+    );
+    write_outputs(
+        &output_dir,
+        &folder_rows,
+        &group_rows,
+        &manifest_rows,
+        &summary,
+    )?;
     println!("Cleanup manifest written to {}", output_dir.display());
     Ok(())
 }
@@ -336,8 +354,16 @@ fn build_group_plan(root: &Path, folder_path: &Path, folder_audio: &[&AudioEntry
         };
     }
 
-    let artist_count = distinct_count(folder_audio.iter().map(|entry| entry.normalized_artist.as_str()));
-    let album_count = distinct_count(folder_audio.iter().map(|entry| entry.normalized_album.as_str()));
+    let artist_count = distinct_count(
+        folder_audio
+            .iter()
+            .map(|entry| entry.normalized_artist.as_str()),
+    );
+    let album_count = distinct_count(
+        folder_audio
+            .iter()
+            .map(|entry| entry.normalized_album.as_str()),
+    );
     let target_folders: HashSet<PathBuf> = folder_audio
         .iter()
         .map(|entry| {
@@ -538,7 +564,10 @@ fn build_manifest_rows(
             .map(|path| path == image_path)
             .unwrap_or(false)
         {
-            let target_folder = plan.canonical_folder.clone().unwrap_or_else(|| root.to_path_buf());
+            let target_folder = plan
+                .canonical_folder
+                .clone()
+                .unwrap_or_else(|| root.to_path_buf());
             let ext = image_path
                 .extension()
                 .and_then(|value| value.to_str())
@@ -841,8 +870,14 @@ fn render_debrief(summary: &ManifestSummary, rows: &[ManifestRow]) -> String {
     output.push_str(&format!("Sidecars: {}\n", summary.sidecar_file_count));
     output.push_str(&format!("Other files: {}\n\n", summary.other_file_count));
     output.push_str(&format!("Manifest rows: {}\n", summary.manifest_rows));
-    output.push_str(&format!("Apply-eligible rows: {}\n", summary.apply_eligible_rows));
-    output.push_str(&format!("Apply-eligible groups: {}\n", summary.apply_eligible_groups));
+    output.push_str(&format!(
+        "Apply-eligible rows: {}\n",
+        summary.apply_eligible_rows
+    ));
+    output.push_str(&format!(
+        "Apply-eligible groups: {}\n",
+        summary.apply_eligible_groups
+    ));
     output.push_str(&format!("Review rows: {}\n", summary.review_rows));
     output.push_str(&format!("Collision rows: {}\n\n", summary.collision_rows));
     output.push_str("Action counts\n");
@@ -853,8 +888,10 @@ fn render_debrief(summary: &ManifestSummary, rows: &[ManifestRow]) -> String {
     output.push_str("\nNext steps\n");
     output.push_str("----------\n");
     output.push_str("1. Inspect group_plan.csv before applying anything.\n");
-    output.push_str("2. Only SAFE_* rows are apply-eligible; REVIEW_* rows need human decisions.\n");
-    output.push_str("3. Apply with scripts/apply_cleanup_manifest.ps1 after checking collisions.\n");
+    output
+        .push_str("2. Only SAFE_* rows are apply-eligible; REVIEW_* rows need human decisions.\n");
+    output
+        .push_str("3. Apply with scripts/apply_cleanup_manifest.ps1 after checking collisions.\n");
     output
 }
 
@@ -945,7 +982,9 @@ fn dominant_value<'a>(values: impl Iterator<Item = &'a str>) -> String {
             continue;
         }
         *counts.entry(key.clone()).or_default() += 1;
-        originals.entry(key).or_insert_with(|| value.trim().to_string());
+        originals
+            .entry(key)
+            .or_insert_with(|| value.trim().to_string());
     }
     counts
         .into_iter()

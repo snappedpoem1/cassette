@@ -36,5 +36,8 @@ async fn reconciliation_finds_exact_match_by_isrc() {
     .expect("reconcile");
 
     assert_eq!(result.matched_count, 1);
-    assert!(matches!(result.reconciliations[0].status, ReconciliationStatus::ExactMatch));
+    assert!(matches!(
+        result.reconciliations[0].status,
+        ReconciliationStatus::ExactMatch
+    ));
 }

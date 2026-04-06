@@ -110,11 +110,12 @@ pub async fn download_attempt(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
     {
-        let projected_size = if existing_size > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-            existing_size + content_length
-        } else {
-            content_length
-        };
+        let projected_size =
+            if existing_size > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                existing_size + content_length
+            } else {
+                content_length
+            };
         if projected_size as usize > config.max_file_size_bytes {
             return Err(DirectorError::FileTooLarge {
                 size: projected_size as usize,
@@ -165,7 +166,11 @@ pub async fn download_attempt(
         .map_err(|e| DirectorError::StagingError(e.to_string()))?;
 
     let mut stream = response.bytes_stream();
-    let mut written = if append { existing_size as usize } else { 0usize };
+    let mut written = if append {
+        existing_size as usize
+    } else {
+        0usize
+    };
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| DirectorError::NetworkError(e.to_string()))?;

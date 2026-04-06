@@ -1,6 +1,8 @@
 use crate::director::config::DuplicatePolicy;
 use crate::director::error::FinalizationError;
-use crate::director::models::{CandidateSelection, FinalizedTrack, NormalizedTrack, ProvenanceRecord};
+use crate::director::models::{
+    CandidateSelection, FinalizedTrack, NormalizedTrack, ProvenanceRecord,
+};
 use std::path::{Path, PathBuf};
 
 pub fn merge_normalized_track(
@@ -57,8 +59,12 @@ pub fn merge_normalized_track(
             .musicbrainz_release_id
             .clone()
             .or_else(|| resolved.musicbrainz_release_id.clone()),
-        canonical_artist_id: requested.canonical_artist_id.or(resolved.canonical_artist_id),
-        canonical_release_id: requested.canonical_release_id.or(resolved.canonical_release_id),
+        canonical_artist_id: requested
+            .canonical_artist_id
+            .or(resolved.canonical_artist_id),
+        canonical_release_id: requested
+            .canonical_release_id
+            .or(resolved.canonical_release_id),
     }
 }
 
@@ -83,8 +89,12 @@ fn merge_embedded_metadata(requested: &NormalizedTrack, staged_path: &Path) -> N
                 } else {
                     Some(track.album)
                 },
-                track_number: track.track_number.and_then(|value| u32::try_from(value).ok()),
-                disc_number: track.disc_number.and_then(|value| u32::try_from(value).ok()),
+                track_number: track
+                    .track_number
+                    .and_then(|value| u32::try_from(value).ok()),
+                disc_number: track
+                    .disc_number
+                    .and_then(|value| u32::try_from(value).ok()),
                 year: track.year,
                 duration_secs: Some(track.duration_secs),
                 isrc: None,
@@ -139,10 +149,10 @@ pub fn build_final_path(library_root: &Path, target: &NormalizedTrack, extension
         None => "00".to_string(),
     };
 
-    library_root
-        .join(artist)
-        .join(album)
-        .join(format!("{prefix} - {title}.{}", extension.to_ascii_lowercase()))
+    library_root.join(artist).join(album).join(format!(
+        "{prefix} - {title}.{}",
+        extension.to_ascii_lowercase()
+    ))
 }
 
 pub async fn finalize_selected_candidate(
@@ -186,10 +196,12 @@ pub async fn finalize_selected_candidate(
                             path: destination.clone(),
                         });
                     }
-                    std::fs::remove_file(&destination).map_err(|error| FinalizationError::MoveFailed {
-                        from: source.clone(),
-                        to: destination.clone(),
-                        message: error.to_string(),
+                    std::fs::remove_file(&destination).map_err(|error| {
+                        FinalizationError::MoveFailed {
+                            from: source.clone(),
+                            to: destination.clone(),
+                            message: error.to_string(),
+                        }
                     })?;
                     replaced_existing = true;
                 }
@@ -197,12 +209,13 @@ pub async fn finalize_selected_candidate(
         }
 
         std::fs::rename(&source, &destination).or_else(|rename_error| {
-            std::fs::copy(&source, &destination)
-                .map_err(|copy_error| FinalizationError::MoveFailed {
+            std::fs::copy(&source, &destination).map_err(|copy_error| {
+                FinalizationError::MoveFailed {
                     from: source.clone(),
                     to: destination.clone(),
                     message: format!("rename={rename_error}; copy={copy_error}"),
-                })?;
+                }
+            })?;
             std::fs::remove_file(&source).map_err(|error| FinalizationError::MoveFailed {
                 from: source.clone(),
                 to: destination.clone(),
@@ -428,6 +441,9 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(FinalizationError::DestinationExists { .. })));
+        assert!(matches!(
+            result,
+            Err(FinalizationError::DestinationExists { .. })
+        ));
     }
 }

@@ -153,15 +153,20 @@ pub async fn get_artist_discography(
 
 pub async fn fetch_slskd_transfers(config: &SlskdConnectionConfig) -> Result<Vec<Value>, String> {
     let client = reqwest::Client::new();
-    let response =
-        send_slskd_request(client.get(format!("{}/api/v0/transfers/downloads", config.url)), config)
-            .await?;
+    let response = send_slskd_request(
+        client.get(format!("{}/api/v0/transfers/downloads", config.url)),
+        config,
+    )
+    .await?;
 
     if !response.status().is_success() {
         return Err(format!("slskd returned HTTP {}", response.status()));
     }
 
-    response.json::<Vec<Value>>().await.map_err(|error| error.to_string())
+    response
+        .json::<Vec<Value>>()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Fetch download transfers for a specific user from slskd.
@@ -181,10 +186,16 @@ pub async fn fetch_slskd_user_transfers(
     .await?;
 
     if !response.status().is_success() {
-        return Err(format!("slskd user transfers returned HTTP {}", response.status()));
+        return Err(format!(
+            "slskd user transfers returned HTTP {}",
+            response.status()
+        ));
     }
 
-    response.json::<Value>().await.map_err(|error| error.to_string())
+    response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub async fn qobuz_search(
@@ -215,7 +226,10 @@ pub async fn qobuz_search(
         return Err(format!("HTTP {}", response.status()));
     }
 
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(DownloadMetadataSearchResult {
         artists: qobuz_artists_from_search(&body),
         albums: qobuz_albums_from_search(&body),
@@ -255,7 +269,10 @@ pub async fn qobuz_discography(
         return Err(format!("HTTP {}", response.status()));
     }
 
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     let albums = body
         .get("albums")
         .and_then(|value| value.get("items"))
@@ -342,13 +359,19 @@ pub async fn deezer_discography(
     };
     let client = deezer_client(provider_config)?;
     let response = client
-        .get(format!("https://api.deezer.com/artist/{}/albums", found_artist.id))
+        .get(format!(
+            "https://api.deezer.com/artist/{}/albums",
+            found_artist.id
+        ))
         .query(&[("limit", "50")])
         .send()
         .await
         .map_err(|error| error.to_string())?;
 
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     let albums = body
         .get("data")
         .and_then(Value::as_array)
@@ -390,7 +413,10 @@ pub async fn spotify_search(
         return Err(format!("HTTP {}", response.status()));
     }
 
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(DownloadMetadataSearchResult {
         artists: body
             .get("artists")
@@ -438,14 +464,20 @@ pub async fn spotify_discography(
             found_artist.id
         ))
         .bearer_auth(token)
-        .query(&[("include_groups", "album,single,compilation"), ("limit", "50")])
+        .query(&[
+            ("include_groups", "album,single,compilation"),
+            ("limit", "50"),
+        ])
         .send()
         .await
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     let albums = body
         .get("items")
         .and_then(Value::as_array)
@@ -566,7 +598,10 @@ pub async fn discogs_discography(
     if !search.status().is_success() {
         return Err(format!("HTTP {}", search.status()));
     }
-    let search_body = search.json::<Value>().await.map_err(|error| error.to_string())?;
+    let search_body = search
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     let Some(found_artist) = search_body
         .get("results")
         .and_then(Value::as_array)
@@ -577,8 +612,16 @@ pub async fn discogs_discography(
     };
 
     let releases = client
-        .get(format!("https://api.discogs.com/artists/{}/releases", found_artist.id))
-        .query(&[("per_page", "100"), ("page", "1"), ("sort", "year"), ("sort_order", "asc")])
+        .get(format!(
+            "https://api.discogs.com/artists/{}/releases",
+            found_artist.id
+        ))
+        .query(&[
+            ("per_page", "100"),
+            ("page", "1"),
+            ("sort", "year"),
+            ("sort_order", "asc"),
+        ])
         .send()
         .await
         .map_err(|error| error.to_string())?;
@@ -586,7 +629,10 @@ pub async fn discogs_discography(
         return Err(format!("HTTP {}", releases.status()));
     }
 
-    let releases_body = releases.json::<Value>().await.map_err(|error| error.to_string())?;
+    let releases_body = releases
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     let albums = releases_body
         .get("releases")
         .and_then(Value::as_array)
@@ -636,7 +682,10 @@ pub async fn qobuz_user_auth_token(
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(body
         .get("user_auth_token")
         .and_then(Value::as_str)
@@ -667,7 +716,10 @@ pub async fn spotify_bearer_token(
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(body
         .get("access_token")
         .and_then(Value::as_str)
@@ -678,8 +730,8 @@ pub fn deezer_client(provider_config: &RemoteProviderConfig) -> Result<reqwest::
     let mut headers = reqwest::header::HeaderMap::new();
     if let Some(arl) = present(&provider_config.deezer_arl) {
         let cookie = format!("arl={arl}");
-        let header_value = reqwest::header::HeaderValue::from_str(&cookie)
-            .map_err(|error| error.to_string())?;
+        let header_value =
+            reqwest::header::HeaderValue::from_str(&cookie).map_err(|error| error.to_string())?;
         headers.insert(reqwest::header::COOKIE, header_value);
     }
     headers.insert(
@@ -765,9 +817,7 @@ async fn cached_slskd_authorization(config: &SlskdConnectionConfig) -> Result<St
     Ok(authorization)
 }
 
-pub async fn slskd_session_authorization(
-    config: &SlskdConnectionConfig,
-) -> Result<String, String> {
+pub async fn slskd_session_authorization(config: &SlskdConnectionConfig) -> Result<String, String> {
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{}/api/v0/session", config.url))
@@ -783,8 +833,14 @@ pub async fn slskd_session_authorization(
         return Err(format!("slskd session returned HTTP {}", response.status()));
     }
 
-    let body = response.json::<Value>().await.map_err(|error| error.to_string())?;
-    let token_type = body.get("tokenType").and_then(Value::as_str).unwrap_or("Bearer");
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
+    let token_type = body
+        .get("tokenType")
+        .and_then(Value::as_str)
+        .unwrap_or("Bearer");
     let Some(token) = body.get("token").and_then(Value::as_str) else {
         return Err("slskd session did not return a token.".to_string());
     };
@@ -802,7 +858,13 @@ pub fn build_query(artist: &str, title: &str, album: Option<&str>) -> String {
 pub fn normalize_text(value: &str) -> String {
     value
         .chars()
-        .map(|ch| if ch.is_alphanumeric() { ch.to_ascii_lowercase() } else { ' ' })
+        .map(|ch| {
+            if ch.is_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
 }
 
@@ -834,7 +896,10 @@ pub fn is_non_audio_path(filename: &str) -> bool {
 }
 
 fn present(value: &Option<String>) -> Option<&str> {
-    value.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn dedupe_artists(artists: &mut Vec<DownloadArtistResult>) {
@@ -885,8 +950,14 @@ fn qobuz_artist_from_value(value: &Value) -> DownloadArtistResult {
     DownloadArtistResult {
         id: string_field(value, "id"),
         name: string_field(value, "name"),
-        sort_name: value.get("name").and_then(Value::as_str).map(ToString::to_string),
-        disambiguation: value.get("slug").and_then(Value::as_str).map(ToString::to_string),
+        sort_name: value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        disambiguation: value
+            .get("slug")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         image_url: nested_string_field(value, &["image", "large"]),
         source: "qobuz".to_string(),
         artist_mbid: nested_string_field(value, &["artist", "id"]),
@@ -905,7 +976,10 @@ fn qobuz_album_from_value(value: &Value) -> DownloadAlbumResult {
             .unwrap_or_default()
             .to_string(),
         artist_mbid: nested_string_field(value, &["artist", "id"]),
-        year: value.get("year").and_then(Value::as_i64).map(|year| year as i32),
+        year: value
+            .get("year")
+            .and_then(Value::as_i64)
+            .map(|year| year as i32),
         release_type: value
             .get("product_type")
             .and_then(Value::as_str)
@@ -916,7 +990,10 @@ fn qobuz_album_from_value(value: &Value) -> DownloadAlbumResult {
             .map(|count| count as u32),
         cover_url: nested_string_field(value, &["image", "large"]),
         source: "qobuz".to_string(),
-        mbid: value.get("upc").and_then(Value::as_str).map(ToString::to_string),
+        mbid: value
+            .get("upc")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         ..DownloadAlbumResult::default()
     }
 }
@@ -997,7 +1074,10 @@ fn spotify_album_from_value(value: &Value) -> DownloadAlbumResult {
             .and_then(Value::as_str)
             .and_then(|date| date.split('-').next())
             .and_then(|year| year.parse::<i32>().ok()),
-        release_type: value.get("album_type").and_then(Value::as_str).map(ToString::to_string),
+        release_type: value
+            .get("album_type")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         track_count: value
             .get("total_tracks")
             .and_then(Value::as_u64)
@@ -1038,7 +1118,10 @@ fn discogs_artist_from_value(value: &Value) -> DownloadArtistResult {
         id,
         name,
         tags,
-        image_url: value.get("thumb").and_then(Value::as_str).map(ToString::to_string),
+        image_url: value
+            .get("thumb")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         source: "discogs".to_string(),
         ..DownloadArtistResult::default()
     }
@@ -1049,20 +1132,22 @@ fn discogs_album_from_search_value(value: &Value) -> DownloadAlbumResult {
         .get("format")
         .and_then(Value::as_array)
         .and_then(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str())
-                .find(|name| {
-                    let normalized = name.to_ascii_lowercase();
-                    normalized.contains("album")
-                        || normalized.contains("single")
-                        || normalized.contains("ep")
-                        || normalized.contains("compilation")
-                        || normalized.contains("live")
-                })
+            items.iter().filter_map(|item| item.as_str()).find(|name| {
+                let normalized = name.to_ascii_lowercase();
+                normalized.contains("album")
+                    || normalized.contains("single")
+                    || normalized.contains("ep")
+                    || normalized.contains("compilation")
+                    || normalized.contains("live")
+            })
         })
         .map(ToString::to_string)
-        .or_else(|| value.get("type").and_then(Value::as_str).map(ToString::to_string));
+        .or_else(|| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        });
 
     DownloadAlbumResult {
         id: string_field(value, "id"),
@@ -1076,9 +1161,15 @@ fn discogs_album_from_search_value(value: &Value) -> DownloadAlbumResult {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        year: value.get("year").and_then(Value::as_i64).map(|year| year as i32),
+        year: value
+            .get("year")
+            .and_then(Value::as_i64)
+            .map(|year| year as i32),
         release_type,
-        cover_url: value.get("cover_image").and_then(Value::as_str).map(ToString::to_string),
+        cover_url: value
+            .get("cover_image")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         source: "discogs".to_string(),
         discogs_id: value.get("id").and_then(Value::as_i64),
         ..DownloadAlbumResult::default()
@@ -1098,7 +1189,10 @@ fn discogs_album_from_release_value(value: &Value) -> DownloadAlbumResult {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        year: value.get("year").and_then(Value::as_i64).map(|year| year as i32),
+        year: value
+            .get("year")
+            .and_then(Value::as_i64)
+            .map(|year| year as i32),
         release_type: value
             .get("type")
             .and_then(Value::as_str)
@@ -1161,7 +1255,12 @@ pub struct DeezerTrackData {
 pub async fn deezer_get_user_data(client: &reqwest::Client) -> Result<DeezerSession, String> {
     let response = client
         .post(DEEZER_GW_URL)
-        .query(&[("method", "deezer.getUserData"), ("input", "3"), ("api_version", "1.0"), ("api_token", "")])
+        .query(&[
+            ("method", "deezer.getUserData"),
+            ("input", "3"),
+            ("api_version", "1.0"),
+            ("api_token", ""),
+        ])
         .header(reqwest::header::CONTENT_LENGTH, "0")
         .send()
         .await
@@ -1170,7 +1269,9 @@ pub async fn deezer_get_user_data(client: &reqwest::Client) -> Result<DeezerSess
         return Err(format!("getUserData HTTP {}", response.status()));
     }
     let body: Value = response.json().await.map_err(|e| e.to_string())?;
-    let results = body.get("results").ok_or("no results in getUserData response")?;
+    let results = body
+        .get("results")
+        .ok_or("no results in getUserData response")?;
     let api_token = results
         .get("checkForm")
         .and_then(Value::as_str)
@@ -1184,12 +1285,19 @@ pub async fn deezer_get_user_data(client: &reqwest::Client) -> Result<DeezerSess
         .to_string();
     let user_id = user
         .get("USER_ID")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .ok_or("missing USER_ID")?;
     if user_id == 0 {
         return Err("ARL invalid or expired — USER_ID is 0".to_string());
     }
-    Ok(DeezerSession { api_token, license_token, user_id })
+    Ok(DeezerSession {
+        api_token,
+        license_token,
+        user_id,
+    })
 }
 
 /// Call `song.getData` to obtain track token and metadata.
@@ -1260,7 +1368,12 @@ pub async fn deezer_get_track_data(
     if let Some(track_token) = public_body.get("track_token").and_then(Value::as_str) {
         let public_track_id = public_body
             .get("id")
-            .and_then(|value| value.as_u64().map(|id| id.to_string()).or_else(|| value.as_str().map(ToString::to_string)))
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .map(|id| id.to_string())
+                    .or_else(|| value.as_str().map(ToString::to_string))
+            })
             .unwrap_or_else(|| track_id.to_string());
         let title = public_body
             .get("title")
@@ -1312,11 +1425,7 @@ pub async fn deezer_get_media_url(
     track_token: &str,
 ) -> Result<(String, String), String> {
     // Format codes Deezer accepts
-    let formats = [
-        ("FLAC", "flac"),
-        ("MP3_320", "mp3"),
-        ("MP3_128", "mp3"),
-    ];
+    let formats = [("FLAC", "flac"), ("MP3_320", "mp3"), ("MP3_128", "mp3")];
 
     let mut last_error_message = None::<String>;
 
@@ -1341,10 +1450,7 @@ pub async fn deezer_get_media_url(
             .map_err(|e| e.to_string())?;
         if !response.status().is_success() {
             let status = response.status();
-            let error_body = response
-                .json::<Value>()
-                .await
-                .unwrap_or(Value::Null);
+            let error_body = response.json::<Value>().await.unwrap_or(Value::Null);
             let rights_message = error_body
                 .pointer("/errors/0/message")
                 .and_then(Value::as_str)
@@ -1366,7 +1472,8 @@ pub async fn deezer_get_media_url(
         }
     }
 
-    Err(last_error_message.unwrap_or_else(|| "no media URL available for any quality tier".to_string()))
+    Err(last_error_message
+        .unwrap_or_else(|| "no media URL available for any quality tier".to_string()))
 }
 
 fn find_string_field(value: &Value, key: &str) -> Option<String> {
@@ -1382,7 +1489,8 @@ fn find_string_field(value: &Value, key: &str) -> Option<String> {
                     return Some(as_u64.to_string());
                 }
             }
-            map.values().find_map(|nested| find_string_field(nested, key))
+            map.values()
+                .find_map(|nested| find_string_field(nested, key))
         }
         Value::Array(items) => items.iter().find_map(|item| find_string_field(item, key)),
         _ => None,

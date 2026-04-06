@@ -117,7 +117,11 @@ async fn main() -> Result<(), String> {
         }
     }
 
-    println!("Auditing {} audio files under {}", paths.len(), root_path.display());
+    println!(
+        "Auditing {} audio files under {}",
+        paths.len(),
+        root_path.display()
+    );
 
     let worker_count = std::env::var("CASSETTE_AUDIT_WORKERS")
         .ok()
@@ -143,7 +147,9 @@ async fn main() -> Result<(), String> {
 
     let processed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let total = {
-        let guard = queue.lock().map_err(|_| "queue lock poisoned".to_string())?;
+        let guard = queue
+            .lock()
+            .map_err(|_| "queue lock poisoned".to_string())?;
         guard.len()
     };
 
@@ -176,7 +182,8 @@ async fn main() -> Result<(), String> {
                 write.total_audio_files += 1;
 
                 match report.status {
-                    ValidationStatus::SuspiciousSmallForDuration | ValidationStatus::ProbableTruncation => {
+                    ValidationStatus::SuspiciousSmallForDuration
+                    | ValidationStatus::ProbableTruncation => {
                         write.suspicious_size_files += 1;
                         if write.suspicious_size_examples.len() < config.max_suspicious_examples {
                             write.suspicious_size_examples.push(SizeFinding {
@@ -233,7 +240,10 @@ async fn main() -> Result<(), String> {
     println!("Total audio files: {}", findings.total_audio_files);
     println!("Misplaced files: {}", findings.misplaced_files);
     println!("Suspicious size files: {}", findings.suspicious_size_files);
-    println!("Other invalid audio files: {}", findings.invalid_audio_files);
+    println!(
+        "Other invalid audio files: {}",
+        findings.invalid_audio_files
+    );
 
     let report_path = PathBuf::from("tmp").join("library_audit_report.json");
     if let Some(parent) = report_path.parent() {

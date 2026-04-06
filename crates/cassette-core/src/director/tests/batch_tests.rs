@@ -14,9 +14,10 @@ async fn batch_download_reports_partial_failures() {
         .expect("write good");
 
     let config = test_director_config(staging_dir.path().to_path_buf());
-    let sources: Vec<Arc<dyn SourceProvider>> = vec![Arc::new(LocalCacheSource::new(vec![
-        source_dir.path().to_path_buf(),
-    ]))];
+    let sources: Vec<Arc<dyn SourceProvider>> =
+        vec![Arc::new(LocalCacheSource::new(vec![source_dir
+            .path()
+            .to_path_buf()]))];
 
     let good = DesiredTrack {
         id: 21,

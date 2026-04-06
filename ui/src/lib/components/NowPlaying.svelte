@@ -101,7 +101,7 @@
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  height: var(--nowplaying-h);
+  height: var(--playerbar-h);
   padding: 0 14px;
   gap: 12px;
 }

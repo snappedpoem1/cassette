@@ -121,9 +121,7 @@ fn dfs_cycle(
 
     if let Some(neighbors) = graph.get(node) {
         for neighbor in neighbors {
-            if !visited.contains(neighbor)
-                && dfs_cycle(neighbor, graph, visited, stack, in_stack)
-            {
+            if !visited.contains(neighbor) && dfs_cycle(neighbor, graph, visited, stack, in_stack) {
                 return true;
             }
             if in_stack.contains(neighbor) {

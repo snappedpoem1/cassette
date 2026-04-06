@@ -70,12 +70,13 @@ pub async fn match_by_exact_ids(
     Ok(None)
 }
 
-pub(crate) fn row_to_match(row: &sqlx::sqlite::SqliteRow, matched_via: MatchMethod) -> Result<LocalFileMatch> {
+pub(crate) fn row_to_match(
+    row: &sqlx::sqlite::SqliteRow,
+    matched_via: MatchMethod,
+) -> Result<LocalFileMatch> {
     Ok(LocalFileMatch {
         file_id: row.try_get::<i64, _>("file_id")? as u64,
-        track_id: row
-            .try_get::<Option<i64>, _>("track_id")?
-            .map(|v| v as u64),
+        track_id: row.try_get::<Option<i64>, _>("track_id")?.map(|v| v as u64),
         file_path: std::path::PathBuf::from(row.try_get::<String, _>("file_path")?),
         file_name: row.try_get::<String, _>("file_name")?,
         codec: row.try_get::<String, _>("codec")?,

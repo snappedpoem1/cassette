@@ -43,10 +43,9 @@ pub async fn match_by_fuzzy(
             &desired_artist,
             &normalize_name(&candidate.artist_name),
         ) as f32;
-        let title_similarity = strsim::normalized_levenshtein(
-            &desired_title,
-            &normalize_name(&candidate.title),
-        ) as f32;
+        let title_similarity =
+            strsim::normalized_levenshtein(&desired_title, &normalize_name(&candidate.title))
+                as f32;
         let confidence = (artist_similarity * 0.4) + (title_similarity * 0.6);
 
         if confidence >= config.fuzzy_match_floor {

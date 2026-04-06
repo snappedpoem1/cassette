@@ -1,20 +1,17 @@
-use cassette_lib::album_resolver::{
-    resolve_album_track_tasks_from_spotify_credentials,
-};
 use cassette_core::db::Db;
+use cassette_core::director::models::{ProviderHealthStatus, ProviderSearchRecord};
 use cassette_core::director::providers::{
     DeezerProvider, LocalArchiveProvider, QobuzProvider, RealDebridProvider, SlskdProvider,
     UsenetProvider, YtDlpProvider,
 };
-use cassette_core::director::{
-    AcquisitionStrategy, Director, DirectorConfig, DirectorTaskResult, DuplicatePolicy,
-    Provider, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask,
-    TrackTaskSource,
-};
 use cassette_core::director::ProviderError;
-use cassette_core::director::models::{ProviderHealthStatus, ProviderSearchRecord};
+use cassette_core::director::{
+    AcquisitionStrategy, Director, DirectorConfig, DirectorTaskResult, DuplicatePolicy, Provider,
+    ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask, TrackTaskSource,
+};
 use cassette_core::metadata::MetadataService;
 use cassette_core::sources::{RemoteProviderConfig, SlskdConnectionConfig};
+use cassette_lib::album_resolver::resolve_album_track_tasks_from_spotify_credentials;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,16 +42,12 @@ fn classify_failure(result: &DirectorTaskResult) -> String {
     {
         return "auth_failed".to_string();
     }
-    if result
-        .attempts
-        .iter()
-        .any(|attempt| {
-            let outcome = attempt.outcome.to_ascii_lowercase();
-            outcome.contains("too_many_requests")
-                || outcome.contains("rate limited")
-                || outcome.contains("429")
-        })
-    {
+    if result.attempts.iter().any(|attempt| {
+        let outcome = attempt.outcome.to_ascii_lowercase();
+        outcome.contains("too_many_requests")
+            || outcome.contains("rate limited")
+            || outcome.contains("429")
+    }) {
         return "rate_limited".to_string();
     }
     if result
@@ -109,7 +102,11 @@ fn print_progress(
     use std::io::Write;
     let pct = if total > 0 { done * 100 / total } else { 0 };
     let bar_width = 36usize;
-    let filled = if total > 0 { done * bar_width / total } else { 0 };
+    let filled = if total > 0 {
+        done * bar_width / total
+    } else {
+        0
+    };
     let bar: String = "#".repeat(filled) + &"-".repeat(bar_width - filled);
 
     let eta = if rate > 0.0 && done < total {
@@ -154,7 +151,10 @@ async fn resolve_failed_singles(db: &Db) -> Result<(), Box<dyn std::error::Error
         println!("No failed tasks to resolve.");
         return Ok(());
     }
-    println!("Resolving {} failed tasks via MusicBrainz...\n", failed.len());
+    println!(
+        "Resolving {} failed tasks via MusicBrainz...\n",
+        failed.len()
+    );
 
     let mb = MetadataService::new()?;
     let mut resolved = 0usize;
@@ -249,7 +249,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|a| (a.artist.trim().to_string(), a.album.trim().to_string()))
         .collect();
 
-    println!("Resolving {} album tracklists (MB → iTunes → Spotify)...", albums_to_resolve.len());
+    println!(
+        "Resolving {} album tracklists (MB → iTunes → Spotify)...",
+        albums_to_resolve.len()
+    );
 
     let mut skipped_albums = 0usize;
     for (artist, title) in &albums_to_resolve {
@@ -269,7 +272,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| e.to_string());
         match result {
             Ok(resolved_tasks) => {
-                let new_count = resolved_tasks.iter()
+                let new_count = resolved_tasks
+                    .iter()
                     .filter(|t| !completed_keys.contains(&t.task_id))
                     .count();
                 if new_count > 0 {
@@ -357,7 +361,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         read_setting(&db, "slskd_pass"),
     ]
     .iter()
-    .all(|value| value.as_ref().map(|item| !item.trim().is_empty()).unwrap_or(false));
+    .all(|value| {
+        value
+            .as_ref()
+            .map(|item| !item.trim().is_empty())
+            .unwrap_or(false)
+    });
 
     let config = DirectorConfig {
         library_root: PathBuf::from(&library_base),
@@ -562,7 +571,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(mut track) =
                         cassette_core::library::read_track_metadata(&finalized_track.path)
                     {
-                        cassette_core::library::enrich_track_with_director_result(&mut track, &result);
+                        cassette_core::library::enrich_track_with_director_result(
+                            &mut track, &result,
+                        );
                         let _ = db.upsert_track(&track);
                     }
                 }
@@ -583,7 +594,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .as_ref()
                             .map(|f| f.provenance.selected_provider.as_str())
                             .unwrap_or("?");
-                        *finalized_by_provider.entry(provider.to_string()).or_default() += 1;
+                        *finalized_by_provider
+                            .entry(provider.to_string())
+                            .or_default() += 1;
                         print!("\r\x1b[K");
                         println!("  +  {} ({})", result.task_id, provider);
                     }
@@ -602,7 +615,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let err = result.error.as_deref().unwrap_or("unknown");
                         let short_err = if err.len() > 60 { &err[..60] } else { err };
                         print!("\r\x1b[K");
-                        println!("  -  {} - {} [{}]", result.task_id, short_err, failure_class);
+                        println!(
+                            "  -  {} - {} [{}]",
+                            result.task_id, short_err, failure_class
+                        );
                     }
                     _ => {
                         skipped += 1;

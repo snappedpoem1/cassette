@@ -10,9 +10,12 @@ mod pending_recovery;
 mod runtime_bootstrap;
 #[path = "../src/spotify_history.rs"]
 mod spotify_history;
+#[path = "../src/trust_ledger.rs"]
+mod trust_ledger;
 
 use cassette_core::db::{PendingDirectorTask, TerminalDirectorTaskUpdate};
 use cassette_core::director::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
+use cassette_core::librarian::models::AcquisitionRequestRow;
 use std::collections::HashMap;
 
 fn pending_task(task_id: &str, progress: &str, updated_at: &str) -> PendingDirectorTask {
@@ -92,7 +95,8 @@ fn pending_recovery_plan_keeps_newer_retry_and_drops_stale_terminal_row() {
 
 #[test]
 fn spotify_history_parser_summarizes_and_sorts() {
-    let dir = std::env::temp_dir().join(format!("cassette-spotify-history-{}", uuid::Uuid::new_v4()));
+    let dir =
+        std::env::temp_dir().join(format!("cassette-spotify-history-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("temp dir should be created");
     let file = dir.join("Streaming_History_Audio_2026.json");
     let payload = r#"
@@ -122,7 +126,8 @@ fn spotify_history_parser_summarizes_and_sorts() {
 "#;
     std::fs::write(&file, payload).expect("fixture should be written");
 
-    let files = spotify_history::collect_spotify_history_files(&dir).expect("history files should be found");
+    let files = spotify_history::collect_spotify_history_files(&dir)
+        .expect("history files should be found");
     assert_eq!(files.len(), 1);
     let entries = spotify_history::parse_spotify_entries(&files).expect("entries should parse");
     assert_eq!(entries.len(), 3);
@@ -149,7 +154,8 @@ fn spotify_history_parser_summarizes_and_sorts() {
 
 #[test]
 fn spotify_import_pipeline_persists_to_db() {
-    let dir = std::env::temp_dir().join(format!("cassette-spotify-import-{}", uuid::Uuid::new_v4()));
+    let dir =
+        std::env::temp_dir().join(format!("cassette-spotify-import-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("temp dir should be created");
     let file = dir.join("Streaming_History_Audio_2026.json");
     let payload = r#"
@@ -175,7 +181,8 @@ fn spotify_import_pipeline_persists_to_db() {
     let db_path = dir.join("cassette-test.db");
     let db = cassette_core::db::Db::open(&db_path).expect("db should open");
 
-    let files = spotify_history::collect_spotify_history_files(&dir).expect("history files should be found");
+    let files = spotify_history::collect_spotify_history_files(&dir)
+        .expect("history files should be found");
     let entries = spotify_history::parse_spotify_entries(&files).expect("entries should parse");
     let library_track_counts = HashMap::new();
     let albums = spotify_history::summarize_spotify_albums(&entries, &library_track_counts);
@@ -216,7 +223,10 @@ fn parse_lastfm_artist_info_strips_html_and_reads_tags() {
     let parsed = now_playing::parse_lastfm_artist_info(&json).expect("artist info should parse");
     assert_eq!(parsed.summary.as_deref(), Some("Great band text"));
     assert_eq!(parsed.listeners, Some(12345));
-    assert_eq!(parsed.tags, vec!["indie".to_string(), "post-punk".to_string()]);
+    assert_eq!(
+        parsed.tags,
+        vec!["indie".to_string(), "post-punk".to_string()]
+    );
 }
 
 #[test]
@@ -290,8 +300,31 @@ fn desktop_setup_registers_media_shortcuts_and_tray_menu() {
 
     assert!(source.contains("register_media_shortcuts(app)"));
     assert!(source.contains("register_tray_menu(app)"));
-    assert!(source.contains("with_shortcuts([\"MediaPlayPause\", \"MediaTrackNext\", \"MediaTrackPrevious\"])"));
+    assert!(source.contains("get_slskd_runtime_status"));
+    assert!(source.contains("restart_slskd_runtime"));
+    assert!(source.contains(
+        "with_shortcuts([\"MediaPlayPause\", \"MediaTrackNext\", \"MediaTrackPrevious\"])"
+    ));
     assert!(source.contains("TrayIconBuilder::with_id(\"cassette-tray\")"));
+}
+
+#[test]
+fn smoke_script_uses_managed_slskd_runtime_probe() {
+    let smoke = include_str!("../../scripts/smoke_desktop.ps1");
+
+    assert!(smoke.contains("slskd_runtime_probe_cli"));
+    assert!(smoke.contains("Managed slskd runtime ready"));
+    assert!(!smoke.contains("slskd localhost:5030"));
+}
+
+#[test]
+fn slskd_runtime_probe_reuses_runtime_manager_contract() {
+    let probe = include_str!("../src/bin/slskd_runtime_probe_cli.rs");
+
+    assert!(probe.contains("runtime.ensure_started(None, &db, &download_config)"));
+    assert!(probe.contains("runtime.refresh_status(None, &db, &download_config)"));
+    assert!(probe.contains("probe_status.spawned_by_app"));
+    assert!(probe.contains("runtime.stop()"));
 }
 
 #[test]
@@ -332,14 +365,79 @@ fn command_shortcuts_protect_editable_targets() {
 #[test]
 fn route_components_do_not_import_desktop_window_or_core_apis() {
     let layout = include_str!("../../ui/src/routes/+layout.svelte");
-    let library = include_str!("../../ui/src/routes/+page.svelte");
+    let home = include_str!("../../ui/src/routes/+page.svelte");
+    let library = include_str!("../../ui/src/routes/library/+page.svelte");
     let downloads = include_str!("../../ui/src/routes/downloads/+page.svelte");
     let settings = include_str!("../../ui/src/routes/settings/+page.svelte");
 
-    for source in [layout, library, downloads, settings] {
+    for source in [layout, home, library, downloads, settings] {
         assert!(!source.contains("@tauri-apps/api/window"));
         assert!(!source.contains("@tauri-apps/api/core"));
     }
+}
+
+#[test]
+fn library_route_surfaces_musicbrainz_identity_details() {
+    let library = include_str!("../../ui/src/routes/library/+page.svelte");
+    let tauri_api = include_str!("../../ui/src/lib/api/tauri.ts");
+
+    assert!(library.contains("MB recording"));
+    assert!(library.contains("MB release"));
+    assert!(library.contains("MB release group"));
+    assert!(library.contains("Edition bucket"));
+    assert!(library.contains("Canonical artist"));
+    assert!(library.contains("track-inspector"));
+    assert!(tauri_api.contains("get_track_identity_context"));
+}
+
+#[test]
+fn downloads_route_surfaces_release_group_and_edition_policy_hints() {
+    let downloads = include_str!("../../ui/src/routes/downloads/+page.svelte");
+    let downloads_commands = include_str!("../src/commands/downloads.rs");
+
+    assert!(downloads.contains("requestIdentityMeta"));
+    assert!(downloads.contains("policy:"));
+    assert!(downloads_commands.contains("musicbrainz_release_group_id"));
+    assert!(downloads_commands.contains("edition_policy"));
+}
+
+#[test]
+fn settings_route_exposes_policy_profile_controls_and_commands() {
+    let settings_route = include_str!("../../ui/src/routes/settings/+page.svelte");
+    let tauri_api = include_str!("../../ui/src/lib/api/tauri.ts");
+    let settings_commands = include_str!("../src/commands/settings.rs");
+
+    assert!(settings_route.contains("Playback-First"));
+    assert!(settings_route.contains("Aggressive Overnight"));
+    assert!(tauri_api.contains("getPolicyProfile"));
+    assert!(tauri_api.contains("setPolicyProfile"));
+    assert!(settings_commands.contains("get_policy_profile"));
+    assert!(settings_commands.contains("set_policy_profile"));
+}
+
+#[test]
+fn home_route_carries_while_you_were_away_and_artist_first_copy() {
+    let home = include_str!("../../ui/src/routes/+page.svelte");
+    let layout = include_str!("../../ui/src/routes/+layout.svelte");
+
+    assert!(home.contains("While you were away"));
+    assert!(home.contains("Artist-first collection"));
+    assert!(home.contains("Collection intelligence"));
+    assert!(layout.contains("SystemStatusStrip"));
+}
+
+#[test]
+fn import_route_unifies_spotify_history_and_direct_track_intake() {
+    let import_route = include_str!("../../ui/src/routes/import/+page.svelte");
+    let import_commands = include_str!("../src/commands/import.rs");
+    let tauri_api = include_str!("../../ui/src/lib/api/tauri.ts");
+
+    assert!(import_route.contains("Spotify intake"));
+    assert!(import_route.contains("Album backlog from streaming history"));
+    assert!(import_route.contains("Direct desired-track JSON"));
+    assert!(import_route.contains("same identity-first desired-state pipeline"));
+    assert!(tauri_api.contains("importSpotifyDesiredTracks"));
+    assert!(import_commands.contains("import_spotify_desired_tracks"));
 }
 
 #[test]
@@ -357,8 +455,10 @@ fn spotify_intake_and_album_queue_use_canonical_operator_story() {
 fn planner_identity_lane_carries_release_group_and_edition_policy() {
     let planner_commands = include_str!("../src/commands/planner.rs");
 
-    assert!(planner_commands.contains("musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone()"));
-    assert!(planner_commands.contains("musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone(),"));
+    assert!(planner_commands
+        .contains("musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone()"));
+    assert!(planner_commands
+        .contains("musicbrainz_release_group_id: request.musicbrainz_release_group_id.clone(),"));
     assert!(planner_commands.contains("edition_policy: request.edition_policy.clone()"));
     assert!(planner_commands.contains("apply_edition_policy_filter_to_records"));
 }
@@ -372,4 +472,96 @@ fn queue_boundary_enforces_richer_identity_contract() {
     assert!(download_commands.contains("source_track_id was not preserved"));
     assert!(download_commands.contains("source_album_id was not preserved"));
     assert!(download_commands.contains("musicbrainz_release_group_id was not preserved"));
+}
+
+fn sample_request(status: &str) -> AcquisitionRequestRow {
+    AcquisitionRequestRow {
+        id: 1,
+        scope: "track".to_string(),
+        source_name: "manual".to_string(),
+        source_track_id: None,
+        source_album_id: None,
+        source_artist_id: None,
+        artist: "Artist".to_string(),
+        album: Some("Album".to_string()),
+        title: "Song".to_string(),
+        normalized_artist: "artist".to_string(),
+        normalized_album: Some("album".to_string()),
+        normalized_title: "song".to_string(),
+        track_number: Some(1),
+        disc_number: Some(1),
+        year: Some(2024),
+        duration_secs: Some(200.0),
+        isrc: None,
+        musicbrainz_recording_id: None,
+        musicbrainz_release_group_id: None,
+        musicbrainz_release_id: None,
+        canonical_artist_id: None,
+        canonical_release_id: None,
+        strategy: "Standard".to_string(),
+        quality_policy: None,
+        excluded_providers_json: None,
+        edition_policy: None,
+        confirmation_policy: "auto".to_string(),
+        desired_track_id: Some(42),
+        source_operation_id: None,
+        task_id: Some("task-1".to_string()),
+        request_signature: "sig-1".to_string(),
+        status: status.to_string(),
+        raw_payload_json: None,
+        created_at: "2026-04-06 00:00:00".to_string(),
+        updated_at: "2026-04-06 00:00:00".to_string(),
+    }
+}
+
+#[test]
+fn trust_ledger_maps_failed_execution_reason_codes() {
+    let request = sample_request("failed");
+    let execution = cassette_core::db::TaskExecutionSummary {
+        task_id: "task-1".to_string(),
+        disposition: "Failed".to_string(),
+        provider: Some("qobuz".to_string()),
+        failure_class: Some("rate_limited".to_string()),
+        final_path: None,
+        updated_at: "2026-04-06 00:00:00".to_string(),
+    };
+
+    let summary = trust_ledger::derive_request_trust_summary(
+        &request,
+        &[],
+        Some(&execution),
+        &[],
+        &[],
+        &[],
+    );
+
+    assert_eq!(summary.stage, "blocked");
+    assert_eq!(summary.reason_code, "rate_limited");
+}
+
+#[test]
+fn trust_ledger_prefers_gatekeeper_decision_when_runtime_result_missing() {
+    let request = sample_request("in_progress");
+    let audit = cassette_core::db::TrustLedgerGatekeeperAudit {
+        operation_id: "op-1".to_string(),
+        timestamp: "2026-04-06T00:00:00Z".to_string(),
+        file_path: "C:\\Music\\Artist\\Song.flac".to_string(),
+        decision: "Quarantined".to_string(),
+        desired_track_id: Some(42),
+        matched_local_file_id: None,
+        duration_ms: 45,
+        notes: "identity mismatch".to_string(),
+    };
+
+    let summary = trust_ledger::derive_request_trust_summary(
+        &request,
+        &[],
+        None,
+        &[],
+        &[],
+        &[audit],
+    );
+
+    assert_eq!(summary.reason_code, "quarantined");
+    assert_eq!(summary.headline, "Quarantined by gatekeeper");
 }

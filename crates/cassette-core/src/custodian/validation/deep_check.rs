@@ -143,7 +143,10 @@ pub fn deep_validate_audio(
     let mut effective_ext = ext.clone();
     if let Ok(mut file) = std::fs::File::open(path) {
         if let Ok(read) = file.read(&mut sniff) {
-            if !allowed_formats.iter().any(|v| v.eq_ignore_ascii_case(&effective_ext)) {
+            if !allowed_formats
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(&effective_ext))
+            {
                 if let Some(inferred) = infer_format_from_header(&sniff[..read]) {
                     effective_ext = inferred.to_string();
                     reasons.push(format!(

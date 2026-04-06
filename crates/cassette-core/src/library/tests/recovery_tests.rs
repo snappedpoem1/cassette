@@ -9,7 +9,10 @@ async fn resume_only_allows_in_progress_operation() {
         .await
         .expect("start");
 
-    manager.resume_operation(&op).await.expect("resume in progress");
+    manager
+        .resume_operation(&op)
+        .await
+        .expect("resume in progress");
 
     manager
         .complete_operation(&op, OperationStatus::Success)

@@ -1,7 +1,9 @@
 use crate::librarian::config::QualityConfig;
 use crate::librarian::error::{LibrarianError, Result};
 use crate::librarian::models::{IntegrityStatus, NewLocalFile, QualityTier};
-use crate::librarian::normalize::{album::normalize_album_title, artist::normalize_artist_name, track::normalize_track_title};
+use crate::librarian::normalize::{
+    album::normalize_album_title, artist::normalize_artist_name, track::normalize_track_title,
+};
 use crate::librarian::scanner::integrity::assess_integrity;
 use lofty::file::AudioFile;
 use lofty::prelude::{Accessor, TaggedFileExt};
@@ -81,10 +83,12 @@ pub fn parse_audio_file(path: &Path, quality: &QualityConfig) -> Result<ParsedAu
         .and_then(|v| v.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let suspicious = matches!(extension.as_str(), "mp3") && matches!(bit_depth, Some(depth) if depth > 0);
+    let suspicious =
+        matches!(extension.as_str(), "mp3") && matches!(bit_depth, Some(depth) if depth > 0);
     let has_required_metadata = artist.as_deref().is_some_and(|v| !v.trim().is_empty())
         && title.as_deref().is_some_and(|v| !v.trim().is_empty());
-    let integrity_status = assess_integrity(duration_ms.is_some(), has_required_metadata, suspicious);
+    let integrity_status =
+        assess_integrity(duration_ms.is_some(), has_required_metadata, suspicious);
 
     let quality_tier = quality_tier_for(&extension, bitrate, quality);
 
@@ -109,9 +113,16 @@ pub fn parse_audio_file(path: &Path, quality: &QualityConfig) -> Result<ParsedAu
     })
 }
 
-pub fn quality_tier_for(extension: &str, bitrate: Option<i64>, quality: &QualityConfig) -> Option<QualityTier> {
+pub fn quality_tier_for(
+    extension: &str,
+    bitrate: Option<i64>,
+    quality: &QualityConfig,
+) -> Option<QualityTier> {
     let ext = extension.to_ascii_lowercase();
-    if matches!(ext.as_str(), "flac" | "wav" | "alac" | "aiff" | "dsf" | "dff") {
+    if matches!(
+        ext.as_str(),
+        "flac" | "wav" | "alac" | "aiff" | "dsf" | "dff"
+    ) {
         return Some(QualityTier::LosslessPreferred);
     }
 

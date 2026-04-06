@@ -22,11 +22,18 @@ pub fn probe_audio(path: &std::path::Path) -> Result<ProbeReport, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| e.to_string())?;
 
     let mut format = probed.format;
-    let track = format.default_track().ok_or_else(|| "no default track".to_string())?;
+    let track = format
+        .default_track()
+        .ok_or_else(|| "no default track".to_string())?;
     if track.codec_params.codec == CODEC_TYPE_NULL {
         return Err("unknown codec".to_string());
     }
@@ -43,7 +50,9 @@ pub fn probe_audio(path: &std::path::Path) -> Result<ProbeReport, String> {
     };
 
     let mut decode_ok = false;
-    if let Ok(mut decoder) = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()) {
+    if let Ok(mut decoder) =
+        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())
+    {
         if let Ok(packet) = format.next_packet() {
             decode_ok = decoder.decode(&packet).is_ok();
         }
