@@ -29,6 +29,7 @@ export interface Album {
   year: number | null;
   cover_art_path: string | null;
   track_count: number;
+  dominant_color_hex: string | null;
 }
 
 export interface Artist {
@@ -408,6 +409,23 @@ export interface PlannerIdentityLane {
   confirmation_policy: string;
 }
 
+export interface TaskExecutionSummary {
+  task_id: string;
+  disposition: string;
+  provider: string | null;
+  failure_class: string | null;
+  final_path: string | null;
+  updated_at: string;
+}
+
+export interface RequestLineage {
+  request: unknown;
+  timeline: unknown[];
+  execution: TaskExecutionSummary | null;
+  provenance: string | null;
+  candidate_review: unknown[];
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -534,7 +552,7 @@ export const api = {
   getRequestCandidateReview: (requestId: number) =>
     invoke<CandidateReviewItem[]>('get_request_candidate_review', { requestId }),
   getRequestLineage: (requestId: number) =>
-    invoke<unknown>('get_request_lineage', { requestId }),
+    invoke<RequestLineage>('get_request_lineage', { requestId }),
 
   // Import
   parseSpotifyHistory: (path: string) =>
