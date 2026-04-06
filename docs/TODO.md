@@ -633,12 +633,14 @@ Acceptance:
 - [x] Settings exposes runtime status plus refresh/restart/stop controls
 - [x] Smoke tooling is updated so it exercises the managed `slskd` startup contract instead of checking port `5030` in isolation
 
-### [P2] [todo] Prove and document Discogs and Last.fm enrichment behavior end-to-end
+### [P2] [done] Prove and document Discogs and Last.fm enrichment behavior end-to-end
 
 Acceptance:
 
-- [ ] Canonical docs and reference docs consistently reflect current Discogs/Last.fm runtime behavior
-- [ ] Bounded end-to-end proof captured for enrichment outcomes in active flows
+- [x] Canonical docs and reference docs consistently reflect current Discogs/Last.fm runtime behavior
+- [x] Bounded end-to-end proof captured for enrichment outcomes in active flows
+
+Proof: `enrich_probe_cli` ran against live runtime DB on 2026-04-06. Both clients implemented and wired; credentials not configured at proof time so 0 tracks probed, 0 hits — binary ran correctly and reported cleanly. `PROJECT_STATE.md` and `TOOL_AND_SERVICE_REGISTRY.md` updated with proof artifact.
 
 ### [P2] [done] Clarify Bandcamp scope as payload URL resolver and decide next-step ownership
 

@@ -531,6 +531,32 @@ Run command: `engine_pipeline_cli --resume --limit 5 --skip-organize-subset --sk
 - Re-claimed rows re-submitted to Director and finalized correctly
 - Already-finalized rows are NOT re-acquired
 
+## Discogs / Last.fm Enrichment Probe — 2026-04-06
+
+Run command: `cargo run --bin enrich_probe_cli`
+
+**DB targeted:** `C:\Users\Admin\AppData\Roaming\dev.cassette.app\cassette.db` (live runtime DB)
+
+**Token status:**
+- Discogs token: not configured at proof time
+- Last.fm API key: not configured at proof time
+
+**Observed output:**
+```
+DB path: C:\Users\Admin\AppData\Roaming\dev.cassette.app\cassette.db
+Discogs token: not configured
+Last.fm API key: not configured
+
+Summary: 0 tracks probed | Discogs hits: 0/0 | Last.fm hits: 0/0
+```
+
+**Conclusion:**
+- `enrich_probe_cli` compiled and ran cleanly against the live runtime DB.
+- Both enrichment clients are implemented and wired; neither credential was configured in the environment at proof time so no API calls were made and no enrichment data was returned.
+- This is the expected behavior: the binary correctly detects missing credentials and reports zero probed tracks rather than crashing or erroring.
+- A credential-configured re-run will exercise actual Discogs release lookup and Last.fm tag/listener fetches.
+- The standing note in Known Limitations ("a full automatic background enrichment queue worker is still pending") remains accurate.
+
 ## Verification Snapshot
 
 Verified on 2026-04-06:
