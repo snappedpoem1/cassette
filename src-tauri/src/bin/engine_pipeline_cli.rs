@@ -9,8 +9,8 @@ use cassette_core::director::providers::{
 };
 use cassette_core::director::{
     AcquisitionStrategy, Director, DirectorConfig, DirectorHandle, DirectorSubmission,
-    DuplicatePolicy, NormalizedTrack, Provider, ProviderCapabilities, ProviderDescriptor,
-    ProviderPolicy, QualityPolicy, RetryPolicy, StrategyPlanner, TempRecoveryPolicy, TrackTask,
+    DuplicatePolicy, NormalizedTrack, Provider,
+    ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy, TrackTask,
     TrackTaskSource,
 };
 use cassette_core::librarian::db::LibrarianDb;
@@ -601,66 +601,6 @@ async fn run_spotify_backlog(
     Ok((albums_attempted, tracks_submitted, errors))
 }
 
-/// Build a minimal set of provider descriptors representing the full provider stack.
-/// Used by `plan_and_submit` to run `StrategyPlanner::plan` without instantiating real providers.
-fn coordinator_provider_descriptors() -> Vec<ProviderDescriptor> {
-    let caps = ProviderCapabilities {
-        supports_search: true,
-        supports_download: true,
-        supports_batch: false,
-        supports_lossless: true,
-    };
-    vec![
-        ProviderDescriptor {
-            id: "qobuz".to_string(),
-            display_name: "Qobuz".to_string(),
-            trust_rank: 1,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "deezer".to_string(),
-            display_name: "Deezer".to_string(),
-            trust_rank: 2,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "local_archive".to_string(),
-            display_name: "Local Archive".to_string(),
-            trust_rank: 3,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "usenet".to_string(),
-            display_name: "Usenet".to_string(),
-            trust_rank: 4,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "jackett".to_string(),
-            display_name: "Jackett".to_string(),
-            trust_rank: 5,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "real_debrid".to_string(),
-            display_name: "Real-Debrid".to_string(),
-            trust_rank: 6,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "slskd".to_string(),
-            display_name: "Soulseek / slskd".to_string(),
-            trust_rank: 7,
-            capabilities: caps.clone(),
-        },
-        ProviderDescriptor {
-            id: "yt_dlp".to_string(),
-            display_name: "yt-dlp".to_string(),
-            trust_rank: 8,
-            capabilities: caps,
-        },
-    ]
-}
 
 /// Route a `TrackTask` through the planner path: persist an `AcquisitionRequest`, record
 /// identity evidence and source aliases, auto-approve to Queued, then submit to the Director.
@@ -727,17 +667,14 @@ async fn plan_and_submit(
         None => control_db.create_acquisition_request(&request).await?,
     };
 
-    // Run StrategyPlanner to determine provider order (for audit/provenance purposes).
-    let descriptors = coordinator_provider_descriptors();
-    let planner = StrategyPlanner;
-    let _plan = planner.plan(task, &descriptors, &DirectorConfig::default());
-
-    // Record identity snapshot and source aliases in the runtime DB.
+    // Coordinator-originated requests are intentionally audit-lite: they persist an identity
+    // snapshot and source aliases, but not a candidate set — there is no human review step on
+    // the coordinator path, so no planner output needs to be persisted.
     db.record_request_identity_snapshot(task, &request_signature)?;
     db.record_request_source_aliases(&request, &request_signature)?;
 
     // Auto-approve: advance status to Queued.
-    control_db
+    match control_db
         .update_acquisition_request_status_by_task_id(
             &task.task_id,
             AcquisitionRequestStatus::Queued.as_str(),
@@ -745,7 +682,17 @@ async fn plan_and_submit(
             Some("coordinator planner path auto-approved"),
             None,
         )
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(_) => {}
+        None => {
+            eprintln!(
+                "plan_and_submit: status update found no row for task_id {} (signature: {})",
+                task.task_id, request_signature
+            );
+        }
+    }
 
     // Persist pending task state and submit to the Director.
     db.upsert_director_pending_task(task, "Queued")?;
