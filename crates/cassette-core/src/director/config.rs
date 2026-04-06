@@ -42,6 +42,8 @@ pub struct DirectorConfig {
     pub search_cache_capacity: u64,
     pub provider_memory_max_age_secs: i64,
     pub provider_response_cache_max_age_secs: i64,
+    pub adaptive_nudge_success_rank_bonus: i32,
+    pub adaptive_nudge_max_age_secs: i64,
 }
 
 impl DirectorConfig {
@@ -99,6 +101,8 @@ impl Default for DirectorConfig {
             search_cache_capacity: 5_000,
             provider_memory_max_age_secs: 6 * 60 * 60,
             provider_response_cache_max_age_secs: 2 * 60 * 60,
+            adaptive_nudge_success_rank_bonus: -3,
+            adaptive_nudge_max_age_secs: 7 * 24 * 60 * 60, // 7 days
         }
     }
 }
