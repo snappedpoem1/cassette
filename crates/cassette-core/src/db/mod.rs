@@ -3016,6 +3016,89 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Return permanently failed/cancelled director task history grouped by failure_class.
+    /// Each group includes up to `recent_limit` most recent items.
+    pub fn get_dead_letter_summary(&self, recent_limit: usize) -> Result<DeadLetterSummary> {
+        #[derive(Debug)]
+        struct GroupCount {
+            failure_class: String,
+            count: usize,
+        }
+
+        let mut count_stmt = self.conn.prepare(
+            "SELECT COALESCE(failure_class, 'provider_exhausted') AS failure_class,
+                    COUNT(*) AS count
+             FROM director_task_history
+             WHERE disposition IN ('Failed', 'Cancelled')
+             GROUP BY failure_class
+             ORDER BY count DESC, failure_class ASC",
+        )?;
+
+        let group_counts = count_stmt
+            .query_map([], |row| {
+                Ok(GroupCount {
+                    failure_class: row.get(0)?,
+                    count: row.get::<_, i64>(1)? as usize,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let total_count: usize = group_counts.iter().map(|group| group.count).sum();
+        if total_count == 0 {
+            return Ok(DeadLetterSummary {
+                groups: Vec::new(),
+                total_count,
+            });
+        }
+
+        let mut item_stmt = self.conn.prepare(
+            "SELECT task_id,
+                    json_extract(source_metadata_json, '$.artist') AS artist,
+                    json_extract(source_metadata_json, '$.title') AS title,
+                    json_extract(source_metadata_json, '$.album') AS album,
+                    provider,
+                    updated_at,
+                    request_json,
+                    request_signature
+             FROM director_task_history
+             WHERE disposition IN ('Failed', 'Cancelled')
+               AND COALESCE(failure_class, 'provider_exhausted') = ?1
+             ORDER BY updated_at DESC
+             LIMIT ?2",
+        )?;
+
+        let recent_limit = i64::try_from(recent_limit.max(1)).unwrap_or(5);
+        let mut groups = Vec::with_capacity(group_counts.len());
+
+        for group in &group_counts {
+            let recent_items = item_stmt
+                .query_map(params![group.failure_class, recent_limit], |row| {
+                    Ok(DeadLetterItem {
+                        task_id: row.get(0)?,
+                        artist: row.get(1)?,
+                        title: row.get(2)?,
+                        album: row.get(3)?,
+                        provider: row.get(4)?,
+                        failed_at: row.get(5)?,
+                        request_json: row.get(6)?,
+                        request_signature: row.get(7)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let (label, suggested_fix) = dead_letter_label_and_fix(&group.failure_class);
+            groups.push(DeadLetterGroup {
+                failure_class: group.failure_class.clone(),
+                label: label.to_string(),
+                suggested_fix: suggested_fix.to_string(),
+                count: group.count,
+                recent_items,
+            });
+        }
+
+        Ok(DeadLetterSummary { groups, total_count })
+    }
+
     /// Insert or update a single row in spotify_album_history.
     /// If the row already exists, only updates total_ms/play_count if the new values are higher.
     pub fn upsert_spotify_album_history(
@@ -3219,6 +3302,33 @@ pub struct StoredProviderSearchRecord {
     pub error: Option<String>,
     pub retryable: bool,
     pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterItem {
+    pub task_id: String,
+    pub artist: Option<String>,
+    pub title: Option<String>,
+    pub album: Option<String>,
+    pub provider: Option<String>,
+    pub failed_at: String,
+    pub request_json: Option<String>,
+    pub request_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterGroup {
+    pub failure_class: String,
+    pub label: String,
+    pub suggested_fix: String,
+    pub count: usize,
+    pub recent_items: Vec<DeadLetterItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterSummary {
+    pub groups: Vec<DeadLetterGroup>,
+    pub total_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3496,6 +3606,35 @@ fn provider_cache_outcome(
                 .map(|record| record.outcome.clone())
         })
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn dead_letter_label_and_fix(failure_class: &str) -> (&'static str, &'static str) {
+    match failure_class {
+        "auth_failed" => (
+            "Authentication failed",
+            "Check provider credentials in Settings",
+        ),
+        "rate_limited" => (
+            "Rate limited",
+            "Provider is throttling requests - wait and retry",
+        ),
+        "validation_failed" => (
+            "File failed validation",
+            "Candidate audio was corrupt or mismatched",
+        ),
+        "provider_busy" => (
+            "Provider busy",
+            "Provider was at capacity - retry automatically",
+        ),
+        "metadata_only" => (
+            "No downloadable file found",
+            "Provider returned metadata but no audio",
+        ),
+        _ => (
+            "All providers exhausted",
+            "No provider had a matching file",
+        ),
+    }
 }
 
 // ── Canonical Identity ────────────────────────────────────────────────────
@@ -4433,6 +4572,20 @@ mod tests {
             .get_spotify_album_history_last_imported_at()
             .expect("import timestamp should be readable");
         assert!(last_imported.is_some());
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn get_dead_letter_summary_returns_empty_for_new_db() {
+        let db_path = temp_db_path("dead-letter-empty");
+        let db = Db::open(&db_path).expect("db should open");
+
+        let summary = db
+            .get_dead_letter_summary(5)
+            .expect("dead letter summary should load");
+        assert_eq!(summary.total_count, 0);
+        assert!(summary.groups.is_empty());
 
         let _ = fs::remove_file(db_path);
     }
