@@ -7,7 +7,7 @@
   } from '$lib/stores/library';
   import { queueTracks } from '$lib/stores/queue';
   import { goto } from '$app/navigation';
-  import { formatDuration, formatAudioSpec, coverSrc, debounce } from '$lib/utils';
+  import { formatDuration, formatAudioSpec, coverSrc, debounce, tintFromHex } from '$lib/utils';
   import type { Album, Artist, Track } from '$lib/api/tauri';
   import { api } from '$lib/api/tauri';
 
@@ -67,7 +67,6 @@
     <div class="search-results">
       <div class="sr-label">{$searchResults.length} results for "{searchInput}"</div>
       {#each $searchResults as track, i}
-        {@const playing = false}
         <!-- svelte-ignore a11y-no-static-element-interactions -->
         <div class="track-row" on:dblclick={() => playTrack($searchResults, i)}>
           <span class="track-num">{i + 1}</span>
@@ -96,7 +95,17 @@
     {#if $activeTab === 'albums'}
       {#if selectedAlbum}
         <!-- Album detail view -->
+        {@const detailTint = tintFromHex(selectedAlbum.dominant_color_hex)}
         <div class="album-detail">
+          <!-- Blurred backdrop -->
+          {#if selectedAlbum.cover_art_path}
+            <div
+              class="album-detail-backdrop"
+              style="background-image:url({coverSrc(selectedAlbum.cover_art_path)});background-color:{detailTint.bg};"
+            ></div>
+          {:else}
+            <div class="album-detail-backdrop" style="background:{detailTint.bg};"></div>
+          {/if}
           <div class="album-detail-header">
             <button class="back-btn" on:click={closeAlbum}>← Albums</button>
             <div class="album-detail-art">
@@ -146,6 +155,7 @@
         {:else}
           <div class="album-grid">
             {#each $albums as album}
+              {@const tint = tintFromHex(album.dominant_color_hex)}
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <div
                 class="album-card"
@@ -165,8 +175,8 @@
                 {:else}
                   <div class="album-art-placeholder">💿</div>
                 {/if}
-                <div class="album-info">
-                  <div class="album-title">{album.title}</div>
+                <div class="album-info" style="background:{tint.bg};">
+                  <div class="album-title" style="color:{tint.titleColor};">{album.title}</div>
                   <div class="album-artist">{album.artist}</div>
                   <div class="album-meta">{album.year ?? ''}{album.year && album.track_count ? ' · ' : ''}{album.track_count} tracks</div>
                 </div>
@@ -247,7 +257,15 @@
 
 .track-list { padding: 8px; }
 
-.album-detail { padding: 1.5rem; }
+.album-detail { padding: 1.5rem; position: relative; overflow: hidden; }
+.album-detail-backdrop {
+  position: absolute; inset: 0; z-index: 0;
+  background-size: cover; background-position: center;
+  filter: blur(60px) brightness(0.35) saturate(1.4);
+  transform: scale(1.1);
+  pointer-events: none;
+}
+.album-detail > *:not(.album-detail-backdrop) { position: relative; z-index: 1; }
 .album-detail-header {
   display: flex; align-items: flex-end; gap: 20px;
   margin-bottom: 24px;
