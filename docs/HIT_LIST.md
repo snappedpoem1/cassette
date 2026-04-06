@@ -96,6 +96,7 @@ Already proven:
 - [x] Prove and document Discogs and Last.fm enrichment behavior end-to-end — **DONE 2026-04-06**: `enrich_probe_cli` ran against live runtime DB; both clients implemented, credentials not configured at proof time (0 tracks probed, binary reported cleanly). Proof recorded in `PROJECT_STATE.md`.
 - [x] Add adaptive provider orchestrator nudge with bounded floor guarantees — **DONE 2026-04-06**: recent finalized provider memory now nudges waterfall ordering conservatively (trust_rank floor <= 10 protected) with debug reorder evidence.
 - [x] Add dead-letter command center with replay path — **DONE 2026-04-06**: grouped dead-letter summary shipped to Downloads with per-item retry routed through planner approval (`dead_letter_replay` lineage).
+- [x] Add bounded lyrics prefetch lane for recent playback/finalized metadata — **DONE 2026-04-06**: optional background LRCLIB prefetch now seeds cache from recent play-history plus finalized-task metadata candidates with strict item/time caps.
 - [x] Clarify Bandcamp scope as payload URL resolver and record next-step ownership — **DONE 2026-04-06**: Bandcamp remains resolver-only for payload URLs and ownership scope is recorded in `DECISIONS.md` Decision 33.
 
 ---

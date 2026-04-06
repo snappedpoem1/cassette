@@ -608,7 +608,7 @@ Acceptance:
 
 - [x] Synced/plain lyrics now persist durably in the runtime DB and are reused before LRCLIB refetch
 - [x] Cache refresh/expiry policy is explicit and documented
-- [ ] Optional prefetch lane exists for recently played or newly finalized tracks if it is still worth the complexity
+- [x] Optional prefetch lane exists for recently played or newly finalized tracks if it is still worth the complexity — **DONE 2026-04-06**: bounded background lyrics prefetch now seeds LRCLIB cache from recent play-history and recent finalized-task metadata candidates with strict per-run item and timeout caps.
 
 ### [P2] [done] Add a bounded runtime canonical backfill lane for older tracks
 

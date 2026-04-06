@@ -10,7 +10,7 @@ use crate::Result;
 use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Reads an image file from disk, downsamples it to 8×8, and returns the
@@ -58,6 +58,13 @@ pub struct CachedLyrics {
     pub synced_lyrics: Option<String>,
     pub source: String,
     pub fetched_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LyricsPrefetchCandidate {
+    pub artist: String,
+    pub title: String,
+    pub album: Option<String>,
 }
 
 impl Db {
@@ -1140,6 +1147,87 @@ impl Db {
             ],
         )?;
         Ok(())
+    }
+
+    /// Build a bounded, deduplicated prefetch lane from recent playback and recent finalized tasks.
+    pub fn get_lyrics_prefetch_candidates(
+        &self,
+        playback_limit: usize,
+        finalized_limit: usize,
+    ) -> Result<Vec<LyricsPrefetchCandidate>> {
+        let playback_limit = i64::try_from(playback_limit.max(1)).unwrap_or(16);
+        let finalized_limit = i64::try_from(finalized_limit.max(1)).unwrap_or(16);
+
+        let mut candidates = Vec::new();
+        let mut seen = HashSet::<(String, String, String)>::new();
+
+        let mut playback_stmt = self.conn.prepare(
+            "SELECT artist, title, NULLIF(trim(ifnull(album, '')), '')
+             FROM play_history_events
+             ORDER BY played_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+        let playback_rows = playback_stmt.query_map(params![playback_limit], |row| {
+            Ok(LyricsPrefetchCandidate {
+                artist: row.get::<_, String>(0)?,
+                title: row.get::<_, String>(1)?,
+                album: row.get::<_, Option<String>>(2)?,
+            })
+        })?;
+
+        for row in playback_rows {
+            let candidate = row?;
+            let artist = normalize_artist_identity(&candidate.artist);
+            let title = normalize_identity_text(&candidate.title);
+            let album = candidate
+                .album
+                .as_deref()
+                .map(normalize_identity_text)
+                .unwrap_or_default();
+            if artist.is_empty() || title.is_empty() {
+                continue;
+            }
+            if seen.insert((artist, title, album)) {
+                candidates.push(candidate);
+            }
+        }
+
+        let mut finalized_stmt = self.conn.prepare(
+            "SELECT json_extract(source_metadata_json, '$.artist') AS artist,
+                    json_extract(source_metadata_json, '$.title') AS title,
+                    json_extract(source_metadata_json, '$.album') AS album
+             FROM director_task_history
+             WHERE disposition IN ('Finalized', 'AlreadyPresent', 'MetadataOnly')
+               AND source_metadata_json IS NOT NULL
+             ORDER BY updated_at DESC
+             LIMIT ?1",
+        )?;
+        let finalized_rows = finalized_stmt.query_map(params![finalized_limit], |row| {
+            Ok(LyricsPrefetchCandidate {
+                artist: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                album: row.get::<_, Option<String>>(2)?,
+            })
+        })?;
+
+        for row in finalized_rows {
+            let candidate = row?;
+            let artist = normalize_artist_identity(&candidate.artist);
+            let title = normalize_identity_text(&candidate.title);
+            let album = candidate
+                .album
+                .as_deref()
+                .map(normalize_identity_text)
+                .unwrap_or_default();
+            if artist.is_empty() || title.is_empty() {
+                continue;
+            }
+            if seen.insert((artist, title, album)) {
+                candidates.push(candidate);
+            }
+        }
+
+        Ok(candidates)
     }
 
     /// Update a track's path after file move
@@ -4600,6 +4688,71 @@ mod tests {
             .expect("dead letter summary should load");
         assert_eq!(summary.total_count, 0);
         assert!(summary.groups.is_empty());
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn lyrics_prefetch_candidates_dedupe_recent_playback_and_finalized_rows() {
+        let db_path = temp_db_path("lyrics-prefetch-candidates");
+        let db = Db::open(&db_path).expect("db should open");
+
+        db.record_play_history_event(
+            "local_playback",
+            "Massive Attack",
+            "Teardrop",
+            Some("Mezzanine"),
+            Some("2026-04-06 10:00:00"),
+            None,
+        )
+        .expect("playback event should insert");
+
+        db.conn
+            .execute(
+                "INSERT INTO director_task_history
+                    (task_id, disposition, provider, failure_class, final_path, request_signature,
+                     score_total, error, source_metadata_json, validation_json, score_reason_json,
+                     attempts_json, result_json, updated_at)
+                 VALUES (?1, 'Finalized', 'qobuz', NULL, NULL, NULL, NULL, NULL, ?2, NULL, NULL, '[]', '{}', ?3)",
+                params![
+                    "prefetch-task-1",
+                    r#"{"artist":"Massive Attack","title":"Teardrop","album":"Mezzanine"}"#,
+                    "2026-04-06 10:01:00"
+                ],
+            )
+            .expect("finalized row should insert");
+
+        db.conn
+            .execute(
+                "INSERT INTO director_task_history
+                    (task_id, disposition, provider, failure_class, final_path, request_signature,
+                     score_total, error, source_metadata_json, validation_json, score_reason_json,
+                     attempts_json, result_json, updated_at)
+                 VALUES (?1, 'Finalized', 'deezer', NULL, NULL, NULL, NULL, NULL, ?2, NULL, NULL, '[]', '{}', ?3)",
+                params![
+                    "prefetch-task-2",
+                    r#"{"artist":"Portishead","title":"Roads","album":"Dummy"}"#,
+                    "2026-04-06 10:02:00"
+                ],
+            )
+            .expect("second finalized row should insert");
+
+        let candidates = db
+            .get_lyrics_prefetch_candidates(10, 10)
+            .expect("prefetch candidates should load");
+
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.artist == "Massive Attack" && candidate.title == "Teardrop"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.artist == "Portishead" && candidate.title == "Roads"));
+
+        let duplicate_count = candidates
+            .iter()
+            .filter(|candidate| candidate.artist == "Massive Attack" && candidate.title == "Teardrop")
+            .count();
+        assert_eq!(duplicate_count, 1);
 
         let _ = fs::remove_file(db_path);
     }

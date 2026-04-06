@@ -7,6 +7,10 @@ use chrono::{Duration, NaiveDateTime, Utc};
 use tauri::State;
 
 const LYRICS_CACHE_TTL_DAYS: i64 = 30;
+const LYRICS_PREFETCH_PLAYBACK_LIMIT: usize = 12;
+const LYRICS_PREFETCH_FINALIZED_LIMIT: usize = 12;
+const LYRICS_PREFETCH_MAX_ITEMS: usize = 4;
+const LYRICS_PREFETCH_TIMEOUT_SECS: u64 = 6;
 
 #[tauri::command]
 pub fn player_load(state: State<'_, AppState>, path: String) {
@@ -55,6 +59,8 @@ pub fn player_play(state: State<'_, AppState>) {
             track.id
         );
     }
+
+    spawn_lyrics_prefetch_lane(state.clone());
 }
 
 #[tauri::command]
@@ -111,6 +117,7 @@ pub fn player_next(state: State<'_, AppState>) {
                     );
                 }
             }
+            spawn_lyrics_prefetch_lane(state.clone());
         }
     }
 }
@@ -407,6 +414,75 @@ async fn fetch_lrclib_lyrics(
     }
 
     Some(LrclibResult { plain, synced })
+}
+
+fn spawn_lyrics_prefetch_lane(state: State<'_, AppState>) {
+    let db = std::sync::Arc::clone(&state.db);
+    let client = state.http_client.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let candidates = {
+            let Ok(db) = db.lock() else {
+                return;
+            };
+            db.get_lyrics_prefetch_candidates(
+                LYRICS_PREFETCH_PLAYBACK_LIMIT,
+                LYRICS_PREFETCH_FINALIZED_LIMIT,
+            )
+            .unwrap_or_default()
+        };
+
+        for candidate in candidates.into_iter().take(LYRICS_PREFETCH_MAX_ITEMS) {
+            let is_fresh = {
+                let Ok(db) = db.lock() else {
+                    return;
+                };
+                db.get_cached_track_lyrics(
+                    &candidate.artist,
+                    &candidate.title,
+                    candidate.album.as_deref(),
+                )
+                .ok()
+                .flatten()
+                .is_some_and(|cached| {
+                    !lyrics_cache_is_stale(&cached.fetched_at)
+                        && (cached.lyrics.is_some() || cached.synced_lyrics.is_some())
+                })
+            };
+
+            if is_fresh {
+                continue;
+            }
+
+            let fetched = tokio::time::timeout(
+                std::time::Duration::from_secs(LYRICS_PREFETCH_TIMEOUT_SECS),
+                fetch_lrclib_lyrics(
+                    &client,
+                    &candidate.artist,
+                    &candidate.title,
+                    candidate.album.as_deref(),
+                ),
+            )
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(result) = fetched {
+                let Ok(db) = db.lock() else {
+                    return;
+                };
+                let _ = db.upsert_track_lyrics(
+                    None,
+                    &candidate.artist,
+                    &candidate.title,
+                    candidate.album.as_deref(),
+                    result.plain.as_deref(),
+                    result.synced.as_deref(),
+                    "LRCLIB",
+                );
+            }
+        }
+    });
 }
 
 fn merge_unique_tags(existing: &mut Vec<String>, incoming: Vec<String>) {

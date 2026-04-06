@@ -39,6 +39,7 @@ Last updated: 2026-04-06
 - Now-playing context from Last.fm plus Last.fm recent-scrobble sync into local artist/song/play-history tables
 - Synced/plain lyrics from LRCLIB
 - Runtime now caches synced/plain lyrics in the app DB by normalized artist/title/album identity, treats rows older than 30 days as stale, and refreshes stale/partial rows on demand during now-playing lookups
+- A bounded background lyrics prefetch lane now warms LRCLIB cache from recent playback plus recent finalized-task metadata candidates (strict candidate and timeout caps per run)
 
 ### Desktop UX Stabilization (2026-04-05)
 
