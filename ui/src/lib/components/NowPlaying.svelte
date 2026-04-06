@@ -102,50 +102,39 @@
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   height: var(--nowplaying-h);
-  padding: 0 16px;
+  padding: 0 14px;
   gap: 12px;
 }
 
-/* Left */
-.np-left { display: flex; align-items: center; gap: 12px; overflow: hidden; }
-.np-art  { width: 52px; height: 52px; flex-shrink: 0; border-radius: 6px; overflow: hidden; background: var(--bg-active); }
+.np-left { display: flex; align-items: center; gap: 10px; overflow: hidden; }
+.np-art  { width: 44px; height: 44px; flex-shrink: 0; border-radius: 5px; overflow: hidden; background: var(--bg-card); box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
 .np-art img { width: 100%; height: 100%; object-fit: cover; }
-.np-art-ph  { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: var(--text-muted); }
+.np-art-ph  { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: var(--text-muted); }
 .np-info    { overflow: hidden; }
-.np-title   { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-artist  { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-title   { font-weight: 600; font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
+.np-artist  { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 
-/* Center */
-.np-center { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 320px; max-width: 480px; width: 100%; }
+.np-center { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 300px; max-width: 460px; width: 100%; }
 .np-controls { display: flex; align-items: center; gap: 8px; }
 .ctrl-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; border-radius: 50%; font-size: 1rem;
-  color: var(--text-secondary); background: none; border: none; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 50%; font-size: 0.9rem;
+  color: var(--text-muted); background: none; border: none; cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .ctrl-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.play-btn { width: 40px; height: 40px; background: var(--accent) !important; color: #fff !important; }
-.play-btn:hover { background: var(--accent-bright) !important; }
+.play-btn {
+  width: 32px; height: 32px;
+  background: var(--primary) !important;
+  color: var(--bg-deep) !important;
+  box-shadow: 0 2px 10px rgba(139,180,212,0.25);
+}
+.play-btn:hover { background: #a0c8e8 !important; }
 
-.np-seek  { display: flex; align-items: center; gap: 8px; width: 100%; }
-.np-time  { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; min-width: 36px; }
+.np-seek  { display: flex; align-items: center; gap: 7px; width: 100%; }
+.np-time  { font-size: 0.68rem; color: var(--text-muted); white-space: nowrap; min-width: 32px; }
 .np-time.right { text-align: right; }
 
-.seek-bar  { flex: 1; height: 4px; background: var(--bg-active); border-radius: 99px; cursor: pointer; position: relative; }
-.seek-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 99px; pointer-events: none; }
-.seek-thumb {
-  position: absolute; top: 50%; width: 12px; height: 12px; background: #fff;
-  border-radius: 50%; transform: translate(-50%,-50%);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-  opacity: 0; pointer-events: none; transition: opacity 0.15s;
-}
-.seek-bar:hover .seek-thumb { opacity: 1; }
-
-/* Right */
-.np-right   { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
-.vol-icon   { font-size: 0.9rem; }
-.volume-bar { width: 80px; height: 4px; background: var(--bg-active); border-radius: 99px; cursor: pointer; position: relative; }
-.volume-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--text-secondary); border-radius: 99px; pointer-events: none; transition: background 0.1s; }
-.volume-bar:hover .volume-fill { background: var(--accent); }
+.np-right   { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
+.vol-icon   { font-size: 0.82rem; color: var(--text-muted); }
 </style>
