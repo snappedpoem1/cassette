@@ -25,7 +25,7 @@
             {#if ctx.artist_tags?.length}
               <div class="info-tags">
                 {#each ctx.artist_tags.slice(0, 6) as tag}
-                  <span class="badge badge-accent">{tag}</span>
+                  <span class="info-tag">{tag}</span>
                 {/each}
               </div>
             {/if}
@@ -63,7 +63,7 @@
           <div class="empty-state" style="padding:2rem 1rem;">
             <div class="empty-icon">🎤</div>
             <div class="empty-title">Nothing playing</div>
-            <div class="empty-body">Artist info &amp; lyrics will appear here.</div>
+            <div class="empty-body">Artist info &amp; lyrics appear here.</div>
           </div>
         {/if}
       </div>
@@ -73,27 +73,29 @@
 
 <style>
 .right-sidebar { display: flex; flex-direction: column; height: 100%; }
-.rs-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+
+.rs-tabs { display: flex; border-bottom: 1px solid var(--border-dim); flex-shrink: 0; }
 .rs-tab {
-  flex: 1; padding: 12px 8px; font-size: 0.85rem; font-weight: 500;
-  color: var(--text-secondary); cursor: pointer; background: none;
+  flex: 1; padding: 10px 6px; font-size: 0.75rem; font-weight: 600;
+  color: var(--text-muted); cursor: pointer; background: none;
   border: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
-  transition: color 0.15s;
+  transition: color 0.15s; letter-spacing: 0.04em;
 }
-.rs-tab:hover { color: var(--text-primary); }
-.rs-tab.active { color: var(--accent-bright); border-bottom-color: var(--accent); }
+.rs-tab:hover { color: var(--text-secondary); }
+.rs-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 
 .rs-content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
 
-.info-panel { padding: 0 12px; display: flex; flex-direction: column; }
-.info-section { padding: 14px 0; border-bottom: 1px solid var(--border); }
+.info-panel { padding: 0 10px; display: flex; flex-direction: column; }
+.info-section { padding: 12px 0; border-bottom: 1px solid var(--border-dim); }
 .info-section:last-child { border-bottom: none; }
-.info-label  { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+.info-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 5px; font-weight: 700; }
 .info-source { font-weight: 400; text-transform: none; letter-spacing: 0; }
-.info-artist { font-size: 1rem; font-weight: 700; margin-bottom: 6px; }
-.info-album  { font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; }
-.info-tags   { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
-.info-meta   { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 6px; }
-.info-summary { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.6; margin: 0; max-height: 100px; overflow: hidden; }
-.lyrics { font-family: inherit; font-size: 0.8rem; color: var(--text-secondary); white-space: pre-wrap; line-height: 1.9; margin: 0; max-height: 280px; overflow-y: auto; }
+.info-artist { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); margin-bottom: 5px; }
+.info-album  { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); margin-bottom: 5px; }
+.info-tags   { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 5px; }
+.info-tag    { font-size: 0.62rem; padding: 2px 6px; border-radius: 3px; background: rgba(139,180,212,0.1); color: var(--primary); letter-spacing: 0.04em; }
+.info-meta   { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 5px; }
+.info-summary { font-size: 0.75rem; color: var(--text-secondary); line-height: 1.65; margin: 0; max-height: 90px; overflow: hidden; }
+.lyrics { font-family: inherit; font-size: 0.75rem; color: var(--text-secondary); white-space: pre-wrap; line-height: 2; margin: 0; max-height: 260px; overflow-y: auto; }
 </style>
