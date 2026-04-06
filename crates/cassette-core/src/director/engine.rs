@@ -28,7 +28,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Default)]
 struct ProviderRuntimeState {
@@ -115,6 +115,7 @@ impl ProviderSkipReason {
 #[derive(Debug, Clone, Default)]
 struct PersistedProviderHints {
     skip_reasons: HashMap<String, ProviderSkipReason>,
+    memory_rows: Vec<StoredProviderMemory>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1184,6 +1185,14 @@ async fn execute_waterfall(
         .collect();
     let persisted_hints =
         load_persisted_provider_hints(config, task, search_cache, provider_cache_epochs).await;
+    let mut adaptive_plan = plan.clone();
+    apply_adaptive_nudge(
+        &mut adaptive_plan,
+        providers,
+        &persisted_hints.memory_rows,
+        config,
+        &task.task_id,
+    );
     let mut valid_candidates = Vec::<(CandidateDisposition, ProviderDescriptor)>::new();
     let mut deferred_providers = Vec::<String>::new();
 
@@ -1195,10 +1204,10 @@ async fn execute_waterfall(
             // Quality-gated compare mode intentionally evaluates the first provider
             // before deciding whether to compare, so prefetch is skipped.
         } else {
-            let prefetch_count = n.min(plan.provider_order.len());
+            let prefetch_count = n.min(adaptive_plan.provider_order.len());
             let mut prefetch_set = tokio::task::JoinSet::new();
 
-            for provider_id in plan.provider_order.iter().take(prefetch_count) {
+            for provider_id in adaptive_plan.provider_order.iter().take(prefetch_count) {
                 if should_skip_provider(
                     config,
                     provider_health_state,
@@ -1226,7 +1235,7 @@ async fn execute_waterfall(
 
                 let config_clone = config.clone();
                 let task_clone = task.clone();
-                let plan_clone = plan.clone();
+                let plan_clone = adaptive_plan.clone();
                 let cancel_clone = cancel_token.clone();
                 let cache_clone = Arc::clone(search_cache);
                 let provider_cache_epochs_clone = Arc::clone(provider_cache_epochs);
@@ -1275,7 +1284,7 @@ async fn execute_waterfall(
     }
 
     // Pass 1: Non-blocking — try each provider, skip if semaphore is full
-    for (provider_order_index, provider_id) in plan.provider_order.iter().enumerate() {
+    for (provider_order_index, provider_id) in adaptive_plan.provider_order.iter().enumerate() {
         if let Some(reason) = should_skip_provider(
             config,
             provider_health_state,
@@ -1356,8 +1365,10 @@ async fn execute_waterfall(
 
     // Pass 2: Blocking — try deferred providers (ones that were busy in pass 1)
     for provider_id in &deferred_providers {
-        let Some(provider_order_index) =
-            plan.provider_order.iter().position(|id| id == provider_id)
+        let Some(provider_order_index) = adaptive_plan
+            .provider_order
+            .iter()
+            .position(|id| id == provider_id)
         else {
             continue;
         };
@@ -1821,13 +1832,133 @@ async fn load_persisted_provider_hints(
     .await;
 
     let mut skip_reasons = HashMap::new();
-    for row in memory_rows {
+    for row in &memory_rows {
         if let Some(reason) = persisted_provider_skip_reason(config, &row, now) {
             skip_reasons.insert(row.provider_id.clone(), reason);
         }
     }
 
-    PersistedProviderHints { skip_reasons }
+    PersistedProviderHints {
+        skip_reasons,
+        memory_rows,
+    }
+}
+
+/// Apply a conservative adaptive nudge to provider order using persisted success memory.
+///
+/// Rules:
+/// - Recent finalized outcomes receive a rank bonus.
+/// - Providers with trust_rank <= 10 form a hard floor and cannot be overtaken.
+/// - Strategy ordering remains stable for ties.
+/// - Reorders are logged at debug level.
+fn apply_adaptive_nudge(
+    plan: &mut StrategyPlan,
+    providers: &[Arc<dyn Provider>],
+    memory_rows: &[StoredProviderMemory],
+    config: &DirectorConfig,
+    task_id: &str,
+) {
+    if memory_rows.is_empty() {
+        return;
+    }
+
+    let now = Utc::now();
+    let max_age_secs = config.adaptive_nudge_max_age_secs.max(1);
+    let bonus = config.adaptive_nudge_success_rank_bonus;
+    if bonus <= 0 {
+        return;
+    }
+
+    let provider_meta = providers
+        .iter()
+        .map(|provider| {
+            let descriptor = provider.descriptor();
+            (descriptor.id, descriptor.trust_rank)
+        })
+        .collect::<HashMap<String, i32>>();
+
+    let floor_providers = plan
+        .provider_order
+        .iter()
+        .filter(|provider_id| {
+            provider_meta
+                .get(provider_id.as_str())
+                .copied()
+                .unwrap_or(i32::MAX)
+                <= 10
+        })
+        .cloned()
+        .collect::<std::collections::HashSet<String>>();
+
+    let mut effective_rank = plan
+        .provider_order
+        .iter()
+        .map(|provider_id| {
+            let base_rank = provider_meta
+                .get(provider_id.as_str())
+                .copied()
+                .unwrap_or(i32::MAX / 2);
+            (provider_id.clone(), base_rank)
+        })
+        .collect::<HashMap<String, i32>>();
+
+    let mut nudge_log = Vec::<String>::new();
+
+    for row in memory_rows {
+        if row.last_outcome != "finalized" {
+            continue;
+        }
+        let Some(updated_at) = parse_persisted_utc(row.updated_at.as_str()) else {
+            continue;
+        };
+        if now.signed_duration_since(updated_at).num_seconds() > max_age_secs {
+            continue;
+        }
+
+        let Some(rank) = effective_rank.get_mut(row.provider_id.as_str()) else {
+            continue;
+        };
+
+        let original = *rank;
+        *rank = rank.saturating_sub(bonus);
+        if *rank != original {
+            nudge_log.push(format!("{} {} -> {}", row.provider_id, original, *rank));
+        }
+    }
+
+    if nudge_log.is_empty() {
+        return;
+    }
+
+    let original_order = plan.provider_order.clone();
+    let original_index = original_order
+        .iter()
+        .enumerate()
+        .map(|(index, provider_id)| (provider_id.clone(), index))
+        .collect::<HashMap<String, usize>>();
+
+    plan.provider_order.sort_by_key(|provider_id| {
+        let is_floor = floor_providers.contains(provider_id);
+        let rank = effective_rank
+            .get(provider_id.as_str())
+            .copied()
+            .unwrap_or(i32::MAX / 2);
+        let index = original_index
+            .get(provider_id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX / 2);
+        (if is_floor { 0 } else { 1 }, rank, index)
+    });
+
+    if plan.provider_order != original_order {
+        debug!(
+            task_id = task_id,
+            nudges = ?nudge_log,
+            before = ?original_order,
+            after = ?plan.provider_order,
+            "adaptive_nudge: provider order adjusted"
+        );
+    }
 }
 
 async fn hydrate_search_cache_from_persisted_rows(

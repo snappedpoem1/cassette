@@ -472,6 +472,7 @@ Acceptance:
 - [x] Failed terminal history rows retain provider attribution and `failure_class`
 - [x] At least one runtime path reuses persisted search/candidate memory before re-querying
 - [x] Exclusion or negative-result memory is wired into a real decision path
+- [x] Adaptive provider nudge now reorders waterfall attempts from recent finalized provider memory with trust-rank floor protection and debug evidence logging — **DONE 2026-04-06**
 
 ### [P1] [done] Accumulate librarian fingerprint evidence without full-library reruns
 

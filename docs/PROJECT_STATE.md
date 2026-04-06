@@ -79,6 +79,7 @@ Last updated: 2026-04-06
 - Search-result caching in the director waterfall with strategy-aware cache keys and provider-epoch invalidation
 - Concurrent provider health polling with skip-on-down behavior
 - Runtime provider stabilization cools down rate-limited and temporary-outage providers, disables auth-failed providers for the rest of the run, and treats provider-busy as capacity pressure instead of provider-down
+- Adaptive provider nudge reorders providers with recent finalized memory (<= 7 days) using a bounded trust-rank bonus; trust-rank-floor providers (<= 10) cannot be overtaken and order adjustments are logged at debug level
 - Runtime policy profiles now tune Director worker concurrency, provider parallelism, retry cadence, timeout/cooldown envelopes, and per-provider concurrency limits deterministically at runtime
 - Broadcast event channels for progress, results, and provider health
 - Deezer full-track acquisition is live-proven on this machine

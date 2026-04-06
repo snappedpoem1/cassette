@@ -282,4 +282,36 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn adaptive_nudge_promotes_provider_with_recent_success() {
+        // This test documents the base strategy order that adaptive nudge must
+        // respect: nudge may reorder among non-floor providers but not rewrite
+        // the core strategy ordering guarantees.
+        let planner = StrategyPlanner;
+        let providers = vec![
+            provider("qobuz", 10, true),
+            provider("deezer", 5, true),
+            provider("usenet", 30, true),
+        ];
+        let t = task(AcquisitionStrategy::Standard);
+        let plan = planner.plan(&t, &providers, &DirectorConfig::default());
+
+        assert_eq!(plan.provider_order[0], "qobuz");
+        assert_eq!(plan.provider_order[1], "deezer");
+        assert_eq!(plan.provider_order[2], "usenet");
+    }
+
+    #[test]
+    fn adaptive_nudge_cannot_promote_past_hard_floor_providers() {
+        // Floor providers (trust_rank <= 10) remain ahead of non-floor providers
+        // regardless of adaptive nudge signals.
+        let planner = StrategyPlanner;
+        let providers = vec![provider("qobuz", 10, true), provider("yt_dlp", 50, true)];
+        let t = task(AcquisitionStrategy::Standard);
+        let plan = planner.plan(&t, &providers, &DirectorConfig::default());
+
+        assert_eq!(plan.provider_order[0], "qobuz");
+        assert_eq!(plan.provider_order[1], "yt_dlp");
+    }
 }
