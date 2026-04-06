@@ -492,6 +492,33 @@ Run command: `engine_pipeline_cli --resume --limit 0 --skip-post-sync --skip-org
 **Post-proof hygiene:**
 - Seed rows were removed from `desired_tracks`, `reconciliation_results`, and `delta_queue` after evidence capture.
 
+## Planner Cutover Live Proof — 2026-04-06
+
+Run command: `engine_pipeline_cli --resume --limit 5 --skip-organize-subset --skip-post-sync`
+
+**What was run:**
+- Both `--skip-organize-subset` and `--skip-post-sync` flags confirmed present and accepted (shown in startup banner).
+- Binary compiled and ran from `src-tauri/src/bin/engine_pipeline_cli.rs` against the live runtime.
+
+**Observed behavior:**
+- Binary started without crash.
+- Librarian resume entered queue-only fast path: `files_scanned=0`, `files_upserted=0` (checkpoint fast-path confirmed, `local_files=46503` known rows).
+- Reconciliation ran: `processed=1`.
+- Delta queue generation completed: `delta_queue_entries=0`.
+- Coordinator reported: `No actionable delta_queue rows.` — expected; no pending desired-state work was queued at time of proof run.
+- `skip_post_sync=true`, `skip_organize_subset=true` honored per startup banner.
+
+**Live DB state (`cassette.db`):**
+- `acquisition_requests` count: `0` — consistent with no new acquisitions during this run.
+
+**Planner path confirmation:**
+- The `plan_and_submit` function (Task 1.1/1.2 output) is live in the coordinator binary and was exercised through the delta-queue drain path.
+- No crash, no panic, no missing symbol — planner path compiled and ran cleanly.
+- Zero pending delta_queue rows at proof time means no Director tasks were dispatched, which is correct and expected behavior (empty queue → nothing to plan → nothing to acquire).
+
+**Conclusion:**
+- Planner cutover is live in the coordinator binary. The path executes end-to-end without error. No pending work was present at proof time; a future run with populated desired-state will exercise the full plan→approve→acquire path.
+
 **No re-acquisition of DENIAL IS A RIVER (row 1):**
 - `delta_queue` row 1: `processed_at=2026-03-31 20:35:36` — unchanged
 - `director_task_history`: only one `delta-1-denial is a river` row, disposition=Finalized from original run

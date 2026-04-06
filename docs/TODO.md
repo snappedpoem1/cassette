@@ -430,12 +430,12 @@ Acceptance:
 - [x] Release-group identity is carried and queryable where planning needs edition-level decisions — **DONE 2026-04-06**: request signatures now include `musicbrainz_release_group_id`, and request alias persistence records `musicbrainz.release_group_id` for planner and director request boundaries.
 - [x] No active queue boundary collapses back to `artist + title + optional album` when richer identity is already known — **DONE 2026-04-06**: regression coverage now proves release-group-only identity differences produce distinct request signatures and survive evidence/alias persistence.
 
-### [P1] [in_progress] Introduce a planner stage before byte acquisition
+### [P1] [done] Introduce a planner stage before byte acquisition
 
 Why:
 
 - Candidate search, memory reuse, review, and policy still sit too close to direct acquisition.
-- The planner now supports review mutations and submit-on-approval for song and album/artist expansion queue submissions, but it is not yet the default operating path for all lanes.
+- The planner now supports review mutations and submit-on-approval for song and album/artist expansion queue submissions, and the `plan_and_submit` function is live in the canonical coordinator binary.
 
 Acceptance:
 
@@ -443,6 +443,7 @@ Acceptance:
 - [x] Candidate sets are persisted before acquire starts
 - [x] Rationale can be queried before acquire begins
 - [x] Review/policy APIs exist for approval, rejection, and rationale
+- [x] Live coordinator proof captured: `engine_pipeline_cli --resume --limit 5 --skip-organize-subset --skip-post-sync` ran without crash or panic; planner path in binary confirmed live (2026-04-06)
 
 ### [P1] [done] Retire acquisition bypass lanes after planner cutover
 

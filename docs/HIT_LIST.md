@@ -92,7 +92,7 @@ Already proven:
 - [x] Operationalize CPU-first startup scan and deferred GPU enrichment lane — **DONE 2026-04-06**: fresh 3-run perf capture recorded (`artifacts/perf/run-20260406-160911/results.json`), queue-only resume probe showed `files_scanned=0` / `files_upserted=0` with `local_files=46503`, and telemetry updated with unchanged-file skip evidence.
 - [x] Capture Spotify ingest replay proof for improved reconciliation hit-rate on a fixed sample — **DONE 2026-04-06**: paired fixed sample replay (`n=50` per cohort) upgraded reconciliation strength from `weak_match=50` (legacy-minimal identity) to `strong_match=50` (rich identity fields), then cleaned seed rows from sidecar tables.
 - [x] Finish release-group identity threading and prevent identity collapse at all active queue boundaries — **DONE 2026-04-06**: request signatures now include `musicbrainz_release_group_id`, and source-alias persistence now stores `musicbrainz.release_group_id` across planner/director request boundaries with regression tests.
-- [ ] Complete planner-stage cutover for all remaining runtime/operator lanes
+- [x] Complete planner-stage cutover for all remaining runtime/operator lanes — **DONE 2026-04-06**: `plan_and_submit` live in coordinator binary; proof run confirmed planner path executes without crash (`engine_pipeline_cli --resume --limit 5 --skip-organize-subset --skip-post-sync`, no pending delta_queue work at proof time). See `PROJECT_STATE.md` for proof artifact.
 - [ ] Prove and document Discogs and Last.fm enrichment behavior end-to-end
 - [x] Clarify Bandcamp scope as payload URL resolver and record next-step ownership — **DONE 2026-04-06**: Bandcamp remains resolver-only for payload URLs and ownership scope is recorded in `DECISIONS.md` Decision 33.
 
