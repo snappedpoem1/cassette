@@ -10,6 +10,21 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Reads an image file from disk, downsamples it to 8×8, and returns the
+/// average colour as a CSS hex string like `"#3d2810"`.
+/// Returns `None` if the file cannot be read or decoded.
+pub fn extract_dominant_color(path: &str) -> Option<String> {
+    let img = image::open(path).ok()?;
+    let small = img.resize_exact(8, 8, image::imageops::FilterType::Lanczos3);
+    let rgb = small.to_rgb8();
+    let pixels = rgb.pixels();
+    let count = 64u64;
+    let (r, g, b) = pixels.fold((0u64, 0u64, 0u64), |(ar, ag, ab), p| {
+        (ar + p[0] as u64, ag + p[1] as u64, ab + p[2] as u64)
+    });
+    Some(format!("#{:02x}{:02x}{:02x}", (r / count) as u8, (g / count) as u8, (b / count) as u8))
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -445,6 +460,7 @@ impl Db {
         self.ensure_column_exists("tracks", "canonical_release_id", "INTEGER")?;
         self.ensure_column_exists("tracks", "quality_tier", "TEXT")?;
         self.ensure_column_exists("tracks", "content_hash", "TEXT")?;
+        self.ensure_column_exists("tracks", "dominant_color_hex", "TEXT")?;
 
         // Create indexes for new track columns (IF NOT EXISTS is safe to repeat)
         let _ = self.conn.execute_batch("
@@ -767,12 +783,16 @@ impl Db {
             let artist: String = row.get(0)?;
             let title: String = row.get(1)?;
             let id = stable_entity_id(&[artist.as_str(), title.as_str()]);
+            let cover_art_path: Option<String> = row.get(3)?;
             Ok(Album {
                 id,
                 title,
                 artist,
                 year: row.get(2)?,
-                cover_art_path: row.get(3)?,
+                dominant_color_hex: cover_art_path
+                    .as_deref()
+                    .and_then(extract_dominant_color),
+                cover_art_path,
                 track_count: row.get::<_, i64>(4)? as usize,
             })
         })?;

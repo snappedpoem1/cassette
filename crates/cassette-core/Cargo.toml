@@ -33,6 +33,7 @@ blowfish = "0.9"
 cbc = "0.1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "macros"] }
 blake3 = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 sanitize-filename = "0.5"
 regex = "1"
 backoff = "0.4"

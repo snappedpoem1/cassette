@@ -44,6 +44,7 @@ pub struct Album {
     pub year: Option<i32>,
     pub cover_art_path: Option<String>,
     pub track_count: usize,
+    pub dominant_color_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
