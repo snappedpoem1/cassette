@@ -6,7 +6,7 @@
     refreshBacklogStatus, refreshDebugStats, startBacklogRun, stopBacklogRun, providerHealth,
     providerStatuses, slskdRuntimeStatus, loadDownloadConfig,
   } from '$lib/stores/downloads';
-  import { api, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DownloadAlbumResult, type RequestLineage, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
+  import { api, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DeadLetterSummary, type DownloadAlbumResult, type RequestLineage, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
   import { debounce } from '$lib/utils';
 
   let searchInput = '';
@@ -39,6 +39,12 @@
   let requestTimeline: AcquisitionRequestEvent[] = [];
   let requestCandidates: CandidateReviewItem[] = [];
   let requestLineage: RequestLineage | null = null;
+
+  let deadLetterSummary: DeadLetterSummary | null = null;
+  let deadLetterExpanded = false;
+  let deadLetterLoading = false;
+  let deadLetterReplayStatus: Record<string, 'idle' | 'loading' | 'done' | 'error'> = {};
+  let deadLetterReplayError: Record<string, string> = {};
 
   const debouncedSearch = debounce((query: string) => {
     if (query.trim()) {
@@ -104,6 +110,7 @@
       loadRecentRequests(),
       loadMissingAlbums(),
       loadRecentResults(),
+      loadDeadLetterSummary(),
     ]);
   });
 
@@ -206,6 +213,30 @@
       recentRequests = [];
     } finally {
       loadingRequests = false;
+    }
+  }
+
+  async function loadDeadLetterSummary() {
+    deadLetterLoading = true;
+    try {
+      deadLetterSummary = await api.getDeadLetterSummary(5);
+    } catch {
+      deadLetterSummary = null;
+    } finally {
+      deadLetterLoading = false;
+    }
+  }
+
+  async function replayDeadLetter(taskId: string) {
+    deadLetterReplayStatus = { ...deadLetterReplayStatus, [taskId]: 'loading' };
+    deadLetterReplayError = { ...deadLetterReplayError, [taskId]: '' };
+    try {
+      await api.replayDeadLetter(taskId);
+      deadLetterReplayStatus = { ...deadLetterReplayStatus, [taskId]: 'done' };
+      await Promise.all([loadRecentRequests(), loadDownloadJobs(), loadDeadLetterSummary()]);
+    } catch (error) {
+      deadLetterReplayStatus = { ...deadLetterReplayStatus, [taskId]: 'error' };
+      deadLetterReplayError = { ...deadLetterReplayError, [taskId]: String(error) };
     }
   }
 
@@ -533,6 +564,65 @@
         {/if}
       </div>
     </section>
+
+    {#if deadLetterLoading && !deadLetterSummary}
+      <section class="lane-section dead-letter-section">
+        <div class="lane-empty">Loading dead-letter summary...</div>
+      </section>
+    {:else if deadLetterSummary && deadLetterSummary.total_count > 0}
+      <section class="lane-section dead-letter-section">
+        <button class="dead-letter-header" on:click={() => (deadLetterExpanded = !deadLetterExpanded)}>
+          <span class="dead-letter-title">Dead Letters</span>
+          <span class="badge badge-error">{deadLetterSummary.total_count}</span>
+        </button>
+
+        {#if deadLetterExpanded}
+          <div class="dead-letter-body">
+            {#each deadLetterSummary.groups as group (group.failure_class)}
+              <div class="dead-letter-group">
+                <div class="dead-letter-group-header">
+                  <strong>{group.label}</strong>
+                  <span class="badge badge-muted">{group.count}</span>
+                  <span class="dead-letter-fix">{group.suggested_fix}</span>
+                </div>
+
+                <div class="simple-stack">
+                  {#each group.recent_items as item (item.task_id)}
+                    <div class="dead-letter-item">
+                      <span class="row-copy">
+                        <span class="row-title">{item.artist || '?'} · {item.title || '?'}</span>
+                        <span class="row-meta">{item.album || 'unknown release'} · {item.failed_at}</span>
+                      </span>
+                      <div class="job-meta">
+                        {#if item.provider}
+                          <span class="badge badge-muted">{item.provider}</span>
+                        {/if}
+                        <button
+                          class="btn btn-secondary small-btn"
+                          disabled={deadLetterReplayStatus[item.task_id] === 'loading' || deadLetterReplayStatus[item.task_id] === 'done'}
+                          on:click={() => replayDeadLetter(item.task_id)}
+                        >
+                          {#if deadLetterReplayStatus[item.task_id] === 'loading'}
+                            Retrying...
+                          {:else if deadLetterReplayStatus[item.task_id] === 'done'}
+                            Queued
+                          {:else}
+                            Retry
+                          {/if}
+                        </button>
+                      </div>
+                      {#if deadLetterReplayStatus[item.task_id] === 'error'}
+                        <div class="timeline-message">{deadLetterReplayError[item.task_id]}</div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {/if}
 
     <section class="lane-section">
       <div class="lane-header">
@@ -1114,6 +1204,64 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-secondary);
+}
+
+.dead-letter-section {
+  border-color: color-mix(in srgb, var(--error) 28%, var(--border));
+}
+
+.dead-letter-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+.dead-letter-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.dead-letter-body {
+  display: grid;
+  gap: 10px;
+}
+
+.dead-letter-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-base);
+  padding: 10px;
+}
+
+.dead-letter-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.dead-letter-fix {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.dead-letter-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 8px 10px;
 }
 
 @media (max-width: 1100px) {

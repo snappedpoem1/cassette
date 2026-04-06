@@ -4221,6 +4221,20 @@ impl Db {
         }
     }
 
+    /// Return the stored request payload for a director task, if present.
+    pub fn get_task_request_json(&self, task_id: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT request_json FROM director_task_history WHERE task_id = ?1 LIMIT 1",
+            params![task_id],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        match result {
+            Ok(json) => Ok(json),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub fn get_recent_task_results(
         &self,
         limit: usize,

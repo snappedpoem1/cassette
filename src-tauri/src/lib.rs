@@ -270,6 +270,8 @@ pub fn run() {
             commands::downloads::get_request_candidate_review,
             commands::downloads::get_request_lineage,
             commands::downloads::get_trust_reason_distribution,
+            commands::dead_letter::get_dead_letter_summary,
+            commands::dead_letter::replay_dead_letter,
             commands::downloads::start_backlog_run,
             commands::downloads::stop_backlog_run,
             commands::downloads::get_backlog_status,

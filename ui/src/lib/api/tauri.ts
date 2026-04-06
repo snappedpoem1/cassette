@@ -496,6 +496,30 @@ export interface TaskExecutionSummary {
   updated_at: string;
 }
 
+export interface DeadLetterItem {
+  task_id: string;
+  artist: string | null;
+  title: string | null;
+  album: string | null;
+  provider: string | null;
+  failed_at: string;
+  request_json: string | null;
+  request_signature: string | null;
+}
+
+export interface DeadLetterGroup {
+  failure_class: string;
+  label: string;
+  suggested_fix: string;
+  count: number;
+  recent_items: DeadLetterItem[];
+}
+
+export interface DeadLetterSummary {
+  groups: DeadLetterGroup[];
+  total_count: number;
+}
+
 export interface RequestLineage {
   request: AcquisitionRequest;
   timeline: unknown[];
@@ -638,6 +662,9 @@ export const api = {
     invoke<RequestLineage>('get_request_lineage', { requestId }),
   getTrustReasonDistribution: (limit?: number) =>
     invoke<TrustReasonDistributionEntry[]>('get_trust_reason_distribution', { limit }),
+  getDeadLetterSummary: (recentLimit?: number) =>
+    invoke<DeadLetterSummary>('get_dead_letter_summary', { recentLimit: recentLimit ?? 5 }),
+  replayDeadLetter: (taskId: string) => invoke<number>('replay_dead_letter', { taskId }),
 
   // Import
   parseSpotifyHistory: (path: string) =>
