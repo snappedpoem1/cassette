@@ -73,3 +73,7 @@ path = "src/bin/slskd_album_cli.rs"
 [[bin]]
 name = "db_converge_cli"
 path = "src/bin/db_converge_cli.rs"
+
+[[bin]]
+name = "enrich_probe_cli"
+path = "src/bin/enrich_probe_cli.rs"
