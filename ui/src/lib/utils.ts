@@ -74,3 +74,38 @@ export function initials(name: string): string {
     .map((w) => w[0]?.toUpperCase() ?? '')
     .join('');
 }
+
+/**
+ * Given a dominant color hex (e.g. "#3d2810"), return CSS color strings
+ * for a darkened/desaturated card background and a lightened title color.
+ * Falls back to token values if hex is null/invalid.
+ */
+export function tintFromHex(hex: string | null | undefined): { bg: string; titleColor: string } {
+  const fallback = { bg: 'var(--bg-card)', titleColor: 'var(--text-primary)' };
+  if (!hex) return fallback;
+
+  const clean = hex.replace('#', '');
+  if (clean.length !== 6) return fallback;
+
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return fallback;
+
+  // Dark background: crush luminance, keep a hint of hue
+  const bgR = Math.round(r * 0.08 + 4);
+  const bgG = Math.round(g * 0.08 + 4);
+  const bgB = Math.round(b * 0.08 + 4);
+
+  // Title color: lift luminance, partially desaturate toward slate
+  const titleR = Math.round(r * 0.35 + 140);
+  const titleG = Math.round(g * 0.35 + 150);
+  const titleB = Math.round(b * 0.35 + 160);
+
+  const clampVal = (v: number) => Math.max(0, Math.min(255, v));
+
+  return {
+    bg: `rgb(${clampVal(bgR)}, ${clampVal(bgG)}, ${clampVal(bgB)})`,
+    titleColor: `rgb(${clampVal(titleR)}, ${clampVal(titleG)}, ${clampVal(titleB)})`,
+  };
+}
