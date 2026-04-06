@@ -1,3 +1,6 @@
+use cassette_core::acquisition::{
+    AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
+};
 use cassette_core::db::{Db, TrackPathUpdate};
 use cassette_core::director::models::FinalizedTrackDisposition;
 use cassette_core::director::providers::{
@@ -5,10 +8,12 @@ use cassette_core::director::providers::{
     UsenetProvider, YtDlpProvider,
 };
 use cassette_core::director::{
-    AcquisitionStrategy, Director, DirectorConfig, DirectorHandle, DuplicatePolicy,
-    NormalizedTrack, Provider, ProviderPolicy, QualityPolicy, RetryPolicy, TempRecoveryPolicy,
-    TrackTask, TrackTaskSource,
+    AcquisitionStrategy, Director, DirectorConfig, DirectorHandle, DirectorSubmission,
+    DuplicatePolicy, NormalizedTrack, Provider, ProviderCapabilities, ProviderDescriptor,
+    ProviderPolicy, QualityPolicy, RetryPolicy, StrategyPlanner, TempRecoveryPolicy, TrackTask,
+    TrackTaskSource,
 };
+use cassette_core::librarian::db::LibrarianDb;
 use cassette_core::librarian::{run_librarian_sync, LibrarianConfig, ScanMode};
 use cassette_core::library::organizer;
 use cassette_core::orchestrator::delta::adapter::{ClaimedDownloadRow, DeltaQueueAdapter};
@@ -596,6 +601,159 @@ async fn run_spotify_backlog(
     Ok((albums_attempted, tracks_submitted, errors))
 }
 
+/// Build a minimal set of provider descriptors representing the full provider stack.
+/// Used by `plan_and_submit` to run `StrategyPlanner::plan` without instantiating real providers.
+fn coordinator_provider_descriptors() -> Vec<ProviderDescriptor> {
+    let caps = ProviderCapabilities {
+        supports_search: true,
+        supports_download: true,
+        supports_batch: false,
+        supports_lossless: true,
+    };
+    vec![
+        ProviderDescriptor {
+            id: "qobuz".to_string(),
+            display_name: "Qobuz".to_string(),
+            trust_rank: 1,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "deezer".to_string(),
+            display_name: "Deezer".to_string(),
+            trust_rank: 2,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "local_archive".to_string(),
+            display_name: "Local Archive".to_string(),
+            trust_rank: 3,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "usenet".to_string(),
+            display_name: "Usenet".to_string(),
+            trust_rank: 4,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "jackett".to_string(),
+            display_name: "Jackett".to_string(),
+            trust_rank: 5,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "real_debrid".to_string(),
+            display_name: "Real-Debrid".to_string(),
+            trust_rank: 6,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "slskd".to_string(),
+            display_name: "Soulseek / slskd".to_string(),
+            trust_rank: 7,
+            capabilities: caps.clone(),
+        },
+        ProviderDescriptor {
+            id: "yt_dlp".to_string(),
+            display_name: "yt-dlp".to_string(),
+            trust_rank: 8,
+            capabilities: caps,
+        },
+    ]
+}
+
+/// Route a `TrackTask` through the planner path: persist an `AcquisitionRequest`, record
+/// identity evidence and source aliases, auto-approve to Queued, then submit to the Director.
+async fn plan_and_submit(
+    db: &Db,
+    control_db: &LibrarianDb,
+    submitter: &DirectorSubmission,
+    task: &TrackTask,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Build an AcquisitionRequest from the TrackTask fields.
+    let source_name = match task.source {
+        TrackTaskSource::SpotifyLibrary => "spotify_library",
+        TrackTaskSource::SpotifyHistory => "spotify_history",
+        TrackTaskSource::Manual => "manual",
+        _ => "coordinator",
+    };
+
+    let mut request = AcquisitionRequest {
+        id: None,
+        scope: AcquisitionScope::Track,
+        source: task.source.clone(),
+        source_name: source_name.to_string(),
+        source_track_id: task.target.spotify_track_id.clone(),
+        source_album_id: task.target.source_album_id.clone(),
+        source_artist_id: task.target.source_artist_id.clone(),
+        artist: task.target.artist.clone(),
+        album: task.target.album.clone(),
+        title: task.target.title.clone(),
+        track_number: task.target.track_number,
+        disc_number: task.target.disc_number,
+        year: task.target.year,
+        duration_secs: task.target.duration_secs,
+        isrc: task.target.isrc.clone(),
+        musicbrainz_recording_id: task.target.musicbrainz_recording_id.clone(),
+        musicbrainz_release_group_id: task.target.musicbrainz_release_group_id.clone(),
+        musicbrainz_release_id: task.target.musicbrainz_release_id.clone(),
+        canonical_artist_id: task.target.canonical_artist_id,
+        canonical_release_id: task.target.canonical_release_id,
+        strategy: task.strategy,
+        quality_policy: None,
+        excluded_providers: vec![],
+        edition_policy: None,
+        confirmation_policy: ConfirmationPolicy::Automatic,
+        desired_track_id: task.desired_track_id,
+        source_operation_id: task.source_operation_id.clone(),
+        task_id: Some(task.task_id.clone()),
+        request_signature: None,
+        status: AcquisitionRequestStatus::Pending,
+        raw_payload_json: None,
+    };
+
+    request.request_signature = Some(request.request_fingerprint());
+    let request_signature = request
+        .request_signature
+        .clone()
+        .expect("request_signature just set");
+
+    // Upsert the acquisition request row in the sidecar control DB.
+    let _row = match control_db
+        .get_acquisition_request_by_signature(&request_signature)
+        .await?
+    {
+        Some(existing) => existing,
+        None => control_db.create_acquisition_request(&request).await?,
+    };
+
+    // Run StrategyPlanner to determine provider order (for audit/provenance purposes).
+    let descriptors = coordinator_provider_descriptors();
+    let planner = StrategyPlanner;
+    let _plan = planner.plan(task, &descriptors, &DirectorConfig::default());
+
+    // Record identity snapshot and source aliases in the runtime DB.
+    db.record_request_identity_snapshot(task, &request_signature)?;
+    db.record_request_source_aliases(&request, &request_signature)?;
+
+    // Auto-approve: advance status to Queued.
+    control_db
+        .update_acquisition_request_status_by_task_id(
+            &task.task_id,
+            AcquisitionRequestStatus::Queued.as_str(),
+            "coordinator_auto_approve",
+            Some("coordinator planner path auto-approved"),
+            None,
+        )
+        .await?;
+
+    // Persist pending task state and submit to the Director.
+    db.upsert_director_pending_task(task, "Queued")?;
+    submitter.submit(task.clone()).await?;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (reload_layer, handle) =
@@ -804,10 +962,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle_director = build_director(&db, db_path.clone());
     let mut results = handle_director.subscribe_results();
     let submitter = handle_director.submitter.clone();
+    let control_db = LibrarianDb::from_pool(pool.clone());
 
-    for task in tasks.iter().cloned() {
-        db.upsert_director_pending_task(&task, "Queued")?;
-        submitter.submit(task).await?;
+    if operator_direct_submit {
+        for task in tasks.iter().cloned() {
+            db.upsert_director_pending_task(&task, "Queued")?;
+            submitter.submit(task).await?;
+        }
+    } else {
+        for task in tasks.iter() {
+            plan_and_submit(&db, &control_db, &submitter, task)
+                .await
+                .unwrap_or_else(|e| eprintln!("plan_and_submit failed for {}: {e}", task.task_id));
+        }
     }
 
     let mut finalized_paths = HashSet::new();
