@@ -18,12 +18,6 @@
   onDestroy(() => {
     stopPlayerPoll();
   });
-
-  const quickActions = [
-    { label: 'Library', href: '/' },
-    { label: 'Downloads', href: '/downloads' },
-    { label: 'Settings', href: '/settings' },
-  ];
 </script>
 
 <div class="app-shell" class:compact-player={$compactPlayerMode}>
@@ -34,9 +28,9 @@
       <span class="brand-mode">Desktop</span>
     </div>
     <nav class="topbar-nav" aria-label="Quick actions">
-      {#each quickActions as action}
-        <a class="topbar-link" href={action.href}>{action.label}</a>
-      {/each}
+      <a class="topbar-link" href="/">Library</a>
+      <a class="topbar-link" href="/downloads">Downloads</a>
+      <a class="topbar-link" href="/settings">Settings</a>
     </nav>
     <button class="topbar-link topbar-toggle" type="button" aria-label="Toggle compact player" on:click={toggleCompactPlayerMode}>
       {$compactPlayerMode ? 'Full Player' : 'Mini Player'}
