@@ -17,12 +17,23 @@
     persistEffectiveDownloadConfig,
   } from '$lib/stores/downloads';
   import { api } from '$lib/api/tauri';
+  import { browser } from '$app/environment';
+  import { getMilkdropPresetNames } from '$lib/visualizer/presets';
+  import {
+    SAFE_EXTENSIONS,
+    extensionEnabledKey,
+    extensionTelemetryKey,
+    type ExtensionHealthReport,
+  } from '$lib/extensions/safe-surface';
   import type { DownloadConfig, PolicyProfile, SlskdRuntimeStatus } from '$lib/api/tauri';
 
   onMount(async () => {
     await loadDownloadConfig();
     await loadSlskdRuntimeStatus();
     await loadPolicyProfile();
+    await loadVisualizerPrefs();
+    await loadMilkdropPresets();
+    await loadExtensionSurface();
   });
 
   let cfg: DownloadConfig = {
@@ -56,7 +67,7 @@
     cfg = { ...$downloadConfig };
   }
 
-  let activeSection: 'library' | 'providers' | 'enrichment' | 'tools' | 'lastfm' = 'library';
+  let activeSection: 'library' | 'providers' | 'enrichment' | 'tools' | 'lastfm' | 'extensions' = 'library';
   let saved = false;
   let persistingEffective = false;
   let lastfmSyncing = false;
@@ -66,6 +77,30 @@
   let policyProfile: PolicyProfile = 'balanced_auto';
   let policyProfileSaving = false;
   let policyProfileMessage: string | null = null;
+  let visualizerEnabled = true;
+  let visualizerLowMotion = false;
+  let appreciationLaneEnabled = true;
+  let visualizerMode: 'waveform' | 'spectrum' | 'milkdrop' = 'spectrum';
+  let visualizerPreset = '';
+  let milkdropPresetNames: string[] = [];
+  let loadingMilkdropPresets = false;
+  let visualizerFpsCap = 30;
+  let dynamicGlassEnabled = true;
+  let dynamicGlassLowMotion = false;
+  let dynamicGlassIntensity = 62;
+  let extensionEnabled: Record<string, boolean> = {};
+  let extensionHealth: Record<string, ExtensionHealthReport> = {};
+  let extensionHealthBusy = false;
+
+  $: if (milkdropPresetNames.length > 0 && !milkdropPresetNames.includes(visualizerPreset)) {
+    visualizerPreset = milkdropPresetNames[0];
+  }
+
+  $: extensionRows = SAFE_EXTENSIONS.map((extension) => ({
+    extension,
+    enabled: extensionEnabled[extension.id] ?? true,
+    health: extensionHealth[extension.id],
+  }));
 
   async function loadSlskdRuntimeStatus() {
     try {
@@ -86,6 +121,7 @@
   }
 
   async function handleSave() {
+    await saveVisualizerPrefs();
     await saveDownloadConfig(cfg);
     await loadSlskdRuntimeStatus();
     saved = true;
@@ -171,6 +207,173 @@
       policyProfileSaving = false;
     }
   }
+
+  async function loadVisualizerPrefs() {
+    try {
+      const enabled = await api.getSetting('ui_visualizer_enabled');
+      const lowMotion = await api.getSetting('ui_visualizer_low_motion');
+      const appreciation = await api.getSetting('ui_appreciation_lane_enabled');
+      const mode = await api.getSetting('ui_visualizer_mode');
+      const preset = await api.getSetting('ui_visualizer_preset');
+      const fpsCap = await api.getSetting('ui_visualizer_fps_cap');
+      const glassEnabled = await api.getSetting('ui_dynamic_glass_enabled');
+      const glassLowMotion = await api.getSetting('ui_dynamic_glass_low_motion');
+      const glassIntensity = await api.getSetting('ui_dynamic_glass_intensity');
+      visualizerEnabled = enabled !== 'false';
+      visualizerLowMotion = lowMotion === 'true';
+      appreciationLaneEnabled = appreciation !== 'false';
+      visualizerMode = mode === 'milkdrop' || mode === 'waveform' ? mode : 'spectrum';
+      visualizerPreset = preset ?? '';
+      visualizerFpsCap = Math.min(60, Math.max(15, Number.parseInt(fpsCap ?? '30', 10) || 30));
+      dynamicGlassEnabled = glassEnabled !== 'false';
+      dynamicGlassLowMotion = glassLowMotion === 'true';
+      dynamicGlassIntensity = Math.min(90, Math.max(15, Number.parseInt(glassIntensity ?? '62', 10) || 62));
+    } catch {
+      visualizerEnabled = true;
+      visualizerLowMotion = false;
+      appreciationLaneEnabled = true;
+      visualizerMode = 'spectrum';
+      visualizerPreset = '';
+      visualizerFpsCap = 30;
+      dynamicGlassEnabled = true;
+      dynamicGlassLowMotion = false;
+      dynamicGlassIntensity = 62;
+    }
+  }
+
+  async function loadMilkdropPresets() {
+    loadingMilkdropPresets = true;
+    try {
+      milkdropPresetNames = await getMilkdropPresetNames();
+      if (!visualizerPreset && milkdropPresetNames.length > 0) {
+        visualizerPreset = milkdropPresetNames[0];
+      }
+    } catch {
+      milkdropPresetNames = [];
+    } finally {
+      loadingMilkdropPresets = false;
+    }
+  }
+
+  async function saveVisualizerPrefs() {
+    await api.setSetting('ui_visualizer_enabled', visualizerEnabled ? 'true' : 'false');
+    await api.setSetting('ui_visualizer_low_motion', visualizerLowMotion ? 'true' : 'false');
+    await api.setSetting('ui_appreciation_lane_enabled', appreciationLaneEnabled ? 'true' : 'false');
+    await api.setSetting('ui_visualizer_mode', visualizerMode);
+    await api.setSetting('ui_visualizer_preset', visualizerPreset);
+    await api.setSetting('ui_visualizer_fps_cap', String(visualizerFpsCap));
+    await api.setSetting('ui_dynamic_glass_enabled', dynamicGlassEnabled ? 'true' : 'false');
+    await api.setSetting('ui_dynamic_glass_low_motion', dynamicGlassLowMotion ? 'true' : 'false');
+    await api.setSetting('ui_dynamic_glass_intensity', String(dynamicGlassIntensity));
+  }
+
+  function parseTelemetry(raw: string | null): Record<string, ExtensionHealthReport> {
+    if (!raw) {
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(raw) as Record<string, ExtensionHealthReport>;
+      return typeof parsed === 'object' && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function loadExtensionSurface() {
+    const enabledMap: Record<string, boolean> = {};
+    for (const extension of SAFE_EXTENSIONS) {
+      const raw = await api.getSetting(extensionEnabledKey(extension.id));
+      enabledMap[extension.id] = raw !== 'false';
+    }
+    extensionEnabled = enabledMap;
+    extensionHealth = parseTelemetry(await api.getSetting(extensionTelemetryKey()));
+    await refreshExtensionHealth();
+  }
+
+  async function persistExtensionHealth() {
+    await api.setSetting(extensionTelemetryKey(), JSON.stringify(extensionHealth));
+  }
+
+  async function setExtensionEnabled(id: string, enabled: boolean) {
+    extensionEnabled = { ...extensionEnabled, [id]: enabled };
+    await api.setSetting(extensionEnabledKey(id), enabled ? 'true' : 'false');
+    await refreshExtensionHealth();
+  }
+
+  function fallbackHealth(id: string, status: ExtensionHealthReport['status'], message: string): ExtensionHealthReport {
+    const existing = extensionHealth[id];
+    return {
+      status,
+      message,
+      checkedAt: new Date().toISOString(),
+      successCount: (existing?.successCount ?? 0) + (status === 'healthy' ? 1 : 0),
+      failureCount: (existing?.failureCount ?? 0) + (status === 'degraded' ? 1 : 0),
+    };
+  }
+
+  async function probeExtension(id: string): Promise<Pick<ExtensionHealthReport, 'status' | 'message'>> {
+    if (!browser) {
+      return { status: 'healthy', message: 'Desktop runtime context available' };
+    }
+
+    if (id === 'visual_pack_butterchurn') {
+      if (!visualizerEnabled || visualizerMode !== 'milkdrop') {
+        return { status: 'healthy', message: 'Installed and idle until MilkDrop mode is selected' };
+      }
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      if (!gl) {
+        return { status: 'degraded', message: 'WebGL unavailable, bars fallback active' };
+      }
+      await import('butterchurn');
+      return { status: 'healthy', message: 'Renderer initialized with GPU context' };
+    }
+
+    if (id === 'enricher_lastfm_context') {
+      if (cfg.lastfm_api_key && cfg.lastfm_api_key.trim().length > 0) {
+        return { status: 'healthy', message: 'Last.fm key present for context enrichment' };
+      }
+      return { status: 'degraded', message: 'Missing Last.fm API key' };
+    }
+
+    if (id === 'provider_adapter_local_archive') {
+      if ($libraryRoots.length === 0) {
+        return { status: 'degraded', message: 'No library roots configured' };
+      }
+      return { status: 'healthy', message: `Bounded to ${$libraryRoots.length} root(s), read-only adapter` };
+    }
+
+    return { status: 'degraded', message: 'Unknown extension probe id' };
+  }
+
+  async function refreshExtensionHealth() {
+    if (extensionHealthBusy) {
+      return;
+    }
+    extensionHealthBusy = true;
+    try {
+      const next: Record<string, ExtensionHealthReport> = { ...extensionHealth };
+      for (const extension of SAFE_EXTENSIONS) {
+        const enabled = extensionEnabled[extension.id] ?? true;
+        if (!enabled) {
+          next[extension.id] = fallbackHealth(extension.id, 'disabled', 'Disabled by policy toggle');
+          continue;
+        }
+
+        try {
+          const report = await probeExtension(extension.id);
+          next[extension.id] = fallbackHealth(extension.id, report.status, report.message);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Extension probe failed';
+          next[extension.id] = fallbackHealth(extension.id, 'degraded', message);
+        }
+      }
+      extensionHealth = next;
+      await persistExtensionHealth();
+    } finally {
+      extensionHealthBusy = false;
+    }
+  }
 </script>
 
 <svelte:head><title>Settings · Cassette</title></svelte:head>
@@ -188,6 +391,8 @@
       <div class="subnav-item" class:active={activeSection === 'tools'}      on:click={() => activeSection = 'tools'}      role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'tools')}>Tools</div>
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="subnav-item" class:active={activeSection === 'lastfm'}     on:click={() => activeSection = 'lastfm'}     role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'lastfm')}>Last.fm</div>
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <div class="subnav-item" class:active={activeSection === 'extensions'} on:click={() => activeSection = 'extensions'} role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'extensions')}>Extensions</div>
     </nav>
 
     <div class="settings-content">
@@ -421,6 +626,147 @@
             <div class="field"><label>7-Zip Binary Path<input bind:value={cfg.sevenzip_path} placeholder="C:/Program Files/7-Zip/7z.exe" /></label></div>
           </div>
         </div>
+
+        <div class="settings-section">
+          <div class="section-title">Now Playing Visualizer</div>
+          <div class="section-sub">Optional player-bar visualizer and appreciation signal lanes with low-motion fallback mode. MilkDrop mode uses imported Butterchurn presets.</div>
+          <div class="field-group">
+            <div class="field field-full">
+              <label class="checkbox-field">
+                <input type="checkbox" bind:checked={visualizerEnabled} />
+                <span>Enable visualizer in player bar</span>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label>
+                Visualizer Mode
+                <select bind:value={visualizerMode} class="select-field">
+                  <option value="waveform">Waveform</option>
+                  <option value="spectrum">Spectrum</option>
+                  <option value="milkdrop">MilkDrop-style (Butterchurn)</option>
+                </select>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label>
+                Visualizer FPS Cap
+                <select bind:value={visualizerFpsCap} class="select-field">
+                  <option value={15}>15 fps</option>
+                  <option value={24}>24 fps</option>
+                  <option value={30}>30 fps</option>
+                  <option value={45}>45 fps</option>
+                  <option value={60}>60 fps</option>
+                </select>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label>
+                MilkDrop Preset
+                <select bind:value={visualizerPreset} class="select-field" disabled={visualizerMode !== 'milkdrop' || loadingMilkdropPresets || milkdropPresetNames.length === 0}>
+                  {#if loadingMilkdropPresets}
+                    <option value="">Loading presets…</option>
+                  {:else if milkdropPresetNames.length === 0}
+                    <option value="">No presets found</option>
+                  {:else}
+                    {#each milkdropPresetNames as name}
+                      <option value={name}>{name}</option>
+                    {/each}
+                  {/if}
+                </select>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label class="checkbox-field">
+                <input type="checkbox" bind:checked={visualizerLowMotion} />
+                <span>Use low-motion visualizer mode</span>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label class="checkbox-field">
+                <input type="checkbox" bind:checked={appreciationLaneEnabled} />
+                <span>Show appreciation signal lane (tags, listeners, lyrics source)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="section-title">Dynamic Glass and Mood</div>
+          <div class="section-sub">Adaptive shell mooding from artwork/track identity with static fallback and bounded effect intensity.</div>
+          <div class="field-group">
+            <div class="field field-full">
+              <label class="checkbox-field">
+                <input type="checkbox" bind:checked={dynamicGlassEnabled} />
+                <span>Enable dynamic glass mood overlays</span>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label class="checkbox-field">
+                <input type="checkbox" bind:checked={dynamicGlassLowMotion} />
+                <span>Prefer reduced-motion mood transitions</span>
+              </label>
+            </div>
+            <div class="field field-full">
+              <label>
+                Mood intensity
+                <input type="range" min="15" max="90" step="1" bind:value={dynamicGlassIntensity} />
+              </label>
+              <span class="sync-msg">{dynamicGlassIntensity}%</span>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if activeSection === 'extensions'}
+        <div class="settings-section">
+          <div class="section-title">Safe Extension Surface</div>
+          <div class="section-sub">Capability-scoped extension model. Extensions are isolated from deterministic acquisition/finalization lanes and failures degrade gracefully.</div>
+          <div class="sync-row">
+            <button class="action-btn" on:click={refreshExtensionHealth} disabled={extensionHealthBusy}>
+              {extensionHealthBusy ? 'Checking…' : 'Refresh Extension Health'}
+            </button>
+          </div>
+          <div class="extension-list">
+            {#each extensionRows as row}
+              <article class="extension-card">
+                <div class="extension-head">
+                  <div>
+                    <div class="provider-name">{row.extension.label}</div>
+                    <div class="provider-missing-hint">{row.extension.category} · deterministic core access: blocked</div>
+                  </div>
+                  <label class="checkbox-field">
+                    <input
+                      type="checkbox"
+                      checked={row.enabled}
+                      on:change={(event) => setExtensionEnabled(row.extension.id, (event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>{row.enabled ? 'Enabled' : 'Disabled'}</span>
+                  </label>
+                </div>
+                <div class="runtime-summary">{row.extension.description}</div>
+                <div class="extension-capabilities">
+                  {#each row.extension.capabilities as capability}
+                    <span class="info-tag">{capability}</span>
+                  {/each}
+                </div>
+                <div class="extension-health-row">
+                  <span class="provider-status">
+                    <span class="provider-dot" class:dot-ok={row.health?.status === 'healthy'} class:dot-missing={row.health?.status !== 'healthy'}></span>
+                    <span class:status-ok={row.health?.status === 'healthy'} class:status-missing={row.health?.status !== 'healthy'}>
+                      {row.health?.status ?? 'unknown'}
+                    </span>
+                  </span>
+                  <span class="runtime-note">{row.health?.message ?? 'No health telemetry yet'}</span>
+                </div>
+                <div class="runtime-meta">
+                  <span>checked: {row.health?.checkedAt ?? 'never'}</span>
+                  <span>successes: {row.health?.successCount ?? 0}</span>
+                  <span>failures: {row.health?.failureCount ?? 0}</span>
+                </div>
+              </article>
+            {/each}
+          </div>
+        </div>
       {/if}
 
       <div class="save-row">
@@ -488,6 +834,15 @@
 .field .select-field:focus { outline: none; border-color: var(--primary-dim); }
 .field input::placeholder { color: var(--text-muted); }
 .field input:focus { outline: none; border-color: var(--primary-dim); }
+.checkbox-field {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem !important;
+  letter-spacing: normal !important;
+  color: var(--text-secondary) !important;
+}
 
 /* library roots */
 .roots-list { display: flex; flex-direction: column; gap: 4px; }
@@ -586,6 +941,42 @@
   font-size: 0.68rem;
   color: var(--text-muted);
   font-family: monospace;
+}
+
+.extension-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extension-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.extension-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.extension-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.extension-health-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* save row */

@@ -90,4 +90,4 @@ Required fix: `default-run = "cassette"` in `src-tauri/Cargo.toml`. Without this
 ## Known Gap
 
 - `cargo test --workspace` is now part of the trustworthy clean-machine gate again. The old Windows `STATUS_ENTRYPOINT_NOT_FOUND` failure came from the Tauri lib-test harness starting without the desktop manifest; pure command/bootstrap tests now live in `src-tauri/tests/pure_logic.rs` instead of the Tauri-linked lib harness.
-- Full clean-machine proof can be satisfied by either a second machine or a same-machine clean-room run (Windows Sandbox or disposable local profile). If only app-data reset fallback is used, record it as lower-confidence evidence in release notes.
+- For this single-machine personal setup, clean-room proof is satisfied by a same-machine clean-room run (Windows Sandbox or disposable local profile). If only app-data reset fallback is used, record it as lower-confidence evidence in release notes.

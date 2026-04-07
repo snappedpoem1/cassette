@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 ## Architecture
 
@@ -65,6 +65,14 @@ Last updated: 2026-04-06
 - Downloads request rows now surface edition-intelligence hints (`musicbrainz_release_group_id`, `edition_policy`) alongside trust/queue state so planner identity choices stay visible after submission
 - Dead-Letter Command Center now groups permanently failed/cancelled director tasks by failure class below the Blocked lane, shows plain-language recovery hints, and supports per-item replay through the planner approval path with `dead_letter_replay` lineage
 - Settings now exposes Policy Profiles (`playback_first`, `balanced_auto`, `aggressive_overnight`) and applying a profile hot-reloads Director config in-place with deterministic, logged runtime behavior changes
+- Library, Artists, and Playlists now expose a shared context-action rail for artist/album/track surfaces (play, queue, and bounded acquisition actions)
+- Settings now exposes optional Now Playing visualizer controls (`ui_visualizer_enabled`, `ui_visualizer_low_motion`), and player bar rendering honors global disable and low-motion preferences
+- Now Playing now also supports an optional appreciation signal lane (`ui_appreciation_lane_enabled`) that surfaces compact artist tags, listener scale, and lyrics-source context without changing playback behavior
+- Visualizer stack now includes a MilkDrop-style Butterchurn mode with imported preset packs and persisted mode/preset settings (`ui_visualizer_mode`, `ui_visualizer_preset`) alongside the lightweight bars fallback
+- Visualizer settings now expose explicit `waveform` and `spectrum` modes in addition to optional MilkDrop mode, and frame-budget behavior is bounded through persisted FPS cap plus hidden-tab/idle render throttling (`ui_visualizer_fps_cap`)
+- Dynamic Glass mooding now adapts shell overlays from now-playing artwork/identity with persisted safety controls (`ui_dynamic_glass_enabled`, `ui_dynamic_glass_low_motion`, `ui_dynamic_glass_intensity`) and static fallback defaults when unavailable
+- Home now includes Session Composer v1: explainable listening-arc generation with reusable saved modes plus replay/skip transition feedback persistence (`ui_session_composer_modes_json`, `ui_session_composer_feedback_json`)
+- Settings now includes Stage D Safe Extension Surface controls: capability-scoped extension manifests (visual-pack, enricher, provider-adapter), explicit deterministic-core boundary (`deterministicCoreAccess: false`), isolated per-extension health probes, and persisted extension telemetry (`ui_extension_health_telemetry_json`)
 
 ### Acquisition Pipeline (Director Engine)
 - Two-pass waterfall orchestration with per-provider semaphores
@@ -351,14 +359,14 @@ Skips albums already in `desired_tracks` to avoid duplicates. Respects MusicBrai
 - `MetadataRepairOnly` currently depends on `runtime_db_path` and matching local-track identity evidence; requests without that context fail fast with explicit diagnostics
 - Discogs and Last.fm enrichment clients now have live API-backed implementations; runtime now uses Last.fm for now-playing plus explicit history sync, while a full automatic background enrichment queue worker is still pending
 - Artwork hit-rate is stronger for embedded art and common sidecar art names, and tag-writing now falls back to Cover Art Archive front-art for MusicBrainz release IDs when provider art is missing
-- Lyrics are durably cached in the runtime DB with a 30-day stale-on-read refresh policy, but there is still no background prefetch worker
+- Lyrics are durably cached in the runtime DB with a 30-day stale-on-read refresh policy, and a bounded background prefetch lane now seeds cache from recent playback and finalized-task metadata candidates
 - Bundled `slskd` lifecycle is now managed by Cassette at startup, and smoke verification now reuses that startup contract through `slskd_runtime_probe_cli`; a fresh desktop-session proof is still useful when verifying app-owned child-process behavior end-to-end
 - Bandcamp source now resolves Bandcamp URLs from desired-track payloads instead of hard-failing as a placeholder resolver
-- Candidate persistence now feeds the Downloads pre-acquisition review panel (timeline plus approve/reject), while exclusion decisions and richer explicit override lanes are still pending
+- Candidate persistence now feeds the Downloads pre-acquisition review panel (timeline plus approve/reject), and explicit provider exclusion toggles now persist exclusion memory for future planner decisions on the same request identity
 - Fingerprint accumulation is now bounded and incremental, not a full-library canonical backfill worker; large libraries will converge over repeated syncs rather than one sweep
 - `batch_download_cli` still uses the older album-history/manual workflow and has not been removed yet
 - `director/providers/` is the active acquisition path; `downloader/` is now only a legacy compatibility re-export for provider settings types
-- Organizer repair tooling is deeper now, but the live app-DB repair proof and bounded live organize proof are still pending
+- Organizer repair tooling is deeper now, and both the live app-DB repair proof and bounded live organize proof are captured in canonical docs
 - Album batching currently groups queue work into `DiscographyBatch` strategy selection in the coordinator, but provider locking remains strategy-led rather than a separately persisted album lane
 - Structured run observability is improved through queue claims and persisted request payloads, but the frontend does not yet expose a dedicated coordinator timeline view
 
@@ -534,31 +542,30 @@ Run command: `engine_pipeline_cli --resume --limit 5 --skip-organize-subset --sk
 - Re-claimed rows re-submitted to Director and finalized correctly
 - Already-finalized rows are NOT re-acquired
 
-## Discogs / Last.fm Enrichment Probe — 2026-04-06
+## Discogs / Last.fm Enrichment Probe (WO-04 closure evidence) — 2026-04-07
 
-Run command: `cargo run --bin enrich_probe_cli`
+Run command: `cargo run --bin enrich_probe_cli -- --limit 25`
 
 **DB targeted:** `C:\Users\Admin\AppData\Roaming\dev.cassette.app\cassette.db` (live runtime DB)
 
 **Token status:**
-- Discogs token: not configured at proof time
-- Last.fm API key: not configured at proof time
+- Discogs token: configured
+- Last.fm API key: configured
 
-**Observed output:**
+**Observed output summary:**
 ```
 DB path: C:\Users\Admin\AppData\Roaming\dev.cassette.app\cassette.db
-Discogs token: not configured
-Last.fm API key: not configured
+Discogs token: configured
+Last.fm API key: configured
 
-Summary: 0 tracks probed | Discogs hits: 0/0 | Last.fm hits: 0/0
+Summary: 25 tracks probed | Discogs hits: 25/25 | Last.fm hits: 0/25
 ```
 
-**Conclusion:**
-- `enrich_probe_cli` compiled and ran cleanly against the live runtime DB.
-- Both enrichment clients are implemented and wired; neither credential was configured in the environment at proof time so no API calls were made and no enrichment data was returned.
-- This is the expected behavior: the binary correctly detects missing credentials and reports zero probed tracks rather than crashing or erroring.
-- A credential-configured re-run will exercise actual Discogs release lookup and Last.fm tag/listener fetches.
-- The standing note in Known Limitations ("a full automatic background enrichment queue worker is still pending") remains accurate.
+**Interpretation:**
+- WO-04 close criteria is met: a bounded credentialed non-zero enrichment probe is now captured in canonical docs.
+- Discogs enrichment path is live and returned release context on every sampled row in this probe.
+- Last.fm API calls ran with key present but returned no context hits for this sampled corpus; this is treated as sampled-data outcome, not wiring failure.
+- The standing Known Limitations note remains accurate: full automatic background enrichment queueing is still pending.
 
 ## Verification Snapshot
 

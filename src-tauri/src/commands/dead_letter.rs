@@ -51,6 +51,7 @@ pub async fn replay_dead_letter(
         state,
         planned.request.id,
         Some("dead_letter_replay".to_string()),
+        None,
     )
     .await?;
 

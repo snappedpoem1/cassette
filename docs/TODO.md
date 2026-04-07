@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.  
 **Rule**: If a task is not in this file, it is not committed project scope yet.  
-**Last Updated**: 2026-04-06
+**Last Updated**: 2026-04-07
 
 Scope note:
 
@@ -229,6 +229,11 @@ Acceptance:
 - [x] Trust-spine verification script exists (`scripts/verify_trust_spine.ps1`)
 - [x] `cargo tauri build` produces `.msi` and `.exe` installers — `default-run = "cassette"` added to `src-tauri/Cargo.toml` (2026-04-03)
 
+Proof (2026-04-07):
+
+- `scripts/verify_cleanroom_local.ps1` passed in DisposableProfile mode.
+- Installer bundle check passed, and runtime DB plus sidecar DB presence checks passed in app-data.
+
 ### [P1] [done] Execute music-first system plan (Phase 1 spine)
 
 Why:
@@ -251,7 +256,15 @@ Acceptance:
 
 Follow-on:
 
-- [ ] Phase 2 universal context-action surfaces (artist/album/track) sequenced after Phase 1 passes
+- [x] Phase 2 universal context-action surfaces (artist/album/track) shipped across Library, Artists, and Playlists via shared action rail (2026-04-07)
+- [x] Phase 3 visualizer and appreciation stack v1 hardening (global disable + low-motion guard + richer signal lanes)
+  Completed (2026-04-07): waveform and spectrum modes plus optional MilkDrop-style Butterchurn preset mode are live; global disable and low-motion/reduced-effects paths are persisted; frame-budget controls are bounded through configurable FPS cap and hidden-tab/idle throttling; appreciation signal lane is live in Now Playing.
+- [x] Dynamic Glass and Mood System hardening (adaptive shell mood + strict fallback)
+  Completed (2026-04-07): adaptive shell mood overlays now derive from now-playing artwork/identity with persisted enable/low-motion/intensity controls, static fallback defaults, and bounded non-disruptive transitions.
+- [x] Session Composer v1 (explainable transitions + feedback loop + reusable modes)
+  Completed (2026-04-07): Home now includes an explainable session arc composer with saved modes, transition reasoning, and replay/skip feedback persistence that updates future composition scoring.
+- [x] Safe Extension Surface (capability-scoped model + health telemetry)
+  Completed (2026-04-07): Settings now includes a capability-scoped extension registry (visual packs, enricher, provider adapter), deterministic-core access boundary is explicitly blocked, extension failures degrade in isolation, and extension health/telemetry is surfaced with persisted status counters.
 
 ### [P1] [done] Execute music-first system plan (Phase 0 contracts)
 
@@ -350,6 +363,25 @@ Acceptance:
 - [x] Baselines recorded in `TELEMETRY.md`
 - [x] Regression thresholds documented
 
+### [P1] [done] Close telemetry maturity lane with repeatable artifact+gate evidence
+
+Why:
+
+- Telemetry confidence should be tied to repeatable captures and explicit gate outcomes, not one-off numbers.
+
+Acceptance:
+
+- [x] Fresh trust verification run captured via `scripts/verify_trust_spine.ps1`
+- [x] Fresh multi-run perf artifact captured via `scripts/perf_baseline_capture.ps1 -Runs 3 -WarmupRuns 1`
+- [x] Candidate perf artifact validated via `scripts/perf_regression_gate.ps1 -CandidateResultPath ...`
+- [x] Telemetry cadence/promotion policy documented in `TELEMETRY.md`
+
+Proof (2026-04-07):
+
+- `verify_trust_spine.ps1` passed including workspace tests, UI build, and strict smoke.
+- Perf capture artifact: `artifacts/perf/run-20260406-232508/results.json`.
+- Regression gate: pass across all tracked scenarios with no fail-level regressions.
+
 ### [P1] [done] Audit and correct tool-role documentation drift
 
 Why:
@@ -415,7 +447,7 @@ Acceptance:
 - [x] `torrent_album_cli` only uses apibay behind an explicit fallback flag
 - [x] SABnzbd completion now consults queue/history APIs before filesystem fallback
 
-### [P1] [in_progress] Promote canonical identity and source-alias persistence to the active path
+### [P1] [done] Promote canonical identity and source-alias persistence to the active path
 
 Why:
 
@@ -641,7 +673,7 @@ Acceptance:
 - [x] Canonical docs and reference docs consistently reflect current Discogs/Last.fm runtime behavior
 - [x] Bounded end-to-end proof captured for enrichment outcomes in active flows
 
-Proof: `enrich_probe_cli` ran against live runtime DB on 2026-04-06. Both clients implemented and wired; credentials not configured at proof time so 0 tracks probed, 0 hits — binary ran correctly and reported cleanly. `PROJECT_STATE.md` and `TOOL_AND_SERVICE_REGISTRY.md` updated with proof artifact.
+Proof: `enrich_probe_cli --limit 25` ran against the live runtime DB on 2026-04-07 with Discogs token and Last.fm API key configured. Result: `25 tracks probed | Discogs hits: 25/25 | Last.fm hits: 0/25` on sampled corpus; binary ran correctly and captured bounded credentialed behavior. `PROJECT_STATE.md` and `TOOL_AND_SERVICE_REGISTRY.md` updated with proof artifact.
 
 ### [P2] [done] Add dead-letter command center with replay path
 

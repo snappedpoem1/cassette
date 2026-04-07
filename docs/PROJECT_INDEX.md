@@ -1,8 +1,8 @@
 # Cassette Project Index
 
-**Status**: Active - identity-first convergence, hardening, audit proof, and packaging confidence
-**Next**: proof hardening, audit completeness proof, and packaging confidence
-**Last Updated**: 2026-04-05
+**Status**: Active - Stage A through D complete; WO-01 through WO-05 closed with current evidence
+**Next**: local clean-room packaging confidence maintenance and broader follow-on hardening
+**Last Updated**: 2026-04-07
 **Owner**: Christian (Capn)
 
 Scope framing:
@@ -118,18 +118,18 @@ Spotify history/import helpers, settings, provider status, and library organizat
 
 | Area | Location | Status | What Is True Now | Main Gaps |
 |---|---|---|---|---|
-| Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Packaging proof incomplete |
-| UI | `ui` | Active | Music-first Home route, dedicated `/library`, artist-first `/artists`, downloads command center, settings, playlists, and tools routes exist | Long-session UX polish; richer provider health and troubleshooting views |
+| Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Maintain repeatable local clean-room packaging evidence on this machine |
+| UI | `ui` | Active | Music-first Home route, dedicated `/library`, artist-first `/artists`, downloads command center, settings, playlists, tools routes, Stage C visualizer/mood/composer, and Stage D extension surface exist | Long-session UX polish and follow-on planner vocabulary refinement |
 | Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
-| Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Audit/event completeness proof is a P0 gate |
+| Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Keep audit coverage regression-proof over time |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
-| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, startup recovery, and planner-time edition policy filtering exist | Bounded coordinator live proof still pending |
-| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, source-alias evidence, request -> task translation, planner rationale, and review mutations exist | Full proof/UX hardening and exclusion-memory lanes still remain |
-| Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Admission audit completeness is a P0 gate |
+| Director | `crates/cassette-core/src/director` | Implemented | Engine, providers, resilience, temp recovery, task-local cancellation, health checks, startup recovery, planner-time edition policy filtering, and adaptive provider nudge exist | Broader provider proof coverage remains useful beyond current machine-proven lanes |
+| Acquisition control plane | `crates/cassette-core/src/acquisition.rs` + `crates/cassette-core/src/librarian/db` | Active | Sidecar-owned request contract, request timeline persistence, canonical identity planning tables, source-alias evidence, request -> task translation, planner rationale, and review mutations exist | Planner-stage vocabulary reuse and explainability refinement remain follow-on work |
+| Gatekeeper | `crates/cassette-core/src/gatekeeper` | Implemented | Validation, placement, audit, database integrations exist | Maintain admission-trace completeness under future changes |
 | Library manager | `crates/cassette-core/src/library` | Implemented | Locking, operations, recovery, schema, observability present | Single-machine only; no distributed coordination |
-| Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support exist | Needs repeatable performance and resilience baselines |
+| Validation | `crates/cassette-core/src/validation` | Implemented | Full validation flow, logging verification, sandbox support, and perf-gated capture policy exist | Broaden scenario coverage over time |
 | Metadata | `crates/cassette-core/src/metadata.rs` | Partial | Metadata and enrichment code exists | Background enrichment integration is a future hardening step |
-| Player | `crates/cassette-core/src/player` | Implemented | Symphonia decode + CPAL output + ring buffer; seek, pause, volume, queue advance | Long-session reliability not formally tested |
+| Player | `crates/cassette-core/src/player` | Implemented | Symphonia decode + CPAL output + ring buffer; seek, pause, volume, queue advance; soak procedure and baseline evidence documented | Additional soak depth remains useful hardening |
 
 ---
 
@@ -151,28 +151,23 @@ The Tauri command layer exposes commands across these areas:
 
 ### P0 - Shipping Blockers
 
-- [ ] Audit/event coverage must remain provable across organization and admission paths.
-  Validation/logging checks should fail loudly if coverage regresses.
-- [ ] Provider and recovery proof coverage is still incomplete at the UX/package level.
-  Deezer full-track and startup recovery are now proven locally; audit completeness and
-  packaging confidence are the bigger remaining shipping gaps.
+- [x] Audit/event coverage has bounded proof coverage across organization and admission paths.
+  Continue treating validation/logging checks as fail-loud regression guards.
+- [ ] Packaging confidence should be maintained via repeatable local clean-room verification on this machine.
 
 ### P1 - Important Hardening
 
-- [ ] Async hardening is incomplete across some acquisition/orchestration flows.
-  Cancellation safety, retry behavior, and temp/staging cleanup guarantees need test coverage.
-- [ ] Packaging and clean-machine confidence need proof. "Builds here" is not the same as "ready to ship."
-- [ ] Performance telemetry is not yet treated as a strict regression budget.
-- [ ] Active runtime provenance now persists request signatures, candidate sets, provider search outcomes,
-  and durable negative-result memory, but the runtime still does not reuse that memory for staged
-  candidate review, query-cache TTLs, or user approval flows.
+- [x] Async hardening has coordinator recovery/resume proof coverage and bounded retry/cooldown controls.
+- [x] Performance telemetry now uses repeatable capture artifacts and explicit regression gating.
+- [ ] Provider reliability remains configuration- and machine-dependent.
+- [ ] Planner-stage vocabulary and explainability reuse can still be tightened across surfaces.
 
 ### P2 - Improvement
 
 - [ ] `downloader/` remains in-tree as a legacy compatibility re-export for provider settings.
   Runtime acquisition ownership is `director/providers/`; no new runtime behavior should land in `downloader/`.
 - [x] `MetadataRepairOnly` is implemented for runtime DB-backed local metadata repair flows.
-- [ ] Long-session desktop reliability is not formally tested or documented.
+- [x] Long-session desktop reliability now has documented soak procedure and baseline evidence.
 - [x] Album/artist projection IDs now use deterministic hash IDs rather than seeded `DefaultHasher`
   values, so IDs remain stable across process restarts.
 

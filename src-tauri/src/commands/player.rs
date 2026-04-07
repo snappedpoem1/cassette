@@ -372,6 +372,98 @@ pub async fn sync_lastfm_history(
     Ok(inserted)
 }
 
+#[tauri::command]
+pub async fn submit_lastfm_scrobble(
+    state: State<'_, AppState>,
+    track_id: i64,
+    artist: String,
+    title: String,
+    album: Option<String>,
+    duration_secs: Option<f64>,
+    position_secs: f64,
+) -> Result<bool, String> {
+    let threshold_secs = lastfm_scrobble_threshold_secs(duration_secs);
+    if position_secs < threshold_secs {
+        return Ok(false);
+    }
+
+    let (api_key, api_secret, session_key) = {
+        let db = state.db.lock().unwrap();
+        (
+            db.get_setting("lastfm_api_key")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("LASTFM_API_KEY")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                }),
+            db.get_setting("lastfm_api_secret")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("LASTFM_API_SECRET")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                }),
+            db.get_setting("lastfm_session_key")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("LASTFM_SESSION_KEY")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                }),
+        )
+    };
+
+    let client = LastFmClient::new(api_key).with_scrobble_auth(api_secret, session_key);
+    if !client.is_scrobble_configured() {
+        tracing::warn!(
+            track_id,
+            "Last.fm scrobble skipped: missing API key/secret/session key"
+        );
+        return Ok(false);
+    }
+
+    let scrobble_time = (Utc::now() - Duration::seconds(position_secs.max(0.0).floor() as i64))
+        .timestamp();
+    let scrobbled = client
+        .scrobble_track(
+            &state.http_client,
+            &artist,
+            &title,
+            album.as_deref(),
+            scrobble_time,
+            duration_secs
+                .and_then(|value| if value > 0.0 { Some(value.round() as u32) } else { None }),
+        )
+        .await
+        .is_some();
+
+    if !scrobbled {
+        tracing::warn!(track_id, "Last.fm scrobble request returned no success result");
+        return Ok(false);
+    }
+
+    {
+        let db = state.db.lock().unwrap();
+        let _ = db.record_play_history_event(
+            "lastfm_scrobble",
+            &artist,
+            &title,
+            album.as_deref(),
+            None,
+            Some(track_id),
+        );
+    }
+
+    Ok(true)
+}
+
 async fn fetch_lrclib_lyrics(
     client: &reqwest::Client,
     artist: &str,
@@ -501,6 +593,14 @@ fn merge_unique_tags(existing: &mut Vec<String>, incoming: Vec<String>) {
     }
 }
 
+fn lastfm_scrobble_threshold_secs(duration_secs: Option<f64>) -> f64 {
+    let half_track = duration_secs
+        .filter(|value| *value > 0.0)
+        .map(|value| value * 0.5)
+        .unwrap_or(120.0);
+    half_track.min(240.0).max(30.0)
+}
+
 fn lyrics_cache_is_stale(fetched_at: &str) -> bool {
     let Ok(parsed) = NaiveDateTime::parse_from_str(fetched_at.trim(), "%Y-%m-%d %H:%M:%S") else {
         return true;
@@ -511,12 +611,19 @@ fn lyrics_cache_is_stale(fetched_at: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::lyrics_cache_is_stale;
+    use super::{lastfm_scrobble_threshold_secs, lyrics_cache_is_stale};
 
     #[test]
     fn lyrics_cache_ttl_marks_old_rows_as_stale() {
         assert!(lyrics_cache_is_stale("2024-01-01 00:00:00"));
         assert!(!lyrics_cache_is_stale("2999-01-01 00:00:00"));
         assert!(lyrics_cache_is_stale("not-a-datetime"));
+    }
+
+    #[test]
+    fn scrobble_threshold_matches_lastfm_rules() {
+        assert_eq!(lastfm_scrobble_threshold_secs(Some(60.0)), 30.0);
+        assert_eq!(lastfm_scrobble_threshold_secs(Some(600.0)), 240.0);
+        assert_eq!(lastfm_scrobble_threshold_secs(Some(300.0)), 150.0);
     }
 }

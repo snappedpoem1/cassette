@@ -83,19 +83,35 @@ async fn main() {
     let discogs_client = DiscogsClient::new(discogs_token);
     let lastfm_client = LastFmClient::new(lastfm_api_key);
 
-    let tracks = match db.get_tracks(limit as i64 * 5, 0) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Failed to fetch tracks: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let mut sample = Vec::new();
+    let page_size: i64 = 1_000;
+    let mut offset: i64 = 0;
 
-    let sample: Vec<_> = tracks
-        .into_iter()
-        .filter(|t| !t.artist.is_empty() && !t.album.is_empty())
-        .take(limit)
-        .collect();
+    while sample.len() < limit {
+        let tracks = match db.get_tracks(page_size, offset) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Failed to fetch tracks: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        if tracks.is_empty() {
+            break;
+        }
+
+        for track in tracks {
+            if track.artist.trim().is_empty() || track.album.trim().is_empty() {
+                continue;
+            }
+            sample.push(track);
+            if sample.len() >= limit {
+                break;
+            }
+        }
+
+        offset += page_size;
+    }
 
     let http_client = reqwest::Client::new();
     let mut discogs_hits = 0usize;

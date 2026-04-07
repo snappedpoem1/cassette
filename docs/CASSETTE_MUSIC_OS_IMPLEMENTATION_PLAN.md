@@ -1,7 +1,9 @@
 # Cassette Music Operating System Implementation Plan
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 Owner: Christian (single-owner personal project)
+
+Execution status: Stage A through Stage D complete (closed 2026-04-07)
 
 ## Purpose
 
@@ -145,6 +147,12 @@ Reused for:
 
 ## Ordered Implementation Program
 
+Closure note:
+
+- Stage A through Stage D are complete in the active runtime and UI.
+- Acceptance signals are now reflected in `docs/TODO.md`, `docs/HIT_LIST.md`, and `docs/PROJECT_STATE.md`.
+- This file remains the canonical integration map and operating-law reference for follow-on work.
+
 ## Stage A: Contract and Data Foundations (start here)
 
 1. Trust Ledger v1
@@ -153,9 +161,9 @@ Implement normalized mutation evidence rows and reason codes for planner, direct
 
 Acceptance:
 
-- one query can reconstruct end-to-end request outcome
-- Home and Downloads can render plain-language rationale cards
-- telemetry includes reason-code distribution
+- [x] one query can reconstruct end-to-end request outcome
+- [x] Home and Downloads can render plain-language rationale cards
+- [x] telemetry includes reason-code distribution
 
 2. Edition Intelligence v1
 
@@ -163,9 +171,9 @@ Thread release-group and edition markers through request contract, planner, and 
 
 Acceptance:
 
-- planner can filter by edition preference policy
-- replacement path can explain "why this edition won"
-- edition fields are visible in track inspection UI
+- [x] planner can filter by edition preference policy
+- [x] replacement path can explain "why this edition won"
+- [x] edition fields are visible in track inspection UI
 
 3. Policy Profile System
 
@@ -173,9 +181,9 @@ Implement explicit profiles: Playback-First, Balanced Auto, Aggressive Overnight
 
 Acceptance:
 
-- profile switch alters bounded concurrency, retry cadence, and enrichment scheduling
-- profile changes are logged and explainable
-- deterministic defaults are preserved after restart
+- [x] profile switch alters bounded concurrency, retry cadence, and enrichment scheduling
+- [x] profile changes are logged and explainable
+- [x] deterministic defaults are preserved after restart
 
 ## Stage B: Autonomous Intelligence and Reliability
 
@@ -185,9 +193,9 @@ Use persisted outcome memory to tune provider search order by context while pres
 
 Acceptance:
 
-- provider ordering adapts within bounded policy rules
-- stale or low-confidence memory never overrides hard identity constraints
-- explainability reflects adaptive decisions
+- [x] provider ordering adapts within bounded policy rules
+- [x] stale or low-confidence memory never overrides hard identity constraints
+- [x] explainability reflects adaptive decisions
 
 5. Dead-Letter Command Center
 
@@ -195,9 +203,9 @@ Add a first-class dead-letter lane with grouped failure classes, suggested fixes
 
 Acceptance:
 
-- permanently failed tasks are isolated from active queue lanes
-- each dead-letter item includes next best action
-- replay path preserves original request signature and lineage
+- [x] permanently failed tasks are isolated from active queue lanes
+- [x] each dead-letter item includes next best action
+- [x] replay path preserves original request signature and lineage
 
 6. Long-Session Reliability Harness
 
@@ -205,9 +213,9 @@ Add repeatable 8 to 24 hour soak scenarios for playback plus background acquisit
 
 Acceptance:
 
-- soak report captures underruns, memory drift, queue drift, and provider failure envelopes
-- regression gates can fail on soak degradation
-- known instability signatures are tracked in telemetry
+- [x] soak report captures underruns, memory drift, queue drift, and provider failure envelopes
+- [x] regression gates can fail on soak degradation
+- [x] known instability signatures are tracked in telemetry
 
 ## Stage C: Appreciation and Beauty Layer
 
@@ -217,9 +225,9 @@ Ship waveform plus spectrum modes first, then optional high-fidelity shader mode
 
 Acceptance:
 
-- visualizer frame budget does not regress playback stability
-- low-motion and reduced-effects modes exist
-- visualizer can be disabled globally without affecting playback
+- [x] visualizer frame budget does not regress playback stability
+- [x] low-motion and reduced-effects modes exist
+- [x] visualizer can be disabled globally without affecting playback
 
 8. Dynamic Glass and Mood System
 
@@ -227,9 +235,9 @@ Add adaptive theme mooding from artwork and audio features with strict fallback.
 
 Acceptance:
 
-- system supports static fallback theme when effects unavailable
-- contrast and readability pass accessibility checks
-- background effects are bounded for CPU and GPU use
+- [x] system supports static fallback theme when effects unavailable
+- [x] contrast and readability pass accessibility checks
+- [x] background effects are bounded for CPU and GPU use
 
 9. Session Composer
 
@@ -237,9 +245,9 @@ Generate listening arcs using key, BPM, energy slope, and personal history.
 
 Acceptance:
 
-- generated sessions include explainable transition logic
-- skip and replay feedback updates future arc generation
-- sessions can be saved as reusable modes
+- [x] generated sessions include explainable transition logic
+- [x] skip and replay feedback updates future arc generation
+- [x] sessions can be saved as reusable modes
 
 ## Stage D: Platform and Extension Model
 
@@ -249,9 +257,9 @@ Define a capability-scoped extension model for visual packs, enrichers, and prov
 
 Acceptance:
 
-- extension capabilities are explicit and sandboxed
-- extension failures are isolated from deterministic core lanes
-- extension telemetry and health are surfaced in settings
+- [x] extension capabilities are explicit and sandboxed
+- [x] extension failures are isolated from deterministic core lanes
+- [x] extension telemetry and health are surfaced in settings
 
 ## Reuse and Isolation Matrix
 
@@ -316,10 +324,23 @@ Set-Location ui; npm install; npm run build; Set-Location ..
 
 ## Near-Term Bootstrap (First Two Weeks)
 
+Status: complete.
+
 1. Stand up Trust Ledger v1 schema plus query surface.
 2. Add edition markers to request contract and planner filters.
 3. Expose policy profile switch in settings and log profile changes.
 4. Add dead-letter lane skeleton in Downloads with failure-class grouping.
 5. Capture first long-session soak report baseline.
 
-This bootstrap creates the minimum Music OS spine that later visual and intelligence layers can safely attach to.
+Outcome: this bootstrap established the minimum Music OS spine and successfully supported later visual, appreciation, and extension layers without breaking deterministic core behavior.
+
+## Stage Closure Summary (A-D)
+
+1. Stage A complete: trust-ledger explainability, edition intelligence threading, and policy profiles are live.
+2. Stage B complete: adaptive provider ordering, dead-letter command center, and reliability harness tracking are in place.
+3. Stage C complete: waveform/spectrum/MilkDrop-style visualizer support, dynamic mood glassing, and Session Composer feedback loops are live.
+4. Stage D complete: capability-scoped extension model with isolated failure handling and settings health telemetry is live.
+
+Verification closure note:
+
+- Baseline verification contract has been run with passing `cargo check --workspace`, `cargo test --workspace`, `ui` production build, and desktop smoke validation.

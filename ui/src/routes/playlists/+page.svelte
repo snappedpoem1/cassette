@@ -5,13 +5,21 @@
     loadPlaylists, loadPlaylistItems, createPlaylist, deletePlaylist, playPlaylist,
   } from '$lib/stores/playlists';
   import { formatDuration } from '$lib/utils';
-  import type { Playlist } from '$lib/api/tauri';
+  import ContextActionRail from '$lib/components/ContextActionRail.svelte';
+  import type { Playlist, Track } from '$lib/api/tauri';
 
   onMount(loadPlaylists);
 
   let creating = false;
   let newName = '';
   let newDesc = '';
+  let selectedTrack: Track | null = null;
+  let selectedPlaylistGuard: number | null = null;
+
+  $: if ($activePlaylistId !== selectedPlaylistGuard) {
+    selectedPlaylistGuard = $activePlaylistId;
+    selectedTrack = null;
+  }
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -26,6 +34,10 @@
       await deletePlaylist(pl.id);
       if ($activePlaylistId === pl.id) activePlaylistId.set(null);
     }
+  }
+
+  function selectTrack(track: Track | null) {
+    selectedTrack = track;
   }
 </script>
 
@@ -102,10 +114,32 @@
           <div class="empty-body">Add tracks from the Library.</div>
         </div>
       {:else}
+        {#if selectedTrack}
+          <div style="padding: 8px;">
+            <ContextActionRail
+              compact
+              track={selectedTrack}
+              album={selectedTrack.album ? { artist: selectedTrack.artist, title: selectedTrack.album } : null}
+              artistName={selectedTrack.artist}
+            />
+          </div>
+        {/if}
         {#each $activePlaylistItems as item, i}
           {@const track = item.track}
           <!-- svelte-ignore a11y-no-static-element-interactions -->
-          <div class="track-row" on:dblclick={() => playPlaylist($activePlaylistId!, i)}>
+          <div
+            class="track-row"
+            role="button"
+            tabindex="0"
+            on:click={() => selectTrack(track)}
+            on:dblclick={() => playPlaylist($activePlaylistId!, i)}
+            on:keydown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectTrack(track);
+              }
+            }}
+          >
             <span class="track-num">{i + 1}</span>
             <div class="track-title">{track?.title ?? 'Unknown'}</div>
             <div class="track-artist">{track?.artist ?? ''}</div>

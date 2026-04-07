@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
+  import SessionComposer from '$lib/components/SessionComposer.svelte';
   import { buildArtistClusters } from '$lib/artist-clusters';
   import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory, type TaskResultSummary, type TrustReasonDistributionEntry } from '$lib/api/tauri';
   import { artists, trackCount } from '$lib/stores/library';
@@ -309,6 +310,8 @@
       </div>
     </div>
   </section>
+
+  <SessionComposer />
 </div>
 
 <style>

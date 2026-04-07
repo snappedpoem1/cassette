@@ -30,6 +30,7 @@ const EDITION_MARKERS: &[&str] = &[
     "remaster",
     "live",
 ];
+const PLANNER_EXCLUSION_MEMORY_PREFIX: &str = "planner.exclusion_memory.v1";
 
 #[derive(Debug, Serialize)]
 pub struct PlannedAcquisitionResult {
@@ -82,6 +83,8 @@ pub async fn plan_acquisition(
     state: State<'_, AppState>,
     mut request: AcquisitionRequest,
 ) -> Result<PlannedAcquisitionResult, String> {
+    apply_exclusion_memory(&state, &mut request)?;
+
     if request.request_signature.is_none() {
         request.request_signature = Some(request.request_fingerprint());
     }
@@ -281,6 +284,7 @@ pub async fn approve_planned_request(
     state: State<'_, AppState>,
     request_id: i64,
     note: Option<String>,
+    excluded_provider_ids: Option<Vec<String>>,
 ) -> Result<AcquisitionRequestRow, String> {
     let request = state
         .control_db
@@ -301,11 +305,21 @@ pub async fn approve_planned_request(
         ));
     }
 
+    let remembered = remember_exclusions_for_request(
+        &state,
+        &request,
+        &task_id,
+        excluded_provider_ids.as_deref(),
+    )?;
+    let memory_key = planner_exclusion_memory_key_from_row(&request);
+
     let task = track_task_from_request_row(&request)?;
 
     let payload = serde_json::json!({
         "request_id": request_id,
         "review_action": "approved",
+        "remembered_excluded_providers": remembered,
+        "memory_key": memory_key,
     })
     .to_string();
     state
@@ -371,6 +385,7 @@ pub async fn reject_planned_request(
     state: State<'_, AppState>,
     request_id: i64,
     reason: Option<String>,
+    excluded_provider_ids: Option<Vec<String>>,
 ) -> Result<AcquisitionRequestRow, String> {
     let request = state
         .control_db
@@ -391,9 +406,19 @@ pub async fn reject_planned_request(
         ));
     }
 
+    let remembered = remember_exclusions_for_request(
+        &state,
+        &request,
+        &task_id,
+        excluded_provider_ids.as_deref(),
+    )?;
+    let memory_key = planner_exclusion_memory_key_from_row(&request);
+
     let payload = serde_json::json!({
         "request_id": request_id,
         "review_action": "rejected",
+        "remembered_excluded_providers": remembered,
+        "memory_key": memory_key,
     })
     .to_string();
     let updated = state
@@ -455,6 +480,176 @@ fn track_task_from_request_row(request: &AcquisitionRequestRow) -> Result<TrackT
         },
         strategy,
     })
+}
+
+fn apply_exclusion_memory(
+    state: &State<'_, AppState>,
+    request: &mut AcquisitionRequest,
+) -> Result<(), String> {
+    let key = planner_exclusion_memory_key_from_request(request);
+    let remembered = {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        db.get_setting(&key)
+            .map_err(|error| error.to_string())?
+            .map(|value| decode_provider_list(&value))
+            .unwrap_or_default()
+    };
+
+    if remembered.is_empty() {
+        return Ok(());
+    }
+
+    request.excluded_providers = merge_excluded_providers(&request.excluded_providers, &remembered);
+    Ok(())
+}
+
+fn remember_exclusions_for_request(
+    state: &State<'_, AppState>,
+    request: &AcquisitionRequestRow,
+    task_id: &str,
+    explicit_provider_ids: Option<&[String]>,
+) -> Result<Vec<String>, String> {
+    let remembered = {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        let existing = request
+            .excluded_providers_json
+            .as_deref()
+            .map(decode_provider_list)
+            .unwrap_or_default();
+        let reviewed = if let Some(explicit) = explicit_provider_ids {
+            explicit.to_vec()
+        } else {
+            db.get_candidate_review(task_id)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .filter(|item| !item.is_selected)
+                .map(|item| item.provider_id)
+                .collect::<Vec<_>>()
+        };
+
+        let merged = merge_excluded_providers(&existing, &reviewed);
+        if !merged.is_empty() {
+            let payload = serde_json::to_string(&merged).map_err(|error| error.to_string())?;
+            db.set_setting(&planner_exclusion_memory_key_from_row(request), &payload)
+                .map_err(|error| error.to_string())?;
+        }
+        merged
+    };
+
+    Ok(remembered)
+}
+
+fn planner_exclusion_memory_key_from_request(request: &AcquisitionRequest) -> String {
+    planner_exclusion_memory_key(
+        request.scope.as_str(),
+        normalize_provider_value(Some(request.artist.as_str())),
+        normalize_provider_value(request.album.as_deref()),
+        normalize_provider_value(Some(request.title.as_str())),
+        request.track_number,
+        request.disc_number,
+        request.musicbrainz_recording_id.as_deref(),
+        request.musicbrainz_release_group_id.as_deref(),
+        request.musicbrainz_release_id.as_deref(),
+        request.canonical_artist_id,
+        request.canonical_release_id,
+        request.quality_policy.as_deref(),
+        request.edition_policy.as_deref(),
+        Some(request.confirmation_policy.as_str()),
+    )
+}
+
+fn planner_exclusion_memory_key_from_row(request: &AcquisitionRequestRow) -> String {
+    planner_exclusion_memory_key(
+        request.scope.as_str(),
+        normalize_provider_value(Some(request.normalized_artist.as_str())),
+        normalize_provider_value(request.normalized_album.as_deref()),
+        normalize_provider_value(Some(request.normalized_title.as_str())),
+        request.track_number.and_then(|value| u32::try_from(value).ok()),
+        request.disc_number.and_then(|value| u32::try_from(value).ok()),
+        request.musicbrainz_recording_id.as_deref(),
+        request.musicbrainz_release_group_id.as_deref(),
+        request.musicbrainz_release_id.as_deref(),
+        request.canonical_artist_id,
+        request.canonical_release_id,
+        request.quality_policy.as_deref(),
+        request.edition_policy.as_deref(),
+        Some(request.confirmation_policy.as_str()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn planner_exclusion_memory_key(
+    scope: &str,
+    artist: String,
+    album: String,
+    title: String,
+    track_number: Option<u32>,
+    disc_number: Option<u32>,
+    recording_id: Option<&str>,
+    release_group_id: Option<&str>,
+    release_id: Option<&str>,
+    canonical_artist_id: Option<i64>,
+    canonical_release_id: Option<i64>,
+    quality_policy: Option<&str>,
+    edition_policy: Option<&str>,
+    confirmation_policy: Option<&str>,
+) -> String {
+    [
+        PLANNER_EXCLUSION_MEMORY_PREFIX.to_string(),
+        normalize_provider_value(Some(scope)),
+        artist,
+        album,
+        title,
+        track_number.map(|value| value.to_string()).unwrap_or_default(),
+        disc_number.map(|value| value.to_string()).unwrap_or_default(),
+        normalize_provider_value(recording_id),
+        normalize_provider_value(release_group_id),
+        normalize_provider_value(release_id),
+        canonical_artist_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        canonical_release_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        normalize_provider_value(quality_policy),
+        normalize_provider_value(edition_policy),
+        normalize_provider_value(confirmation_policy),
+    ]
+    .join("::")
+}
+
+fn normalize_provider_value(value: Option<&str>) -> String {
+    value
+        .map(|segment| segment.trim().to_ascii_lowercase())
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or_default()
+}
+
+fn decode_provider_list(value: &str) -> Vec<String> {
+    let parsed = serde_json::from_str::<Vec<String>>(value).unwrap_or_default();
+    normalize_provider_ids(&parsed)
+}
+
+fn normalize_provider_ids(values: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let candidate = value.trim().to_ascii_lowercase();
+        if candidate.is_empty() || normalized.contains(&candidate) {
+            continue;
+        }
+        normalized.push(candidate);
+    }
+    normalized
+}
+
+fn merge_excluded_providers(existing: &[String], remembered: &[String]) -> Vec<String> {
+    let mut merged = normalize_provider_ids(existing);
+    for provider in normalize_provider_ids(remembered) {
+        if !merged.contains(&provider) {
+            merged.push(provider);
+        }
+    }
+    merged
 }
 
 fn parse_track_task_source(source_name: &str) -> Result<TrackTaskSource, String> {
@@ -893,8 +1088,9 @@ fn provider_error_outcome(error: &ProviderError) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_edition_policy_filter, cache_is_fresh, parse_acquisition_strategy,
-        parse_track_task_source, planner_identity_lane_from_request,
+        apply_edition_policy_filter, cache_is_fresh, merge_excluded_providers,
+        parse_acquisition_strategy, parse_track_task_source,
+        planner_exclusion_memory_key_from_request, planner_identity_lane_from_request,
     };
     use cassette_core::acquisition::{
         AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
@@ -1033,5 +1229,55 @@ mod tests {
             apply_edition_policy_filter(candidates, Some("no_live"), Some("Album Live"));
         assert_eq!(kept.len(), 1);
         assert_eq!(filtered, 0);
+    }
+
+    #[test]
+    fn merge_excluded_providers_dedupes_and_normalizes() {
+        let existing = vec!["Yt_Dlp".to_string(), "  ".to_string()];
+        let remembered = vec!["usenet".to_string(), "yt_dlp".to_string()];
+        let merged = merge_excluded_providers(&existing, &remembered);
+        assert_eq!(merged, vec!["yt_dlp".to_string(), "usenet".to_string()]);
+    }
+
+    #[test]
+    fn exclusion_memory_key_is_stable_and_normalized() {
+        let request = AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::Track,
+            source: TrackTaskSource::Manual,
+            source_name: "manual".to_string(),
+            source_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
+            artist: "  Test Artist  ".to_string(),
+            album: Some("Album".to_string()),
+            title: "Song".to_string(),
+            track_number: Some(7),
+            disc_number: Some(1),
+            year: None,
+            duration_secs: None,
+            isrc: None,
+            musicbrainz_recording_id: Some("MB-REC".to_string()),
+            musicbrainz_release_group_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: Some(10),
+            canonical_release_id: Some(11),
+            strategy: AcquisitionStrategy::Standard,
+            quality_policy: Some("lossless".to_string()),
+            excluded_providers: Vec::new(),
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::ManualReview,
+            desired_track_id: None,
+            source_operation_id: None,
+            task_id: Some("task-1".to_string()),
+            request_signature: Some("sig-1".to_string()),
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: None,
+        };
+
+        let key = planner_exclusion_memory_key_from_request(&request);
+        assert!(key.contains("planner.exclusion_memory.v1"));
+        assert!(key.contains("test artist"));
+        assert!(key.contains("manual_review"));
     }
 }

@@ -40,6 +40,46 @@ export const progressPct = derived(
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastTrackId: number | null = null;
 let lastTaskbarSignature: string | null = null;
+const scrobbledTrackIds = new Set<number>();
+const failedScrobbleTrackIds = new Set<number>();
+
+function lastfmScrobbleThresholdSecs(durationSecs: number): number {
+  const halfTrack = durationSecs > 0 ? durationSecs * 0.5 : 120;
+  return Math.max(30, Math.min(240, halfTrack));
+}
+
+async function maybeScrobbleToLastfm(state: PlaybackState): Promise<void> {
+  const track = state.current_track;
+  if (!track || !state.is_playing || state.position_secs <= 0 || state.duration_secs <= 0) {
+    return;
+  }
+  if (scrobbledTrackIds.has(track.id) || failedScrobbleTrackIds.has(track.id)) {
+    return;
+  }
+
+  const threshold = lastfmScrobbleThresholdSecs(state.duration_secs);
+  if (state.position_secs < threshold) {
+    return;
+  }
+
+  try {
+    const scrobbled = await api.submitLastfmScrobble(
+      track.id,
+      track.artist,
+      track.title,
+      track.album || undefined,
+      state.duration_secs,
+      state.position_secs,
+    );
+    if (scrobbled) {
+      scrobbledTrackIds.add(track.id);
+    } else {
+      failedScrobbleTrackIds.add(track.id);
+    }
+  } catch {
+    failedScrobbleTrackIds.add(track.id);
+  }
+}
 
 async function syncTaskbarPlaybackProgress(state: PlaybackState): Promise<void> {
   if (!browser) {
@@ -80,10 +120,12 @@ export function startPlayerPoll() {
       const state = await api.getPlaybackState();
       playbackState.set(state);
       void syncTaskbarPlaybackProgress(state);
+      void maybeScrobbleToLastfm(state);
 
       const track = state.current_track;
       if (track && track.id !== lastTrackId) {
         lastTrackId = track.id;
+        failedScrobbleTrackIds.delete(track.id);
         try {
           const ctx = await api.getNowPlayingContext(
             track.artist,

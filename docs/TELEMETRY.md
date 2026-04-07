@@ -3,7 +3,7 @@
 This file tracks what we know about build, runtime, and operational confidence.
 It is not a dashboard — it is a record of observed facts with dates.
 
-**Last Updated**: 2026-04-06
+**Last Updated**: 2026-04-07
 
 ---
 
@@ -40,6 +40,8 @@ Recent docs/runtime evidence alignment (2026-04-06):
 | slskd acquisition | Partial | Health/probe path passes when daemon is up; transfer acceptance still varies by peer |
 | Usenet acquisition | Partial | SABnzbd handoff wired; end-to-end not formally proven |
 | Jackett torrent search | Partial | Active in Director and CLI, but still needs broader live proof |
+| Discogs/Last.fm enrichment probe | Working (bounded) | 2026-04-07 credentialed probe (`--limit 25`) reported `Discogs 25/25` and `Last.fm 0/25` on sampled corpus |
+| Cleanroom packaging verification | Working (local) | 2026-04-07 `scripts/verify_cleanroom_local.ps1` passed in DisposableProfile mode; installer bundle and runtime/sidecar DB checks passed |
 | yt-dlp acquisition | Wired | Depends on yt-dlp binary in PATH |
 | Spotify import | Working | JSON export parsing and album queue confirmed |
 | Organizer / duplicate finder | Working | Dry-run confirmed |
@@ -65,6 +67,19 @@ Baseline capture (2026-04-06, machine `DESKTOP-8TK5EVK`, 16 logical processors, 
 | `validation_targeted_suite` | 0.890 | 0.890 | `cargo test -p cassette-core validation::logging::tests:: -- --nocapture` |
 | `bounded_coordinator_limit5` | 0.829 | 0.829 | `cargo run -p cassette --bin engine_pipeline_cli -- --resume --limit 5 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill` |
 | `organize_dry_run` | 7.472 | 7.472 | `cargo run -p cassette --bin organize_cli -- --dry-run` |
+
+Latest capture (2026-04-07, artifact `artifacts/perf/run-20260406-232508/results.json`, 3 runs, 1 warmup):
+
+| Scenario | Median (s) | P95 (s) | Gate result |
+|---|---:|---:|---|
+| `scan_resume_queue_only` | 0.860 | 0.860 | pass |
+| `validation_targeted_suite` | 0.763 | 0.763 | pass |
+| `bounded_coordinator_limit5` | 0.861 | 0.861 | pass |
+| `organize_dry_run` | 10.720 | 10.720 | pass |
+
+Regression gate outcome (2026-04-07):
+
+- Candidate artifact `artifacts/perf/run-20260406-232508/results.json` passed `scripts/perf_regression_gate.ps1` with no fail-level regressions.
 
 Queue-only unchanged-skip evidence (2026-04-06):
 
@@ -115,14 +130,21 @@ Regression budget policy:
 - App startup time (cold)
 - UI render time for large libraries
 
+## KPI Cadence And Artifact Policy
+
+- Capture cadence: run `scripts/perf_baseline_capture.ps1 -Runs 3 -WarmupRuns 1` for release-candidate validation and for any major coordinator/performance-sensitive changes.
+- Gate cadence: run `scripts/perf_regression_gate.ps1 -CandidateResultPath <artifact>` on every capture; store candidate artifacts under `artifacts/perf/run-YYYYMMDD-HHMMSS/`.
+- Trust cadence: run `scripts/verify_trust_spine.ps1` alongside perf capture to pair behavior correctness with performance evidence.
+- Promotion rule: only promote candidate numbers into canonical baseline after a passing regression gate.
+
 ---
 
 ## Known Gaps
 
-- Baseline currently uses a single measured run per scenario; move to multi-run captures (`-Runs 3` minimum) before final release lock.
+- Baseline now uses multi-run captures (`-Runs 3`, `-WarmupRuns 1`) for core scenarios; next improvement is broader scenario coverage over time.
 - Provider reliability is configuration-dependent and machine-dependent.
-- Packaging confidence is not yet a repeatable telemetry artifact.
-- Long-session stability has not been tested beyond a single smoke run.
+- Packaging confidence is now policy-defined, script-gated, and locally proven via cleanroom verification; maintain this through repeatable local clean-room runs on this machine.
+- Long-session stability now has documented soak procedure and baseline evidence; additional soak depth remains useful as follow-on hardening.
 - Full UI-driven crash/relaunch capture is still worth recording even though startup replay is now proven with a deterministic probe.
 - Candidate persistence and provider-response memory are in the runtime path, and Trust Ledger + Edition Intelligence + Policy Profiles now surface in Home/Downloads/Library/Settings; planner-stage vocabulary reuse remains incomplete.
 

@@ -35,17 +35,16 @@ Use this checklist before calling a Windows release candidate shippable.
 
 ## Clean-Room Install Gate (Windows)
 
-- [ ] Choose one isolation path:
-  - [ ] Separate Windows machine
-  - [ ] Windows Sandbox on the same machine
-  - [ ] Disposable local Windows user profile on the same machine
+- [ ] Choose one local clean-room path on this machine:
+  - [ ] Windows Sandbox
+  - [ ] Disposable local Windows user profile
 - [ ] Install from `.msi` or `.exe` bundle inside the chosen clean-room path
 - [ ] Launch app once and confirm bootstrap created:
   - [ ] `%APPDATA%/dev.cassette.app/cassette.db`
   - [ ] `%APPDATA%/dev.cassette.app/cassette_librarian.db`
 - [ ] Run `./scripts/verify_cleanroom_local.ps1 -Mode <Sandbox|DisposableProfile>`
 - [ ] Confirm first-run settings bootstrap (`library_base`, `staging_folder`, provider defaults)
-- [ ] If true isolation is unavailable, run app-data reset fallback on the same machine and record this as lower-confidence proof in release notes
+- [ ] If local clean-room isolation is unavailable, run app-data reset fallback on the same machine and record this as lower-confidence proof in release notes
 
 ## Unified Datastore Convergence Gate
 
@@ -74,4 +73,4 @@ When shipping convergence-related changes, run:
 
 - [ ] Any remaining audit-completeness uncertainty is documented in `docs/TODO.md`
 - [ ] Any machine-specific provider assumptions are recorded in `docs/PROJECT_STATE.md`
-- [ ] If clean-machine install proof was not run in this cycle, explicitly state that in release notes
+- [ ] If local clean-room install proof was not run in this cycle, explicitly state that in release notes

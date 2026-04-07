@@ -1,0 +1,78 @@
+﻿{
+    "version":  1,
+    "captured_at_utc":  "2026-04-07T03:34:31.0758831Z",
+    "machine":  {
+                    "computer_name":  "DESKTOP-8TK5EVK",
+                    "processor_count":  16,
+                    "os_version":  "Microsoft Windows NT 10.0.26200.0",
+                    "powershell_version":  "5.1.26100.7462"
+                },
+    "run":  {
+                "runs":  3,
+                "warmup_runs":  1,
+                "repo_root":  "C:\\Cassette Music",
+                "scratch_appdata":  "C:\\Cassette Music\\artifacts\\perf\\run-20260406-232508\\appdata"
+            },
+    "scenarios":  [
+                      {
+                          "name":  "scan_resume_queue_only",
+                          "command":  "cargo run -p cassette --bin engine_pipeline_cli -- --resume --limit 0 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill",
+                          "runs":  3,
+                          "warmup_runs":  1,
+                          "durations_seconds":  [
+                                                    0.86,
+                                                    0.845,
+                                                    0.825
+                                                ],
+                          "median_seconds":  0.86,
+                          "p95_seconds":  0.86,
+                          "min_seconds":  0.825,
+                          "max_seconds":  0.86
+                      },
+                      {
+                          "name":  "validation_targeted_suite",
+                          "command":  "cargo test -p cassette-core validation::logging::tests:: -- --nocapture",
+                          "runs":  3,
+                          "warmup_runs":  1,
+                          "durations_seconds":  [
+                                                    0.763,
+                                                    0.717,
+                                                    0.711
+                                                ],
+                          "median_seconds":  0.763,
+                          "p95_seconds":  0.763,
+                          "min_seconds":  0.711,
+                          "max_seconds":  0.763
+                      },
+                      {
+                          "name":  "bounded_coordinator_limit5",
+                          "command":  "cargo run -p cassette --bin engine_pipeline_cli -- --resume --limit 5 --skip-post-sync --skip-organize-subset --skip-fingerprint-backfill",
+                          "runs":  3,
+                          "warmup_runs":  1,
+                          "durations_seconds":  [
+                                                    0.861,
+                                                    0.843,
+                                                    0.845
+                                                ],
+                          "median_seconds":  0.861,
+                          "p95_seconds":  0.861,
+                          "min_seconds":  0.843,
+                          "max_seconds":  0.861
+                      },
+                      {
+                          "name":  "organize_dry_run",
+                          "command":  "cargo run -p cassette --bin organize_cli -- --dry-run",
+                          "runs":  3,
+                          "warmup_runs":  1,
+                          "durations_seconds":  [
+                                                    10.72,
+                                                    10.415,
+                                                    10.528
+                                                ],
+                          "median_seconds":  10.72,
+                          "p95_seconds":  10.72,
+                          "min_seconds":  10.415,
+                          "max_seconds":  10.72
+                      }
+                  ]
+}

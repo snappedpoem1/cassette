@@ -564,6 +564,22 @@ export const api = {
     invoke<NowPlayingContext>('get_now_playing_context', { artist, title, album }),
   syncLastfmHistory: (username?: string, limit?: number) =>
     invoke<number>('sync_lastfm_history', { username, limit }),
+  submitLastfmScrobble: (
+    trackId: number,
+    artist: string,
+    title: string,
+    album?: string,
+    durationSecs?: number,
+    positionSecs?: number,
+  ) =>
+    invoke<boolean>('submit_lastfm_scrobble', {
+      trackId,
+      artist,
+      title,
+      album,
+      durationSecs,
+      positionSecs,
+    }),
 
   // Queue
   getQueue: () => invoke<QueueItem[]>('get_queue'),
@@ -648,10 +664,10 @@ export const api = {
     invoke('create_acquisition_request', { request }),
   planAcquisition: (request: AcquisitionRequest) =>
     invoke<PlannedAcquisitionResult>('plan_acquisition', { request }),
-  approvePlannedRequest: (requestId: number, note?: string) =>
-    invoke('approve_planned_request', { requestId, note }),
-  rejectPlannedRequest: (requestId: number, reason?: string) =>
-    invoke('reject_planned_request', { requestId, reason }),
+  approvePlannedRequest: (requestId: number, note?: string, excludedProviderIds?: string[]) =>
+    invoke('approve_planned_request', { requestId, note, excludedProviderIds }),
+  rejectPlannedRequest: (requestId: number, reason?: string, excludedProviderIds?: string[]) =>
+    invoke('reject_planned_request', { requestId, reason, excludedProviderIds }),
   listAcquisitionRequests: (status?: string, limit?: number) =>
     invoke<AcquisitionRequestListItem[]>('list_acquisition_requests', { status, limit }),
   getAcquisitionRequestTimeline: (requestId: number) =>

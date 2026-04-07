@@ -34,6 +34,12 @@
   --warning:        #f59e0b;
   --error:          #ef4444;
 
+  --mood-accent-rgb: 139, 180, 212;
+  --mood-layer-a: rgba(139, 180, 212, 0.08);
+  --mood-layer-b: rgba(247, 180, 92, 0.06);
+  --mood-blur: 24px;
+  --mood-shift-ms: 460ms;
+
   --sidebar-w:       88px;
   --right-sidebar-w: 190px;
   --topbar-h:        40px;
@@ -89,6 +95,14 @@ p  { margin: 0; }
   grid-template-rows: var(--topbar-h) 1fr var(--nowplaying-h);
   height: 100vh;
   overflow: hidden;
+  transition: background var(--mood-shift-ms) ease;
+}
+
+.app-shell.mood-enabled {
+  background:
+    radial-gradient(85% 120% at 10% 0%, var(--mood-layer-a), transparent 60%),
+    radial-gradient(90% 90% at 90% 100%, var(--mood-layer-b), transparent 58%),
+    var(--bg-deep);
 }
 
 .app-topbar {
@@ -99,7 +113,10 @@ p  { margin: 0; }
   gap: 0;
   padding: 0 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-deep);
+  background:
+    linear-gradient(90deg, rgba(var(--mood-accent-rgb), 0.08), transparent 52%),
+    var(--bg-deep);
+  transition: background var(--mood-shift-ms) ease;
 }
 
 .topbar-brand {
@@ -190,7 +207,10 @@ p  { margin: 0; }
   grid-column: 2;
   grid-row: 2;
   overflow-y: auto;
-  background: var(--bg-base);
+  background:
+    linear-gradient(165deg, rgba(var(--mood-accent-rgb), 0.06), transparent 45%),
+    var(--bg-base);
+  transition: background var(--mood-shift-ms) ease;
 }
 
 .app-right {
@@ -205,9 +225,12 @@ p  { margin: 0; }
   grid-column: 1 / 4;
   grid-row: 3;
   border-top: 1px solid var(--border-dim);
-  background: var(--bg-deep);
+  background:
+    linear-gradient(90deg, rgba(var(--mood-accent-rgb), 0.12), transparent 58%),
+    var(--bg-deep);
   display: flex;
   flex-direction: column;
+  transition: background var(--mood-shift-ms) ease;
 }
 
 /* compact player mode */

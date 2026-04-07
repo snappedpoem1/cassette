@@ -2,6 +2,7 @@
   import { buildArtistClusters, clusterAlbumsForArtist, normalizeArtistKey, type ArtistCluster } from '$lib/artist-clusters';
   import { artists } from '$lib/stores/library';
   import { api } from '$lib/api/tauri';
+  import ContextActionRail from '$lib/components/ContextActionRail.svelte';
   import { queueTracks } from '$lib/stores/queue';
   import { formatDuration, coverSrc } from '$lib/utils';
   import type { Album, Track } from '$lib/api/tauri';
@@ -54,7 +55,7 @@
       <button class="back-btn" on:click={back}>Back</button>
       <h2>{selectedAlbum ? selectedAlbum.title : selectedArtist.primaryName}</h2>
       {#if selectedAlbum}
-        <button class="btn btn-primary" on:click={() => playAlbum(selectedAlbum)}>Play</button>
+        <button class="btn btn-primary" on:click={() => selectedAlbum && playAlbum(selectedAlbum)}>Play</button>
       {/if}
     {:else}
       <h2>Artists</h2>
@@ -93,6 +94,9 @@
       </div>
     {/if}
   {:else if !selectedAlbum}
+    <div style="padding: 0 1rem 0.5rem;">
+      <ContextActionRail compact artistName={selectedArtist.primaryName} />
+    </div>
     {#if artistAlbums.length === 0}
       <div class="empty-state">
         <div class="empty-title">No albums found</div>
@@ -130,6 +134,13 @@
       </div>
     {/if}
   {:else}
+    <div style="padding: 0 1rem 0.5rem;">
+      <ContextActionRail
+        compact
+        album={{ artist: selectedAlbum.artist, title: selectedAlbum.title }}
+        artistName={selectedArtist.primaryName}
+      />
+    </div>
     <div class="track-list" style="padding: 8px 1rem;">
       {#each albumTracks as track, i}
         <div class="track-row" role="button" tabindex="0" on:dblclick={() => queueTracks(albumTracks, i)}>

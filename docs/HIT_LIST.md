@@ -1,6 +1,6 @@
 # Cassette Hit List
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 This is the short-form execution board for the current mission.
 For full context and acceptance details, see `TODO.md` and `PROJECT_STATE.md`.
@@ -12,7 +12,7 @@ For full context and acceptance details, see `TODO.md` and `PROJECT_STATE.md`.
 Current audited backlog shape:
 
 - [x] 51 completed items
-- [ ] 4 remaining items
+- [x] 0 remaining items on legacy stage board (active remaining work tracked in `docs/WORK_ORDER_REMAINING.md`)
 - [x] Green verification snapshot recorded on 2026-03-30
 - [x] Runtime/control-plane split documented: `cassette.db` + `cassette_librarian.db`
 
@@ -21,6 +21,7 @@ New (2026-04-03):
 - [x] Jackett multi-indexer torrent search provider added to Director waterfall (trust_rank 40, between Usenet and Real-Debrid)
 - [x] `torrent_album_cli --seed-sidecar` feeds failed albums into sidecar delta_queue for coordinator retry
 - [x] `cargo tauri build` produces `.msi` + `.exe` installer bundles
+- [x] Local cleanroom packaging verification passed — **DONE 2026-04-07**: `scripts/verify_cleanroom_local.ps1` passed (DisposableProfile mode, installer bundle check, runtime + sidecar DB presence)
 - [x] `db_converge_cli --overwrite` re-proven against app-data DBs (`desired_tracks=4`, `delta_queue=11`, `acquisition_requests=0`)
 - [x] Album/artist projection IDs switched to deterministic BLAKE3-derived IDs (replaces seeded `DefaultHasher` behavior)
 - [x] Trust-spine now fails fast on native command failures and runs smoke in strict mode
@@ -93,11 +94,21 @@ Already proven:
 - [x] Capture Spotify ingest replay proof for improved reconciliation hit-rate on a fixed sample — **DONE 2026-04-06**: paired fixed sample replay (`n=50` per cohort) upgraded reconciliation strength from `weak_match=50` (legacy-minimal identity) to `strong_match=50` (rich identity fields), then cleaned seed rows from sidecar tables.
 - [x] Finish release-group identity threading and prevent identity collapse at all active queue boundaries — **DONE 2026-04-06**: request signatures now include `musicbrainz_release_group_id`, and source-alias persistence now stores `musicbrainz.release_group_id` across planner/director request boundaries with regression tests.
 - [x] Complete planner-stage cutover for all remaining runtime/operator lanes — **DONE 2026-04-06**: `plan_and_submit` live in coordinator binary; proof run confirmed planner path executes without crash (`engine_pipeline_cli --resume --limit 5 --skip-organize-subset --skip-post-sync`, no pending delta_queue work at proof time). See `PROJECT_STATE.md` for proof artifact.
-- [x] Prove and document Discogs and Last.fm enrichment behavior end-to-end — **DONE 2026-04-06**: `enrich_probe_cli` ran against live runtime DB; both clients implemented, credentials not configured at proof time (0 tracks probed, binary reported cleanly). Proof recorded in `PROJECT_STATE.md`.
+- [x] Prove and document Discogs and Last.fm enrichment behavior end-to-end — **DONE 2026-04-07**: credentialed `enrich_probe_cli --limit 25` against live runtime DB reported `25 tracks probed`, `Discogs 25/25`, `Last.fm 0/25` on sampled corpus. Proof recorded in `PROJECT_STATE.md`.
 - [x] Add adaptive provider orchestrator nudge with bounded floor guarantees — **DONE 2026-04-06**: recent finalized provider memory now nudges waterfall ordering conservatively (trust_rank floor <= 10 protected) with debug reorder evidence.
 - [x] Add dead-letter command center with replay path — **DONE 2026-04-06**: grouped dead-letter summary shipped to Downloads with per-item retry routed through planner approval (`dead_letter_replay` lineage).
 - [x] Add bounded lyrics prefetch lane for recent playback/finalized metadata — **DONE 2026-04-06**: optional background LRCLIB prefetch now seeds cache from recent play-history plus finalized-task metadata candidates with strict item/time caps.
 - [x] Clarify Bandcamp scope as payload URL resolver and record next-step ownership — **DONE 2026-04-06**: Bandcamp remains resolver-only for payload URLs and ownership scope is recorded in `DECISIONS.md` Decision 33.
+- [x] Execute Phase 2 universal context-action surfaces across artist/album/track — **DONE 2026-04-07**: shared context-action rail now powers Library, Artists, and Playlists with play/queue/acquire actions.
+- [x] Execute Phase 3 visualizer and appreciation stack v1 hardening — **DONE 2026-04-07**: waveform + spectrum modes shipped with optional MilkDrop-style Butterchurn preset mode, global disable + low-motion/reduced-effects controls persisted, bounded frame-budget controls added (FPS cap + hidden-tab/idle throttling), and Now Playing appreciation signal chips are live.
+- [x] Execute Stage C Dynamic Glass and Mood System — **DONE 2026-04-07**: adaptive shell mood overlays now derive from now-playing artwork/identity with persisted enable/low-motion/intensity settings and deterministic static fallback behavior.
+- [x] Execute Stage C Session Composer — **DONE 2026-04-07**: Home session composer now generates explainable listening arcs, persists skip/replay feedback into scoring memory, and saves reusable composition modes.
+- [x] Run full Stage A/B/C verification pass — **DONE 2026-04-07**: `cargo check --workspace`, `cargo test --workspace`, `ui/npm run build`, and `scripts/smoke_desktop.ps1` all pass after Stage C completion work.
+- [x] Execute Stage D Safe Extension Surface — **DONE 2026-04-07**: capability-scoped extension registry shipped in Settings with explicit deterministic-core boundary, isolated failure handling, and persisted extension health telemetry.
+- [x] Run full Stage A/B/C/D verification pass — **DONE 2026-04-07**: `cargo check --workspace`, `cargo test --workspace`, `ui/npm run build`, and `scripts/smoke_desktop.ps1` all pass after Stage D completion work.
+- [x] Complete WO-03 candidate-review and exclusion-memory closure — **DONE 2026-04-07**: Downloads review now supports timeline/candidate rationale, explicit provider exclusion toggles, planner approve/reject contract carries exclusions, and exclusion memory is persisted/reused on subsequent plans for the same identity lane.
+- [x] Advance WO-04 credentialed Discogs/Last.fm proof to non-zero sample — **DONE 2026-04-07**: `enrich_probe_cli --limit 25` against live runtime DB with credentials configured reported `25 tracks probed`, `Discogs hits 25/25`, and `Last.fm hits 0/25` on sampled corpus.
+- [x] Close WO-05 telemetry maturity lane — **DONE 2026-04-07**: `verify_trust_spine.ps1` passed; fresh perf artifact captured at `artifacts/perf/run-20260406-232508/results.json`; regression gate passed all scenarios with no fail-level regressions.
 
 ---
 

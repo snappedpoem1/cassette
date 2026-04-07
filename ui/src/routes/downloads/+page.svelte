@@ -39,6 +39,7 @@
   let requestTimeline: AcquisitionRequestEvent[] = [];
   let requestCandidates: CandidateReviewItem[] = [];
   let requestLineage: RequestLineage | null = null;
+  let requestExcludedProviders: Record<number, string[]> = {};
 
   let deadLetterSummary: DeadLetterSummary | null = null;
   let deadLetterExpanded = false;
@@ -316,6 +317,13 @@
       requestTimeline = timeline;
       requestCandidates = candidates;
       requestLineage = lineage;
+      const defaultExcluded = candidates
+        .filter((candidate) => !candidate.is_selected)
+        .map((candidate) => candidate.provider_id);
+      requestExcludedProviders = {
+        ...requestExcludedProviders,
+        [request.id]: Array.from(new Set(defaultExcluded)),
+      };
     } catch {
       requestTimeline = [];
       requestCandidates = [];
@@ -323,13 +331,42 @@
     }
   }
 
+  function excludedProvidersForRequest(requestId: number): string[] {
+    return requestExcludedProviders[requestId] ?? [];
+  }
+
+  function isProviderExcluded(requestId: number, providerId: string): boolean {
+    return excludedProvidersForRequest(requestId).includes(providerId);
+  }
+
+  function toggleProviderExclusion(requestId: number, providerId: string, enabled: boolean) {
+    const next = new Set(excludedProvidersForRequest(requestId));
+    if (enabled) {
+      next.add(providerId);
+    } else {
+      next.delete(providerId);
+    }
+    requestExcludedProviders = {
+      ...requestExcludedProviders,
+      [requestId]: Array.from(next),
+    };
+  }
+
   async function approveRequest(requestId: number) {
-    await api.approvePlannedRequest(requestId, 'approved from command center');
+    await api.approvePlannedRequest(
+      requestId,
+      'approved from command center',
+      excludedProvidersForRequest(requestId),
+    );
     await Promise.all([loadRecentRequests(), loadDownloadJobs()]);
   }
 
   async function rejectRequest(requestId: number) {
-    await api.rejectPlannedRequest(requestId, 'rejected from command center');
+    await api.rejectPlannedRequest(
+      requestId,
+      'rejected from command center',
+      excludedProvidersForRequest(requestId),
+    );
     await loadRecentRequests();
   }
 
@@ -709,6 +746,25 @@
                 <button class="btn btn-primary small-btn" on:click={() => approveRequest(request.id)}>Approve</button>
                 <button class="btn btn-secondary small-btn" on:click={() => rejectRequest(request.id)}>Reject</button>
               </div>
+              {#if requestCandidates.length > 0}
+                <div class="remember-exclusion-panel">
+                  <div class="remember-exclusion-title">Remember provider exclusions for this request identity</div>
+                  {#each requestCandidates as candidate}
+                    <label class="remember-exclusion-toggle">
+                      <input
+                        type="checkbox"
+                        checked={isProviderExcluded(request.id, candidate.provider_id)}
+                        on:change={(event) => toggleProviderExclusion(
+                          request.id,
+                          candidate.provider_id,
+                          (event.currentTarget as HTMLInputElement).checked,
+                        )}
+                      />
+                      <span>{candidate.provider_display_name}</span>
+                    </label>
+                  {/each}
+                </div>
+              {/if}
               {#if requestCandidates.length === 0}
                 <div class="lane-empty">No candidate review recorded yet.</div>
               {:else}
@@ -1165,6 +1221,29 @@
 
 .candidate-row.selected {
   border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+}
+
+.remember-exclusion-panel {
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-base));
+}
+
+.remember-exclusion-title {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.remember-exclusion-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.76rem;
+  color: var(--text-primary);
 }
 
 .timeline-row {

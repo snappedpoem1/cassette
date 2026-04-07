@@ -5,6 +5,7 @@
     search,
   } from '$lib/stores/library';
   import { queueTracks } from '$lib/stores/queue';
+  import ContextActionRail from '$lib/components/ContextActionRail.svelte';
   import { goto } from '$app/navigation';
   import { formatDuration, coverSrc, debounce, tintFromHex } from '$lib/utils';
   import type { Album, Track, TrackIdentityContext } from '$lib/api/tauri';
@@ -148,6 +149,13 @@
               <button class="btn btn-primary" style="margin-top:12px;" on:click={() => playAlbum(selectedAlbum)}>
                 Play album
               </button>
+              <div style="margin-top:10px; max-width:540px;">
+                <ContextActionRail
+                  compact
+                  album={{ artist: selectedAlbum.artist, title: selectedAlbum.title }}
+                  artistName={selectedAlbum.artist}
+                />
+              </div>
             </div>
           </div>
 
@@ -199,6 +207,14 @@
                 <div><span>Edition markers</span><code>{selectedTrackIdentity?.edition_markers?.length ? selectedTrackIdentity.edition_markers.join(', ') : '—'}</code></div>
                 <div><span>Quality tier</span><code>{selectedTrack.quality_tier ?? '—'}</code></div>
                 <div class="track-inspector-wide"><span>Path</span><code>{selectedTrack.path}</code></div>
+              </div>
+              <div style="margin-top:10px;">
+                <ContextActionRail
+                  compact
+                  track={selectedTrack}
+                  album={selectedTrack.album ? { artist: selectedTrack.artist, title: selectedTrack.album } : null}
+                  artistName={selectedTrack.artist}
+                />
               </div>
             </div>
           {/if}
@@ -290,6 +306,14 @@
               <div><span>Edition markers</span><code>{selectedTrackIdentity?.edition_markers?.length ? selectedTrackIdentity.edition_markers.join(', ') : '—'}</code></div>
               <div><span>Content hash</span><code>{selectedTrack.content_hash ?? '—'}</code></div>
               <div class="track-inspector-wide"><span>Path</span><code>{selectedTrack.path}</code></div>
+            </div>
+            <div style="margin-top:10px;">
+              <ContextActionRail
+                compact
+                track={selectedTrack}
+                album={selectedTrack.album ? { artist: selectedTrack.artist, title: selectedTrack.album } : null}
+                artistName={selectedTrack.artist}
+              />
             </div>
           </div>
         {/if}

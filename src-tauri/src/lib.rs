@@ -248,6 +248,7 @@ pub fn run() {
             commands::player::get_playback_state,
             commands::player::get_now_playing_context,
             commands::player::sync_lastfm_history,
+            commands::player::submit_lastfm_scrobble,
             commands::downloads::start_download,
             commands::downloads::start_song_download,
             commands::downloads::start_album_downloads,

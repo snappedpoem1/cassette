@@ -1,10 +1,43 @@
 <script lang="ts">
-  import { playbackState, isPlaying, progressPct, isSeeking, seekPreview, player } from '$lib/stores/player';
+  import { onMount } from 'svelte';
+  import { api } from '$lib/api/tauri';
+  import { playbackState, isPlaying, progressPct, isSeeking, seekPreview, player, nowPlayingContext } from '$lib/stores/player';
   import { loadQueue } from '$lib/stores/queue';
+  import PlaybackVisualizer from '$lib/components/PlaybackVisualizer.svelte';
   import { formatDuration, coverSrc, clamp } from '$lib/utils';
 
   let seekBarEl: HTMLDivElement;
   let volBarEl: HTMLDivElement;
+  let visualizerEnabled = true;
+  let visualizerLowMotion = false;
+  let appreciationLaneEnabled = true;
+  let visualizerMode: 'waveform' | 'spectrum' | 'milkdrop' = 'spectrum';
+  let visualizerPreset = '';
+  let visualizerFpsCap = 30;
+
+  onMount(async () => {
+    try {
+      const enabled = await api.getSetting('ui_visualizer_enabled');
+      const lowMotion = await api.getSetting('ui_visualizer_low_motion');
+      const appreciation = await api.getSetting('ui_appreciation_lane_enabled');
+      const mode = await api.getSetting('ui_visualizer_mode');
+      const preset = await api.getSetting('ui_visualizer_preset');
+      const fpsCap = await api.getSetting('ui_visualizer_fps_cap');
+      visualizerEnabled = enabled !== 'false';
+      visualizerLowMotion = lowMotion === 'true';
+      appreciationLaneEnabled = appreciation !== 'false';
+      visualizerMode = mode === 'milkdrop' || mode === 'waveform' ? mode : 'spectrum';
+      visualizerPreset = preset ?? '';
+      visualizerFpsCap = Math.min(60, Math.max(15, Number.parseInt(fpsCap ?? '30', 10) || 30));
+    } catch {
+      visualizerEnabled = true;
+      visualizerLowMotion = false;
+      appreciationLaneEnabled = true;
+      visualizerMode = 'spectrum';
+      visualizerPreset = '';
+      visualizerFpsCap = 30;
+    }
+  });
 
   function getSeekPct(e: MouseEvent): number {
     const rect = seekBarEl.getBoundingClientRect();
@@ -45,6 +78,10 @@
   $: dur   = $playbackState.duration_secs;
   $: vol   = $playbackState.volume;
   $: pct   = $progressPct;
+  $: ctx = $nowPlayingContext;
+  $: signalTags = (ctx?.artist_tags ?? []).slice(0, 2);
+  $: listenersLabel = ctx?.listeners ? `${Math.round(ctx.listeners / 1000)}k listeners` : null;
+  $: lyricsLabel = ctx?.lyrics_source ? `Lyrics: ${ctx.lyrics_source}` : null;
 
   async function handleNext() { await player.next(); await loadQueue(); }
   async function handlePrev() { await player.prev(); await loadQueue(); }
@@ -63,6 +100,19 @@
     <div class="np-info">
       <div class="np-title">{track?.title ?? '—'}</div>
       <div class="np-artist">{track?.artist ?? 'No track playing'}</div>
+      {#if appreciationLaneEnabled && track && (signalTags.length || listenersLabel || lyricsLabel)}
+        <div class="np-signals">
+          {#each signalTags as tag}
+            <span class="np-signal-chip">{tag}</span>
+          {/each}
+          {#if listenersLabel}
+            <span class="np-signal-muted">{listenersLabel}</span>
+          {/if}
+          {#if lyricsLabel}
+            <span class="np-signal-muted">{lyricsLabel}</span>
+          {/if}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -75,6 +125,17 @@
       </button>
       <button class="ctrl-btn" on:click={handleNext} title="Next">⏭</button>
     </div>
+    {#if visualizerEnabled}
+      <PlaybackVisualizer
+        positionSecs={pos}
+        durationSecs={dur}
+        isPlaying={$isPlaying}
+        lowMotion={visualizerLowMotion}
+        mode={visualizerMode}
+        presetName={visualizerPreset}
+        fpsCap={visualizerFpsCap}
+      />
+    {/if}
     <div class="np-seek">
       <span class="np-time">{formatDuration(pos)}</span>
       <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -113,6 +174,28 @@
 .np-info    { overflow: hidden; }
 .np-title   { font-weight: 600; font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
 .np-artist  { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.np-signals {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.np-signal-chip {
+  font-size: 0.62rem;
+  color: var(--primary);
+  background: rgba(139,180,212,0.12);
+  border: 1px solid rgba(139,180,212,0.2);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.np-signal-muted {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .np-center { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 300px; max-width: 460px; width: 100%; }
 .np-controls { display: flex; align-items: center; gap: 8px; }

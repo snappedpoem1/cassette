@@ -1,6 +1,7 @@
 use crate::librarian::error::Result;
 use crate::librarian::models::Track;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct LastFmArtistContext {
@@ -26,11 +27,27 @@ pub struct LastFmRecentTrack {
 #[derive(Debug, Clone, Default)]
 pub struct LastFmClient {
     pub api_key: Option<String>,
+    pub api_secret: Option<String>,
+    pub session_key: Option<String>,
 }
 
 impl LastFmClient {
     pub fn new(api_key: Option<String>) -> Self {
-        Self { api_key }
+        Self {
+            api_key,
+            api_secret: None,
+            session_key: None,
+        }
+    }
+
+    pub fn with_scrobble_auth(
+        mut self,
+        api_secret: Option<String>,
+        session_key: Option<String>,
+    ) -> Self {
+        self.api_secret = api_secret;
+        self.session_key = session_key;
+        self
     }
 
     pub fn is_configured(&self) -> bool {
@@ -38,6 +55,83 @@ impl LastFmClient {
             .as_deref()
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
+    }
+
+    pub fn is_scrobble_configured(&self) -> bool {
+        self.is_configured()
+            && self
+                .api_secret
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+            && self
+                .session_key
+                .as_deref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+    }
+
+    pub async fn scrobble_track(
+        &self,
+        client: &reqwest::Client,
+        artist: &str,
+        title: &str,
+        album: Option<&str>,
+        timestamp: i64,
+        duration_secs: Option<u32>,
+    ) -> Option<()> {
+        let api_key = self.api_key.as_deref()?.trim();
+        let api_secret = self.api_secret.as_deref()?.trim();
+        let session_key = self.session_key.as_deref()?.trim();
+        if api_key.is_empty() || api_secret.is_empty() || session_key.is_empty() {
+            return None;
+        }
+
+        let artist = artist.trim();
+        let title = title.trim();
+        if artist.is_empty() || title.is_empty() {
+            return None;
+        }
+
+        let mut sig_params: BTreeMap<&str, String> = BTreeMap::new();
+        sig_params.insert("api_key", api_key.to_string());
+        sig_params.insert("artist", artist.to_string());
+        sig_params.insert("method", "track.scrobble".to_string());
+        sig_params.insert("sk", session_key.to_string());
+        sig_params.insert("timestamp", timestamp.max(1).to_string());
+        sig_params.insert("track", title.to_string());
+        if let Some(album) = album.map(str::trim).filter(|value| !value.is_empty()) {
+            sig_params.insert("album", album.to_string());
+        }
+        if let Some(duration) = duration_secs.filter(|value| *value > 0) {
+            sig_params.insert("duration", duration.to_string());
+        }
+
+        let api_sig = sign_lastfm_params(&sig_params, api_secret);
+        let mut form = sig_params
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<Vec<_>>();
+        form.push(("api_sig", api_sig));
+        form.push(("format", "json".to_string()));
+
+        let response = client
+            .post("https://ws.audioscrobbler.com/2.0/")
+            .form(&form)
+            .send()
+            .await
+            .ok()?;
+
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let json: Value = response.json().await.ok()?;
+        if json.get("error").is_some() {
+            return None;
+        }
+
+        Some(())
     }
 
     pub async fn fetch_artist_context(
@@ -325,4 +419,14 @@ fn strip_lastfm_html_suffix(value: &str) -> String {
         .unwrap_or(value)
         .trim()
         .to_string()
+}
+
+fn sign_lastfm_params(params: &BTreeMap<&str, String>, api_secret: &str) -> String {
+    let mut signature = String::new();
+    for (key, value) in params {
+        signature.push_str(key);
+        signature.push_str(value);
+    }
+    signature.push_str(api_secret);
+    format!("{:x}", md5::compute(signature.as_bytes()))
 }
