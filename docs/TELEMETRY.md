@@ -35,9 +35,9 @@ Recent docs/runtime evidence alignment (2026-04-06):
 | Queue | Working | Persist/restore across sessions |
 | Downloads dashboard | Working | Director events surface correctly |
 | Pending-task startup recovery | Working | Deterministic startup replay proven with `recovery_probe_cli` |
-| Qobuz acquisition | Partial | Wired and provider probe passes on this machine |
+| Qobuz acquisition | Partial | Wired, but latest `provider_probe_cli` run returned `auth failed: HTTP 401 Unauthorized`; credentials/session require refresh |
 | Deezer acquisition | Working | Live full-track FLAC probe succeeded on 2026-03-27 |
-| slskd acquisition | Partial | Health/probe path passes when daemon is up; transfer acceptance still varies by peer |
+| slskd acquisition | Partial | Managed runtime probe passes; standalone provider probe now reports clear daemon-unavailable diagnostics when app-owned runtime is not active |
 | Usenet acquisition | Partial | SABnzbd handoff wired; end-to-end not formally proven |
 | Jackett torrent search | Partial | Active in Director and CLI, but still needs broader live proof |
 | Discogs/Last.fm enrichment probe | Working (bounded) | 2026-04-07 credentialed probe (`--limit 25`) reported `Discogs 25/25` and `Last.fm 0/25` on sampled corpus |

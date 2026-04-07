@@ -1,4 +1,7 @@
 use cassette_core::db::Db;
+use cassette_core::sources::{
+    fetch_slskd_transfers, qobuz_user_auth_token, RemoteProviderConfig, SlskdConnectionConfig,
+};
 use serde_json::Value;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -24,95 +27,53 @@ fn present(value: Option<String>) -> Option<String> {
 }
 
 async fn probe_slskd(db: &Db) -> ProbeResult {
-    let url = present(db.get_setting("slskd_url").ok().flatten())
-        .unwrap_or_else(|| "http://localhost:5030".to_string());
-    let username =
-        present(db.get_setting("slskd_user").ok().flatten()).unwrap_or_else(|| "slskd".to_string());
-    let password =
-        present(db.get_setting("slskd_pass").ok().flatten()).unwrap_or_else(|| "slskd".to_string());
-
-    let client = reqwest::Client::new();
-    let session = client
-        .post(format!("{url}/api/v0/session"))
-        .json(&serde_json::json!({ "username": username, "password": password }))
-        .send()
-        .await;
-
-    let Ok(session) = session else {
-        return ProbeResult {
-            provider: "slskd",
-            status: "FAIL",
-            detail: "session request failed".to_string(),
-        };
+    let config = SlskdConnectionConfig {
+        url: present(db.get_setting("slskd_url").ok().flatten())
+            .unwrap_or_else(|| "http://localhost:5030".to_string()),
+        username: present(db.get_setting("slskd_user").ok().flatten())
+            .unwrap_or_else(|| "slskd".to_string()),
+        password: present(db.get_setting("slskd_pass").ok().flatten())
+            .unwrap_or_else(|| "slskd".to_string()),
+        api_key: present(db.get_setting("slskd_api_key").ok().flatten()),
     };
-    if !session.status().is_success() {
-        return ProbeResult {
+
+    match fetch_slskd_transfers(&config).await {
+        Ok(items) => ProbeResult {
             provider: "slskd",
-            status: "FAIL",
-            detail: format!("session HTTP {}", session.status()),
-        };
-    }
-    let body = match session.json::<Value>().await {
-        Ok(value) => value,
-        Err(_) => {
-            return ProbeResult {
+            status: "OK",
+            detail: format!("auth + transfers OK ({} transfer groups)", items.len()),
+        },
+        Err(error) => {
+            let detail = if error.to_ascii_lowercase().contains("connection")
+                || error.to_ascii_lowercase().contains("error sending request")
+            {
+                "daemon unavailable at configured URL (start app-owned slskd runtime first)"
+                    .to_string()
+            } else {
+                error
+            };
+            ProbeResult {
                 provider: "slskd",
                 status: "FAIL",
-                detail: "session JSON parse failed".to_string(),
+                detail,
             }
         }
-    };
-    let token = body
-        .get("token")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if token.is_empty() {
-        return ProbeResult {
-            provider: "slskd",
-            status: "FAIL",
-            detail: "session token missing".to_string(),
-        };
-    }
-
-    let transfers = client
-        .get(format!("{url}/api/v0/transfers/downloads"))
-        .bearer_auth(token)
-        .send()
-        .await;
-    let Ok(transfers) = transfers else {
-        return ProbeResult {
-            provider: "slskd",
-            status: "FAIL",
-            detail: "transfers request failed".to_string(),
-        };
-    };
-    if !transfers.status().is_success() {
-        return ProbeResult {
-            provider: "slskd",
-            status: "FAIL",
-            detail: format!("transfers HTTP {}", transfers.status()),
-        };
-    }
-    let entries = transfers
-        .json::<Vec<Value>>()
-        .await
-        .map(|items| items.len())
-        .unwrap_or(0);
-    ProbeResult {
-        provider: "slskd",
-        status: "OK",
-        detail: format!("session + transfers OK ({entries} transfer groups)"),
     }
 }
 
 async fn probe_qobuz(db: &Db) -> ProbeResult {
-    let app_id = present(db.get_setting("qobuz_app_id").ok().flatten());
-    let email = present(db.get_setting("qobuz_email").ok().flatten());
-    let password = present(db.get_setting("qobuz_password").ok().flatten())
-        .or_else(|| present(db.get_setting("qobuz_password_hash").ok().flatten()));
-    let existing_token = present(db.get_setting("qobuz_user_auth_token").ok().flatten());
+    let provider_config = RemoteProviderConfig {
+        qobuz_email: present(db.get_setting("qobuz_email").ok().flatten()),
+        qobuz_password: present(db.get_setting("qobuz_password").ok().flatten()),
+        qobuz_password_hash: present(db.get_setting("qobuz_password_hash").ok().flatten()),
+        qobuz_app_id: present(db.get_setting("qobuz_app_id").ok().flatten()),
+        qobuz_app_secret: present(db.get_setting("qobuz_app_secret").ok().flatten()),
+        qobuz_user_auth_token: present(db.get_setting("qobuz_user_auth_token").ok().flatten()),
+        qobuz_secrets: present(db.get_setting("qobuz_secrets").ok().flatten()),
+        ..RemoteProviderConfig::default()
+    };
 
-    let Some(app_id) = app_id else {
+    let Some(app_id) = provider_config.qobuz_app_id.as_deref() else {
         return ProbeResult {
             provider: "qobuz",
             status: "SKIP",
@@ -120,54 +81,22 @@ async fn probe_qobuz(db: &Db) -> ProbeResult {
         };
     };
 
-    let client = reqwest::Client::new();
-    let token = if let Some(token) = existing_token {
-        token
-    } else {
-        let (Some(email), Some(password)) = (email, password) else {
+    let token = match qobuz_user_auth_token(&provider_config).await {
+        Ok(Some(token)) => token,
+        Ok(None) => {
             return ProbeResult {
                 provider: "qobuz",
                 status: "SKIP",
-                detail: "credentials missing".to_string(),
-            };
-        };
-        let login = client
-            .post("https://www.qobuz.com/api.json/0.2/user/login")
-            .form(&[
-                ("email", email.as_str()),
-                ("password", password.as_str()),
-                ("app_id", app_id.as_str()),
-            ])
-            .send()
-            .await;
-        let Ok(login) = login else {
-            return ProbeResult {
-                provider: "qobuz",
-                status: "FAIL",
-                detail: "login request failed".to_string(),
-            };
-        };
-        if !login.status().is_success() {
-            return ProbeResult {
-                provider: "qobuz",
-                status: "FAIL",
-                detail: format!("login HTTP {}", login.status()),
-            };
-        }
-        let body = match login.json::<Value>().await {
-            Ok(value) => value,
-            Err(_) => {
-                return ProbeResult {
-                    provider: "qobuz",
-                    status: "FAIL",
-                    detail: "login JSON parse failed".to_string(),
-                }
+                detail: "credentials/token missing".to_string(),
             }
-        };
-        body.get("user_auth_token")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+        }
+        Err(error) => {
+            return ProbeResult {
+                provider: "qobuz",
+                status: "FAIL",
+                detail: format!("auth failed: {error}"),
+            }
+        }
     };
 
     if token.is_empty() {
@@ -178,12 +107,13 @@ async fn probe_qobuz(db: &Db) -> ProbeResult {
         };
     }
 
+    let client = reqwest::Client::new();
     let search = client
         .get("https://www.qobuz.com/api.json/0.2/catalog/search")
         .query(&[
             ("query", "Brand New"),
             ("limit", "1"),
-            ("app_id", app_id.as_str()),
+            ("app_id", app_id),
             ("user_auth_token", token.as_str()),
         ])
         .send()
