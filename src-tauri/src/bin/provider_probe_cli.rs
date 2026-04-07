@@ -1,10 +1,16 @@
 use cassette_core::db::Db;
 use cassette_core::sources::{
-    fetch_slskd_transfers, qobuz_user_auth_token, RemoteProviderConfig, SlskdConnectionConfig,
+    fetch_slskd_transfers, RemoteProviderConfig, SlskdConnectionConfig,
 };
+use cassette_core::provider_settings::DownloadConfig;
 use serde_json::Value;
+use std::fs;
 use std::path::PathBuf;
 use tokio::process::Command;
+
+#[allow(dead_code)]
+#[path = "../slskd_runtime.rs"]
+mod slskd_runtime;
 
 #[derive(Debug)]
 struct ProbeResult {
@@ -26,7 +32,69 @@ fn present(value: Option<String>) -> Option<String> {
         .filter(|item| !item.is_empty())
 }
 
+fn slskd_local_config_credentials() -> Option<(String, String)> {
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    let path = PathBuf::from(local_app_data).join("slskd").join("slskd.yml");
+    let raw = fs::read_to_string(path).ok()?;
+
+    let mut in_web = false;
+    let mut in_auth = false;
+    let mut username = None;
+    let mut password = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let is_top_level = !line.starts_with(' ') && trimmed.ends_with(':');
+        if is_top_level {
+            in_web = trimmed == "web:";
+            in_auth = false;
+            continue;
+        }
+
+        if in_web && trimmed == "authentication:" {
+            in_auth = true;
+            continue;
+        }
+
+        if in_auth {
+            if let Some(value) = trimmed.strip_prefix("username:") {
+                username = Some(value.trim().to_string());
+                continue;
+            }
+            if let Some(value) = trimmed.strip_prefix("password:") {
+                password = Some(value.trim().to_string());
+                continue;
+            }
+            if !line.starts_with("    ") {
+                in_auth = false;
+            }
+        }
+    }
+
+    match (username, password) {
+        (Some(user), Some(pass)) if !user.is_empty() && !pass.is_empty() => Some((user, pass)),
+        _ => None,
+    }
+}
+
 async fn probe_slskd(db: &Db) -> ProbeResult {
+    let download_config = DownloadConfig::from_env();
+    let mut runtime = slskd_runtime::SlskdRuntimeManager::default();
+    let runtime_status = runtime.ensure_started(None, db, &download_config);
+    if !runtime_status.ready {
+        return ProbeResult {
+            provider: "slskd",
+            status: "FAIL",
+            detail: runtime_status
+                .message
+                .unwrap_or_else(|| "managed slskd runtime failed to start".to_string()),
+        };
+    }
+
     let config = SlskdConnectionConfig {
         url: present(db.get_setting("slskd_url").ok().flatten())
             .unwrap_or_else(|| "http://localhost:5030".to_string()),
@@ -41,14 +109,41 @@ async fn probe_slskd(db: &Db) -> ProbeResult {
         Ok(items) => ProbeResult {
             provider: "slskd",
             status: "OK",
-            detail: format!("auth + transfers OK ({} transfer groups)", items.len()),
+            detail: format!(
+                "managed runtime + auth + transfers OK ({} transfer groups)",
+                items.len()
+            ),
         },
         Err(error) => {
+            if error.contains("HTTP 403") && !runtime_status.spawned_by_app {
+                if let Some((fallback_user, fallback_pass)) = slskd_local_config_credentials() {
+                    let fallback_config = SlskdConnectionConfig {
+                        username: fallback_user.clone(),
+                        password: fallback_pass.clone(),
+                        ..config.clone()
+                    };
+                    if let Ok(items) = fetch_slskd_transfers(&fallback_config).await {
+                        let _ = db.set_setting("slskd_user", &fallback_user);
+                        let _ = db.set_setting("slskd_pass", &fallback_pass);
+                        return ProbeResult {
+                            provider: "slskd",
+                            status: "OK",
+                            detail: format!(
+                                "auth repaired from local slskd.yml and transfers verified ({} transfer groups)",
+                                items.len()
+                            ),
+                        };
+                    }
+                }
+            }
+
             let detail = if error.to_ascii_lowercase().contains("connection")
                 || error.to_ascii_lowercase().contains("error sending request")
             {
                 "daemon unavailable at configured URL (start app-owned slskd runtime first)"
                     .to_string()
+            } else if error.contains("HTTP 403") {
+                "daemon reachable but credentials rejected (HTTP 403)".to_string()
             } else {
                 error
             };
@@ -59,6 +154,63 @@ async fn probe_slskd(db: &Db) -> ProbeResult {
             }
         }
     }
+}
+
+async fn qobuz_login_token(app_id: &str, email: &str, password: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let login = client
+        .post("https://www.qobuz.com/api.json/0.2/user/login")
+        .form(&[("email", email), ("password", password), ("app_id", app_id)])
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !login.status().is_success() {
+        return Err(format!("HTTP {}", login.status()));
+    }
+
+    let body = login
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
+    let token = body
+        .get("user_auth_token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        return Err("user_auth_token missing from login response".to_string());
+    }
+    Ok(token)
+}
+
+async fn qobuz_search_with_token(app_id: &str, token: &str) -> Result<usize, String> {
+    let client = reqwest::Client::new();
+    let search = client
+        .get("https://www.qobuz.com/api.json/0.2/catalog/search")
+        .query(&[
+            ("query", "Brand New"),
+            ("limit", "1"),
+            ("app_id", app_id),
+            ("user_auth_token", token),
+        ])
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if !search.status().is_success() {
+        return Err(format!("HTTP {}", search.status()));
+    }
+
+    let body = search
+        .json::<Value>()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(body
+        .pointer("/albums/items")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0))
 }
 
 async fn probe_qobuz(db: &Db) -> ProbeResult {
@@ -81,76 +233,93 @@ async fn probe_qobuz(db: &Db) -> ProbeResult {
         };
     };
 
-    let token = match qobuz_user_auth_token(&provider_config).await {
-        Ok(Some(token)) => token,
-        Ok(None) => {
-            return ProbeResult {
-                provider: "qobuz",
-                status: "SKIP",
-                detail: "credentials/token missing".to_string(),
+    if let Some(existing_token) = provider_config.qobuz_user_auth_token.as_deref() {
+        match qobuz_search_with_token(app_id, existing_token).await {
+            Ok(albums) => {
+                return ProbeResult {
+                    provider: "qobuz",
+                    status: "OK",
+                    detail: format!(
+                        "search OK with existing token ({albums} album result(s) in probe)"
+                    ),
+                }
+            }
+            Err(error) => {
+                if !error.contains("401") && !error.contains("403") {
+                    return ProbeResult {
+                        provider: "qobuz",
+                        status: "FAIL",
+                        detail: format!("search failed with stored token: {error}"),
+                    };
+                }
             }
         }
-        Err(error) => {
-            return ProbeResult {
-                provider: "qobuz",
-                status: "FAIL",
-                detail: format!("auth failed: {error}"),
-            }
-        }
-    };
+    }
 
-    if token.is_empty() {
+    let Some(email) = provider_config.qobuz_email.as_deref() else {
         return ProbeResult {
             provider: "qobuz",
             status: "FAIL",
-            detail: "user_auth_token missing".to_string(),
+            detail: "stored token invalid and qobuz_email missing for refresh".to_string(),
+        };
+    };
+
+    let mut attempted_modes = Vec::new();
+    let mut passwords = Vec::new();
+    if let Some(value) = provider_config.qobuz_password.as_deref() {
+        passwords.push(("plain", value));
+    }
+    if let Some(value) = provider_config.qobuz_password_hash.as_deref() {
+        passwords.push(("hash", value));
+    }
+
+    if passwords.is_empty() {
+        return ProbeResult {
+            provider: "qobuz",
+            status: "FAIL",
+            detail: "stored token invalid and no qobuz_password/qobuz_password_hash available"
+                .to_string(),
         };
     }
 
-    let client = reqwest::Client::new();
-    let search = client
-        .get("https://www.qobuz.com/api.json/0.2/catalog/search")
-        .query(&[
-            ("query", "Brand New"),
-            ("limit", "1"),
-            ("app_id", app_id),
-            ("user_auth_token", token.as_str()),
-        ])
-        .send()
-        .await;
-    let Ok(search) = search else {
-        return ProbeResult {
-            provider: "qobuz",
-            status: "FAIL",
-            detail: "search request failed".to_string(),
+    for (mode, password) in passwords {
+        attempted_modes.push(mode);
+        let token = match qobuz_login_token(app_id, email, password).await {
+            Ok(token) => token,
+            Err(_) => continue,
         };
-    };
-    if !search.status().is_success() {
-        return ProbeResult {
-            provider: "qobuz",
-            status: "FAIL",
-            detail: format!("search HTTP {}", search.status()),
-        };
-    }
-    let body = match search.json::<Value>().await {
-        Ok(value) => value,
-        Err(_) => {
-            return ProbeResult {
-                provider: "qobuz",
-                status: "FAIL",
-                detail: "search JSON parse failed".to_string(),
+
+        match qobuz_search_with_token(app_id, &token).await {
+            Ok(albums) => {
+                if let Err(error) = db.set_setting("qobuz_user_auth_token", &token) {
+                    return ProbeResult {
+                        provider: "qobuz",
+                        status: "FAIL",
+                        detail: format!(
+                            "refreshed token via {mode} credentials, but failed to persist token: {error}"
+                        ),
+                    };
+                }
+                return ProbeResult {
+                    provider: "qobuz",
+                    status: "OK",
+                    detail: format!(
+                        "search OK after token refresh via {mode} credentials ({albums} album result(s) in probe)"
+                    ),
+                };
             }
+            Err(_) => continue,
         }
-    };
-    let albums = body
-        .pointer("/albums/items")
-        .and_then(Value::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
+    }
+
+    let _ = db.set_setting("qobuz_user_auth_token", "");
     ProbeResult {
         provider: "qobuz",
-        status: "OK",
-        detail: format!("search OK ({albums} album result(s) in probe)"),
+        status: "FAIL",
+        detail: format!(
+            "auth refresh failed after retrying {} credential mode(s); stale token cleared",
+            attempted_modes.len()
+        ),
     }
 }
 
