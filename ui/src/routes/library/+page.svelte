@@ -230,6 +230,7 @@
                   {/if}
                 </div>
                 <div><span>Quality tier</span><code>{qualityTierLabel(selectedTrack.quality_tier)}</code></div>
+                <div><span>Edition bucket</span><code>{selectedTrackIdentity?.edition_bucket ? editionBucketLabel[selectedTrackIdentity.edition_bucket] ?? selectedTrackIdentity.edition_bucket : '—'}</code></div>
                 <div><span>Format</span><code>{selectedTrack.format?.toUpperCase() ?? '—'}</code></div>
                 <div><span>ISRC</span><code>{selectedTrack.isrc ?? '—'}</code></div>
                 <div><span>Edition markers</span><code>{selectedTrackIdentity?.edition_markers?.length ? selectedTrackIdentity.edition_markers.join(', ') : '—'}</code></div>
@@ -343,6 +344,7 @@
                 {/if}
               </div>
               <div><span>Quality tier</span><code>{qualityTierLabel(selectedTrack.quality_tier)}</code></div>
+              <div><span>Edition bucket</span><code>{selectedTrackIdentity?.edition_bucket ? editionBucketLabel[selectedTrackIdentity.edition_bucket] ?? selectedTrackIdentity.edition_bucket : '—'}</code></div>
               <div><span>Format</span><code>{selectedTrack.format?.toUpperCase() ?? '—'}</code></div>
               <div><span>ISRC</span><code>{selectedTrack.isrc ?? '—'}</code></div>
               <div><span>Edition markers</span><code>{selectedTrackIdentity?.edition_markers?.length ? selectedTrackIdentity.edition_markers.join(', ') : '—'}</code></div>
