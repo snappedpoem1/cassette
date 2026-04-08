@@ -43,7 +43,7 @@
 
 These are inline SVG path strings — no library install needed. Each icon is 16×16, stroke-based.
 
-- [ ] **Step 1: Replace the nav link data arrays with icon SVG markup**
+- [x] **Step 1: Replace the nav link data arrays with icon SVG markup**
 
 Open `ui/src/lib/components/Sidebar.svelte`. Replace the existing `coreLinks` and `utilityLinks` arrays and the `nav-icon` span with the following:
 
@@ -111,7 +111,7 @@ Open `ui/src/lib/components/Sidebar.svelte`. Replace the existing `coreLinks` an
 </script>
 ```
 
-- [ ] **Step 2: Update the nav item template to render SVG via `{@html}`**
+- [x] **Step 2: Update the nav item template to render SVG via `{@html}`**
 
 Replace the `<span class="nav-icon">{link.icon}</span>` line in the nav template. Find the `<a href={link.href}` block and update it:
 
@@ -159,7 +159,7 @@ In the `<style>` block of `Sidebar.svelte`, replace the `.nav-icon` rule:
 }
 ```
 
-- [ ] **Step 4: Build and verify**
+- [x] **Step 4: Build and verify**
 
 ```bash
 cd "c:/Cassette Music/ui" && npm run build 2>&1 | tail -20
@@ -167,7 +167,7 @@ cd "c:/Cassette Music/ui" && npm run build 2>&1 | tail -20
 
 Expected: build succeeds, no new type errors. Svelte accessibility warning about downloads page is pre-existing and acceptable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd "c:/Cassette Music" && git add ui/src/lib/components/Sidebar.svelte && git commit -m "feat(ui): replace text abbreviation nav icons with inline SVG icons"
