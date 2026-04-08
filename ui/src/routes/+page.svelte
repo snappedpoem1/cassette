@@ -2,10 +2,20 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { buildArtistClusters } from '$lib/artist-clusters';
-  import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory, type TaskResultSummary, type Track, type TrustReasonDistributionEntry } from '$lib/api/tauri';
-  import { artists, trackCount } from '$lib/stores/library';
-  import { backlogStatus, slskdRuntimeStatus } from '$lib/stores/downloads';
+  import { buildAutomationDigest } from '$lib/automation-digest';
+  import AutomationDigestPanel from '$lib/components/AutomationDigestPanel.svelte';
+  import {
+    api,
+    type AcquisitionRequestListItem,
+    type SpotifyAlbumHistory,
+    type TaskResultSummary,
+    type Track,
+    type TrustReasonDistributionEntry,
+  } from '$lib/api/tauri';
+  import { artists, isScanning, trackCount } from '$lib/stores/library';
+  import { backlogStatus, providerHealth, providerStatuses, slskdRuntimeStatus } from '$lib/stores/downloads';
   import { currentTrack, nowPlayingContext, playbackState, player } from '$lib/stores/player';
+  import { queue } from '$lib/stores/queue';
   import { formatDuration, coverSrc } from '$lib/utils';
 
   interface WhileAwayMessage {
@@ -39,6 +49,16 @@
   $: trustWatch = recentRequests
     .filter((request) => ['review', 'blocked'].includes(request.trust_stage))
     .slice(0, 3);
+  $: automationDigest = buildAutomationDigest({
+    requests: recentRequests,
+    missingAlbums,
+    providerHealth: $providerHealth,
+    providerStatuses: $providerStatuses,
+    slskdReady: $slskdRuntimeStatus?.ready ?? false,
+    isScanning: $isScanning,
+    backlogRunning: $backlogStatus?.running ?? false,
+    queueCount: $queue.length,
+  });
 
   $: whileAway = buildWhileAwayMessages({
     recentResults,
@@ -83,16 +103,16 @@
     if (finalized > 0) {
       messages.push({
         tone: 'steady',
-        title: `${finalized} library handoff${finalized === 1 ? '' : 's'} completed`,
-        detail: 'Cassette finished recent acquisition or repair work without needing you in the loop.',
+        title: `${finalized} handoff${finalized === 1 ? '' : 's'} landed`,
+        detail: 'Cassette finished recent library work without pulling focus away from listening.',
       });
     }
 
     if (input.inProgressCount > 0) {
       messages.push({
         tone: 'steady',
-        title: `${input.inProgressCount} request${input.inProgressCount === 1 ? '' : 's'} still moving`,
-        detail: 'Search, download, and verification work is still active in the background.',
+        title: `${input.inProgressCount} item${input.inProgressCount === 1 ? '' : 's'} still moving`,
+        detail: 'Search, transfer, and verification work is still running quietly in the background.',
       });
     }
 
@@ -100,24 +120,24 @@
       const total = input.blockedCount + failed;
       messages.push({
         tone: total > 3 ? 'action' : 'watch',
-        title: `${total} lane${total === 1 ? '' : 's'} need attention`,
-        detail: 'Open Downloads to review blocked requests, failed runs, or items waiting on a decision.',
+        title: `${total} lane${total === 1 ? '' : 's'} need a look`,
+        detail: 'Open Workstation when you are ready to review blocked items or stalled runs.',
       });
     }
 
     if (input.missingAlbums.length > 0) {
       messages.push({
         tone: 'watch',
-        title: `${input.missingAlbums.length} Spotify backlog album${input.missingAlbums.length === 1 ? '' : 's'} still missing`,
-        detail: 'The command center knows what is still absent and can keep draining it in the background.',
+        title: `${input.missingAlbums.length} album${input.missingAlbums.length === 1 ? '' : 's'} still missing`,
+        detail: 'Your inbox still knows what is absent and can keep draining it in the background.',
       });
     }
 
     if (messages.length === 0) {
       messages.push({
         tone: 'steady',
-        title: 'Quiet desk',
-        detail: 'No fresh download noise, no blocked work, and the collection is sitting still for now.',
+        title: 'Quiet room',
+        detail: 'No fresh noise, no blocked work, and the collection is sitting still for now.',
       });
     }
 
@@ -131,7 +151,7 @@
   }
 </script>
 
-<svelte:head><title>Home · Cassette</title></svelte:head>
+<svelte:head><title>Home - Cassette</title></svelte:head>
 
 <div class="home-page">
   <section class="home-hero">
@@ -142,22 +162,23 @@
     </div>
 
     <div class="hero-copy">
-      <div class="hero-kicker">Music-first desktop</div>
+      <div class="hero-kicker">Return ritual</div>
       <h1>{activePlayback ? current?.title : 'Back in the chair'}</h1>
       <p class="hero-summary">
         {#if activePlayback && context}
-          {current?.artist}{context.album_title ? ` · ${context.album_title}` : ''}. Playback is live and the background lanes are still keeping score.
+          {current?.artist}{context.album_title ? ` / ${context.album_title}` : ''}. Playback is live, the room is settled, and the inbox can wait its turn.
         {:else if current}
-          {current.artist}{current.album ? ` · ${current.album}` : ''}. Cassette is ready to pick the thread back up.
+          {current.artist}{current.album ? ` / ${current.album}` : ''}. Cassette is ready to pick the thread back up.
         {:else}
-          Playback, missing music, and service health stay in one place so the system can keep moving without becoming noise.
+          Playback, unfinished collection work, and service status stay in one place so the system can stay useful without getting loud.
         {/if}
       </p>
 
       <div class="hero-actions">
-        <button class="btn btn-primary" on:click={() => goto('/artists')}>Open artists</button>
-        <button class="btn btn-secondary" on:click={() => goto('/session')}>Open session composer</button>
-        <button class="btn btn-ghost" on:click={() => goto('/downloads')}>Open downloads</button>
+        <button class="btn btn-primary" on:click={() => goto('/collection')}>Open collection</button>
+        <button class="btn btn-secondary" on:click={() => goto('/queue')}>Open queue</button>
+        <button class="btn btn-ghost" on:click={() => goto('/session')}>Open session</button>
+        <button class="btn btn-ghost" on:click={() => goto('/workstation')}>Open workstation</button>
         {#if current}
           <button class="btn btn-ghost" on:click={resumePlayback}>
             {$playbackState.is_playing ? 'Pause' : 'Resume'}
@@ -176,7 +197,7 @@
         <span class="hero-metric-value">{artistClusters.length.toLocaleString()} clustered</span>
       </div>
       <div class="hero-metric">
-        <span class="hero-metric-label">Backlog</span>
+        <span class="hero-metric-label">Inbox</span>
         <span class="hero-metric-value">
           {#if $backlogStatus?.running}
             Running
@@ -187,7 +208,7 @@
       </div>
       <div class="hero-metric">
         <span class="hero-metric-label">Service</span>
-        <span class="hero-metric-value">{$slskdRuntimeStatus?.ready ? 'slskd ready' : 'slskd idle'}</span>
+        <span class="hero-metric-value">{$slskdRuntimeStatus?.ready ? 'Ready' : 'Waiting'}</span>
       </div>
     </div>
   </section>
@@ -196,14 +217,14 @@
     <div class="band-heading">
       <div>
         <div class="section-kicker">While you were away</div>
-        <h2>Plain-language system recap</h2>
+        <h2>Plain-language recap</h2>
       </div>
-      <button class="band-link" on:click={() => goto('/downloads')}>Open command center</button>
+      <button class="band-link" on:click={() => goto('/workstation')}>Open workstation</button>
     </div>
 
     {#if loading}
       <div class="summary-grid loading-grid">
-        <div class="summary-card">Loading background summary...</div>
+        <div class="summary-card">Loading background recap...</div>
       </div>
     {:else}
       <div class="summary-grid">
@@ -222,15 +243,15 @@
     <section class="home-band">
       <div class="band-heading">
         <div>
-          <div class="section-kicker">New in your library</div>
+          <div class="section-kicker">New on the shelf</div>
           <h2>Recently arrived</h2>
         </div>
-        <button class="band-link" on:click={() => goto('/library')}>Browse library</button>
+        <button class="band-link" on:click={() => goto('/collection')}>Browse collection</button>
       </div>
 
       <div class="arrivals-grid">
         {#each recentTracks.slice(0, 8) as track}
-          <div class="arrival-card">
+          <div class="arrival-card mood-card">
             {#if track.cover_art_path}
               <img class="arrival-art" src={coverSrc(track.cover_art_path)} alt="" loading="lazy" />
             {:else}
@@ -254,8 +275,8 @@
     <div class="column-block">
       <div class="band-heading">
         <div>
-          <div class="section-kicker">Artist-first collection</div>
-          <h2>Where the library actually starts</h2>
+          <div class="section-kicker">Artist-first</div>
+          <h2>Artist-first collection</h2>
         </div>
         <button class="band-link" on:click={() => goto('/artists')}>See all artists</button>
       </div>
@@ -265,11 +286,11 @@
           <div class="stack-empty">Scan a library root and your artist clusters will show up here.</div>
         {:else}
           {#each topArtists as artist}
-            <button class="artist-line" on:click={() => goto('/artists')}>
+            <button class="artist-line mood-card" on:click={() => goto('/artists')}>
               <span class="artist-mark">{artist.primaryName[0]?.toUpperCase() ?? '?'}</span>
               <span class="artist-copy">
                 <span class="artist-name">{artist.primaryName}</span>
-                <span class="artist-meta">{artist.albumCount} albums · {artist.trackCount} tracks</span>
+                <span class="artist-meta">{artist.albumCount} albums / {artist.trackCount} tracks</span>
               </span>
               {#if artist.aliases.length > 1}
                 <span class="artist-variants">{artist.aliases.length} variants</span>
@@ -283,30 +304,21 @@
     <div class="column-block intelligence-block">
       <div class="band-heading">
         <div>
-          <div class="section-kicker">Collection intelligence</div>
-          <h2>Missing work, live work, blocked work</h2>
+          <div class="section-kicker">Calm automation</div>
+          <h2>What the room is carrying for you</h2>
         </div>
-        <button class="band-link" on:click={() => goto('/downloads')}>Manage lanes</button>
+        <button class="band-link" on:click={() => goto('/workstation')}>Review details</button>
       </div>
 
-      <div class="lane-metrics">
-        <div class="lane-metric">
-          <span class="lane-label">Missing</span>
-          <strong>{missingAlbums.length}</strong>
-        </div>
-        <div class="lane-metric">
-          <span class="lane-label">In progress</span>
-          <strong>{inProgressCount}</strong>
-        </div>
-        <div class="lane-metric">
-          <span class="lane-label">Blocked</span>
-          <strong>{blockedCount}</strong>
-        </div>
-        <div class="lane-metric">
-          <span class="lane-label">Completed</span>
-          <strong>{completedCount}</strong>
-        </div>
-      </div>
+      <AutomationDigestPanel
+        digest={automationDigest}
+        compact={true}
+        showThresholdLegend={true}
+        primaryHref="/workstation"
+        primaryLabel="Open workstation"
+        secondaryHref="/downloads"
+        secondaryLabel="Open downloads"
+      />
 
       <div class="trust-strip">
         {#if trustWatch.length > 0}
@@ -320,23 +332,23 @@
           {#each trustDistribution.slice(0, 3) as entry}
             <div class="trust-line">
               <span class="trust-code">{entry.reason_code}</span>
-              <span class="trust-copy">{entry.label} across {entry.count} recent request{entry.count === 1 ? '' : 's'}.</span>
+              <span class="trust-copy">{entry.label} across {entry.count} recent item{entry.count === 1 ? '' : 's'}.</span>
             </div>
           {/each}
         {:else}
-          <div class="stack-empty">No trust-ledger issues are crowding the desk right now.</div>
+          <div class="stack-empty">No trust issues are crowding the room right now.</div>
         {/if}
       </div>
 
       <div class="missing-stack">
         {#if missingAlbums.length === 0}
-          <div class="stack-empty">No Spotify backlog albums are currently flagged missing.</div>
+          <div class="stack-empty">No Spotify backlog albums are currently marked missing.</div>
         {:else}
           {#each missingAlbums.slice(0, 5) as album}
             <div class="missing-line">
               <span class="missing-copy">
-                <span class="missing-title">{album.artist} · {album.album}</span>
-                <span class="missing-meta">{album.play_count} plays · {formatDuration(album.total_ms / 1000)}</span>
+                <span class="missing-title">{album.artist} / {album.album}</span>
+                <span class="missing-meta">{album.play_count} plays / {formatDuration(album.total_ms / 1000)}</span>
               </span>
               <span class="missing-badge">missing</span>
             </div>
@@ -345,389 +357,399 @@
       </div>
     </div>
   </section>
-
 </div>
 
 <style>
-.home-page {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 18px;
-}
+  .home-page {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px;
+  }
 
-.home-hero {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.65fr);
-  gap: 18px;
-  min-height: 320px;
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background:
-    radial-gradient(circle at top left, rgba(247, 180, 92, 0.16), transparent 40%),
-    linear-gradient(135deg, rgba(139, 180, 212, 0.14), transparent 55%),
-    var(--bg-card);
-}
+  .home-hero {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.65fr);
+    gap: 18px;
+    min-height: 320px;
+    padding: 24px;
+    border: 1px solid rgba(var(--mood-accent-rgb), 0.14);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background:
+      radial-gradient(circle at top left, var(--mood-layer-b), transparent 45%),
+      radial-gradient(circle at bottom right, var(--mood-layer-a), transparent 50%),
+      linear-gradient(135deg, rgba(var(--mood-accent-rgb), 0.08), transparent 55%),
+      var(--bg-card);
+    transition: border-color var(--mood-shift-ms) ease;
+  }
 
-.hero-backdrop {
-  position: absolute;
-  inset: 0;
-  opacity: 0.18;
-  pointer-events: none;
-}
+  .hero-backdrop {
+    position: absolute;
+    inset: 0;
+    opacity: 0.22;
+    pointer-events: none;
+  }
 
-.hero-backdrop img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: blur(22px) saturate(1.2);
-  transform: scale(1.06);
-}
+  .hero-backdrop img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(22px) saturate(1.3);
+    transform: scale(1.06);
+    mix-blend-mode: luminosity;
+  }
 
-.hero-copy,
-.hero-side {
-  position: relative;
-  z-index: 1;
-}
+  .hero-copy,
+  .hero-side {
+    position: relative;
+    z-index: 1;
+  }
 
-.hero-copy {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  gap: 12px;
-  max-width: 620px;
-}
+  .hero-copy {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 12px;
+    max-width: 620px;
+  }
 
-.hero-kicker,
-.section-kicker {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--accent);
-  font-weight: 700;
-}
+  .hero-kicker,
+  .section-kicker {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent-bright);
+    font-weight: 700;
+  }
 
-.home-hero h1 {
-  font-size: clamp(2rem, 4vw, 3.4rem);
-  line-height: 0.96;
-  max-width: 10ch;
-}
+  .home-hero h1 {
+    font-size: clamp(2rem, 4vw, 3.4rem);
+    line-height: 0.96;
+    max-width: 10ch;
+    background: linear-gradient(135deg, var(--text-primary) 50%, rgba(var(--mood-accent-rgb), 0.9));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    transition: background var(--mood-shift-ms) ease;
+  }
 
-.hero-summary {
-  max-width: 54ch;
-  font-size: 0.92rem;
-  line-height: 1.7;
-  color: var(--text-secondary);
-}
+  .hero-summary {
+    max-width: 56ch;
+    font-size: 0.95rem;
+    line-height: 1.75;
+    color: var(--text-secondary);
+  }
 
-.hero-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 4px;
-}
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 4px;
+  }
 
-.hero-side {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: end;
-  gap: 10px;
-}
+  .btn-primary {
+    background: linear-gradient(135deg, rgba(var(--mood-accent-rgb), 1) 0%, var(--primary) 100%);
+    color: var(--bg-deep);
+    border: none;
+    box-shadow: 0 4px 14px rgba(var(--mood-accent-rgb), 0.3);
+    transition: background var(--mood-shift-ms) ease, box-shadow var(--mood-shift-ms) ease, filter 0.15s ease;
+  }
 
-.hero-metric {
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: rgba(6, 8, 16, 0.52);
-}
+  .btn-primary:hover {
+    filter: brightness(1.1);
+  }
 
-.hero-metric-label,
-.lane-label {
-  display: block;
-  font-size: 0.66rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  margin-bottom: 5px;
-}
+  .hero-side {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: end;
+    gap: 10px;
+  }
 
-.hero-metric-value {
-  font-size: 0.88rem;
-  color: var(--text-primary);
-}
+  .hero-metric {
+    padding: 12px 14px;
+    border-radius: var(--radius);
+    border: 1px solid rgba(var(--mood-accent-rgb), 0.12);
+    background: rgba(6, 8, 16, 0.55);
+    backdrop-filter: blur(10px);
+    transition: border-color var(--mood-shift-ms) ease;
+  }
 
-.home-band,
-.column-block {
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-card);
-}
+  .hero-metric-label,
+  .lane-label {
+    display: block;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+  }
 
-.band-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
+  .hero-metric-value {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+  }
 
-.band-heading h2 {
-  margin-top: 4px;
-  font-size: 1.18rem;
-}
+  .home-band,
+  .column-block {
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+  }
 
-.band-link {
-  color: var(--primary);
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
+  .band-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+  }
 
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
-}
+  .band-heading h2 {
+    margin-top: 4px;
+    font-size: 1.18rem;
+  }
 
-.summary-card {
-  padding: 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent), var(--bg-base);
-}
+  .band-link {
+    color: var(--text-accent);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
 
-.summary-card h3 {
-  margin: 8px 0 6px;
-  font-size: 0.95rem;
-}
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+  }
 
-.summary-card p {
-  font-size: 0.8rem;
-  line-height: 1.6;
-  color: var(--text-secondary);
-}
+  .summary-card {
+    padding: 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent), var(--bg-base);
+  }
 
-.summary-tone {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
+  .summary-card h3 {
+    margin: 8px 0 6px;
+    font-size: 0.95rem;
+  }
 
-.tone-steady { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); }
-.tone-watch { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
-.tone-action { border-color: color-mix(in srgb, var(--error) 36%, var(--border)); }
+  .summary-card p {
+    font-size: 0.82rem;
+    line-height: 1.7;
+    color: var(--text-secondary);
+  }
 
-.arrivals-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
-}
+  .summary-tone {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
 
-.arrival-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: border-color 0.15s, transform 0.15s;
-}
+  .tone-steady {
+    border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  }
 
-.arrival-card:hover {
-  border-color: var(--border-active);
-  transform: translateY(-1px);
-}
+  .tone-watch {
+    border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+  }
 
-.arrival-art {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  display: block;
-}
+  .tone-action {
+    border-color: color-mix(in srgb, var(--error) 36%, var(--border));
+  }
 
-.arrival-art-ph {
-  width: 100%;
-  aspect-ratio: 1;
-  background: var(--bg-active);
-}
+  .arrivals-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+  }
 
-.arrival-info {
-  padding: 0 10px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
+  .arrival-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+  }
 
-.arrival-title {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+  .arrival-card:hover {
+    border-color: var(--border-active);
+    transform: translateY(-1px);
+  }
 
-.arrival-meta {
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+  .arrival-art {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    display: block;
+  }
 
-.arrival-badge {
-  font-size: 0.62rem;
-  color: var(--status-ok);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-top: 2px;
-}
+  .arrival-art-ph {
+    width: 100%;
+    aspect-ratio: 1;
+    background: var(--bg-active);
+  }
 
-.home-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
-  gap: 18px;
-}
+  .arrival-info {
+    padding: 0 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
 
-.artist-stack,
-.missing-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+  .arrival-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-.artist-line,
-.missing-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg-base);
-}
+  .arrival-meta {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-.artist-line:hover {
-  border-color: var(--border-active);
-}
+  .arrival-badge {
+    font-size: 0.62rem;
+    color: var(--status-ok);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 2px;
+  }
 
-.artist-mark {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(247, 180, 92, 0.16), rgba(139, 180, 212, 0.2));
-  color: var(--accent);
-  flex-shrink: 0;
-}
-
-.artist-copy,
-.missing-copy {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  min-width: 0;
-}
-
-.artist-name,
-.missing-title {
-  font-size: 0.88rem;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.artist-meta,
-.missing-meta {
-  font-size: 0.74rem;
-  color: var(--text-secondary);
-}
-
-.artist-variants,
-.missing-badge {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-
-.lane-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.lane-metric {
-  padding: 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg-base);
-}
-
-.lane-metric strong {
-  font-size: 1.3rem;
-  color: var(--text-primary);
-}
-
-.trust-strip {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.trust-line {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg-base));
-}
-
-.trust-code {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-}
-
-.trust-copy {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-}
-
-.stack-empty {
-  padding: 16px 0 4px;
-  color: var(--text-secondary);
-  font-size: 0.84rem;
-}
-
-.loading-grid {
-  grid-template-columns: 1fr;
-}
-
-@media (max-width: 1100px) {
-  .home-hero,
   .home-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+    gap: 18px;
+  }
+
+  .artist-stack,
+  .missing-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .artist-line,
+  .missing-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-base);
+  }
+
+  .artist-line:hover {
+    border-color: var(--border-active);
+  }
+
+  .artist-mark {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(247, 180, 92, 0.16), rgba(139, 180, 212, 0.2));
+    color: var(--accent-bright);
+    flex-shrink: 0;
+  }
+
+  .artist-copy,
+  .missing-copy {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+  }
+
+  .artist-name,
+  .missing-title {
+    font-size: 0.88rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .artist-meta,
+  .missing-meta {
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+  }
+
+  .artist-variants,
+  .missing-badge {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .trust-strip {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .trust-line {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--accent) 7%, var(--bg-base));
+  }
+
+  .trust-code {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .trust-copy {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+  }
+
+  .stack-empty {
+    padding: 16px 0 4px;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+  }
+
+  .loading-grid {
     grid-template-columns: 1fr;
   }
 
-  .hero-side,
-  .lane-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  @media (max-width: 1100px) {
+    .home-hero,
+    .home-columns {
+      grid-template-columns: 1fr;
+    }
+
+    .hero-side,
+    .lane-metrics {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
-}
 </style>
