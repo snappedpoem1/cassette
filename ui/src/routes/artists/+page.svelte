@@ -1,116 +1,158 @@
 <script lang="ts">
-  import { buildArtistClusters, clusterAlbumsForArtist, normalizeArtistKey, type ArtistCluster } from '$lib/artist-clusters';
-  import { artists, albums } from '$lib/stores/library';
+  import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
+  import { buildArtistClusters, clusterAlbumsForArtist, type ArtistCluster } from '$lib/artist-clusters';
+  import type { AcquisitionRequestListItem, SpotifyAlbumHistory, Track } from '$lib/api/tauri';
   import { api } from '$lib/api/tauri';
-  import ContextActionRail from '$lib/components/ContextActionRail.svelte';
+  import { albums, artists, tracks, loadLibrary } from '$lib/stores/library';
   import { queueTracks } from '$lib/stores/queue';
-  import { formatDuration, coverSrc } from '$lib/utils';
-  import type { Album, Track } from '$lib/api/tauri';
+  import { coverSrc } from '$lib/utils';
+  import {
+    buildAlbumOwnershipSummary,
+    missingAlbumsForArtist,
+    normalizeAlbumFamily,
+    normalizeArtistKey,
+    relatedVersionsForArtist,
+    summarizeArtistMissing,
+  } from '$lib/ownership';
 
-  function artistCoverArts(cluster: ArtistCluster, allAlbums: Album[], max = 4): string[] {
-    return clusterAlbumsForArtist(allAlbums, cluster)
-      .filter((a) => !!a.cover_art_path)
+  function artistCoverArts(cluster: ArtistCluster, max = 4): string[] {
+    return clusterAlbumsForArtist($albums, cluster)
+      .filter((album) => !!album.cover_art_path)
       .slice(0, max)
-      .map((a) => coverSrc(a.cover_art_path!))
+      .map((album) => coverSrc(album.cover_art_path!))
       .filter((src): src is string => !!src);
   }
 
+  let loading = true;
   let selectedArtist: ArtistCluster | null = null;
-  let artistAlbums: Album[] = [];
-  let artistGapCount = 0;
-  let selectedAlbum: Album | null = null;
-  let albumTracks: Track[] = [];
+  let missingAlbums: SpotifyAlbumHistory[] = [];
+  let requestHistory: AcquisitionRequestListItem[] = [];
+
+  onMount(async () => {
+    if ($albums.length === 0 || $artists.length === 0 || $tracks.length === 0) {
+      await loadLibrary();
+    }
+    try {
+      const [nextMissing, nextRequests] = await Promise.all([
+        api.getMissingSpotifyAlbums(160),
+        api.listAcquisitionRequests(undefined, 400),
+      ]);
+      missingAlbums = nextMissing;
+      requestHistory = nextRequests;
+    } finally {
+      loading = false;
+    }
+  });
 
   $: artistClusters = buildArtistClusters($artists);
+  $: missingSummary = summarizeArtistMissing(
+    missingAlbums.map((entry) => ({
+      artist: entry.artist,
+      album: entry.album,
+      play_count: entry.play_count,
+    }))
+  );
+  $: missingByArtist = missingSummary.reduce((map, entry) => {
+    map.set(normalizeArtistKey(entry.artist), entry);
+    return map;
+  }, new Map<string, { artist: string; missingAlbums: number; playCount: number }>());
 
-  async function selectArtist(cluster: ArtistCluster) {
-    const selectedKey = cluster.key;
+  $: selectedAlbums = selectedArtist ? clusterAlbumsForArtist($albums, selectedArtist) : [];
+  $: selectedAlbumSummaries = selectedAlbums.map((album) =>
+    buildAlbumOwnershipSummary(
+      album,
+      $tracks.filter((track) => track.album_artist === album.artist && track.album === album.title),
+      [],
+      requestHistory,
+    )
+  );
+  $: selectedMissingAlbums = selectedArtist
+    ? missingAlbumsForArtist(
+        missingAlbums.map((entry) => ({
+          artist: entry.artist,
+          album: entry.album,
+          play_count: entry.play_count,
+        })),
+        selectedArtist.primaryName
+      )
+    : [];
+  $: selectedVersionFamilies = selectedArtist
+    ? buildVersionFamilies(relatedVersionsForArtist($albums, selectedArtist.primaryName))
+    : [];
+
+  function buildVersionFamilies(artistAlbums: typeof $albums) {
+    const families = new Map<string, typeof $albums>();
+    for (const album of artistAlbums) {
+      const key = normalizeAlbumFamily(album.title);
+      const bucket = families.get(key) ?? [];
+      bucket.push(album);
+      families.set(key, bucket);
+    }
+    return [...families.entries()]
+      .filter(([, bucket]) => bucket.length > 1)
+      .map(([family, bucket]) => ({
+        family,
+        albums: [...bucket].sort((a, b) => (a.year ?? 0) - (b.year ?? 0) || a.title.localeCompare(b.title)),
+      }))
+      .sort((a, b) => b.albums.length - a.albums.length || a.family.localeCompare(b.family));
+  }
+
+  function selectArtist(cluster: ArtistCluster) {
     selectedArtist = cluster;
-    artistGapCount = 0;
-    selectedAlbum = null;
-    albumTracks = [];
-
-    artistAlbums = clusterAlbumsForArtist($albums, cluster);
-
-    try {
-      const gap = await api.getArtistGap(cluster.primaryName);
-      if (selectedArtist?.key === selectedKey) {
-        artistGapCount = Number.isFinite(gap) ? Math.max(0, gap) : 0;
-      }
-    } catch {
-      if (selectedArtist?.key === selectedKey) {
-        artistGapCount = 0;
-      }
-    }
   }
 
-  async function selectAlbum(album: Album) {
-    selectedAlbum = album;
-    albumTracks = await api.getAlbumTracks(album.artist, album.title);
-  }
-
-  function back() {
-    if (selectedAlbum) {
-      selectedAlbum = null;
-      albumTracks = [];
-      return;
-    }
-
+  function clearArtist() {
     selectedArtist = null;
-    artistGapCount = 0;
-    artistAlbums = [];
   }
 
-  async function playAlbum(album: Album) {
-    const trackList = await api.getAlbumTracks(album.artist, album.title);
-    if (trackList.length) {
-      await queueTracks(trackList, 0);
+  async function playArtist(cluster: ArtistCluster) {
+    const artistTracks = $tracks
+      .filter((track) => normalizeArtistKey(track.album_artist || track.artist) === cluster.key)
+      .sort((a, b) => a.album.localeCompare(b.album) || (a.disc_number ?? 1) - (b.disc_number ?? 1) || (a.track_number ?? 0) - (b.track_number ?? 0));
+    if (artistTracks.length > 0) {
+      await queueTracks(artistTracks, 0);
     }
+  }
+
+  function openAlbum(albumId: number) {
+    void goto(`/albums/${albumId}`);
   }
 </script>
 
-<svelte:head><title>Artists · Cassette</title></svelte:head>
+<svelte:head><title>Artists - Cassette</title></svelte:head>
 
 <div class="artists-page">
-  <div class="page-header">
-    {#if selectedArtist}
-      <button class="back-btn" on:click={back}>Back</button>
-      <div class="page-header-copy">
-        <h2>{selectedAlbum ? selectedAlbum.title : selectedArtist.primaryName}</h2>
-        {#if !selectedAlbum}
-          <div class="artist-header-meta">{artistGapCount} albums not in library</div>
-        {/if}
-      </div>
-      {#if selectedAlbum}
-        <button class="btn btn-primary" on:click={() => selectedAlbum && playAlbum(selectedAlbum)}>Play</button>
-      {/if}
-    {:else}
-      <h2>Artists</h2>
-    {/if}
-  </div>
-
   {#if !selectedArtist}
-    {#if artistClusters.length === 0}
-      <div class="empty-state">
-        <div class="empty-title">No artists yet</div>
-        <div class="empty-body">Scan your library to find artists.</div>
+    <section class="artist-hero card">
+      <div class="section-kicker">Rediscovery ritual</div>
+      <div class="hero-row">
+        <div class="hero-copy">
+          <h1>Open the collection by artist, not by utility</h1>
+          <p>
+            Artists should feel like doors back into your own memory: what is already in hand,
+            which records still tug at you, and where alternate versions start changing the story.
+          </p>
+        </div>
       </div>
+    </section>
+
+    {#if loading}
+      <section class="card loading-card">
+        <div class="spinner"></div>
+        <div class="empty-body">Loading artist view...</div>
+      </section>
+    {:else if artistClusters.length === 0}
+      <section class="card loading-card">
+        <div class="empty-title">No artists yet</div>
+        <div class="empty-body">Scan your library and artist clusters will appear here.</div>
+      </section>
     {:else}
-      <div class="artist-grid">
+      <section class="artist-grid">
         {#each artistClusters as cluster}
-          {@const arts = artistCoverArts(cluster, $albums)}
-          <div
-            class="artist-card"
-            role="button"
-            tabindex="0"
-            on:click={() => selectArtist(cluster)}
-            on:keydown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                selectArtist(cluster);
-              }
-            }}
-          >
+          {@const arts = artistCoverArts(cluster)}
+          {@const gap = missingByArtist.get(cluster.key)}
+          <button class="artist-card card mood-card" on:click={() => selectArtist(cluster)}>
             <div class="artist-mosaic">
               {#if arts.length >= 4}
                 <div class="mosaic-grid">
@@ -123,190 +165,332 @@
               {:else}
                 <div class="artist-avatar-fallback">{cluster.primaryName[0]?.toUpperCase() ?? '?'}</div>
               {/if}
-              <div class="artist-mosaic-overlay"></div>
             </div>
-            <div class="artist-card-info">
+            <div class="artist-copy">
               <div class="artist-name">{cluster.primaryName}</div>
-              <div class="artist-meta">{cluster.albumCount} albums · {cluster.trackCount} tracks</div>
-              {#if cluster.aliases.length > 1}
-                <div class="artist-variants">{cluster.aliases.length} name variants</div>
+              <div class="artist-meta">{cluster.albumCount} albums / {cluster.trackCount} tracks</div>
+              {#if gap}
+                <div class="artist-gap">{gap.missingAlbums} missing albums / {gap.playCount} plays pointing at them</div>
               {/if}
             </div>
-          </div>
+          </button>
         {/each}
-      </div>
-    {/if}
-  {:else if !selectedAlbum}
-    <div style="padding: 0 1rem 0.5rem;">
-      <ContextActionRail compact artistName={selectedArtist.primaryName} />
-    </div>
-    {#if artistAlbums.length === 0}
-      <div class="empty-state">
-        <div class="empty-title">No albums found</div>
-      </div>
-    {:else}
-      <div class="album-grid">
-        {#each artistAlbums as album}
-          <div
-            class="album-card"
-            role="button"
-            tabindex="0"
-            on:click={() => selectAlbum(album)}
-            on:dblclick={() => playAlbum(album)}
-            on:keydown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                selectAlbum(album);
-              }
-            }}
-          >
-            {#if album.cover_art_path}
-              <img class="album-art" src={coverSrc(album.cover_art_path)} alt="cover" />
-            {:else}
-              <div class="album-art-placeholder">Art</div>
-            {/if}
-            <div class="album-info">
-              <div class="album-title">{album.title}</div>
-              <div class="album-meta">{album.year ?? ''} · {album.track_count} tracks</div>
-              {#if album.artist !== selectedArtist.primaryName}
-                <div class="album-alias">{album.artist}</div>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
+      </section>
     {/if}
   {:else}
-    <div style="padding: 0 1rem 0.5rem;">
-      <ContextActionRail
-        compact
-        album={{ artist: selectedAlbum.artist, title: selectedAlbum.title }}
-        artistName={selectedArtist.primaryName}
-      />
-    </div>
-    <div class="track-list" style="padding: 8px 1rem;">
-      {#each albumTracks as track, i}
-        <div class="track-row" role="button" tabindex="0" on:dblclick={() => queueTracks(albumTracks, i)}>
-          <span class="track-num">{track.track_number ?? i + 1}</span>
-          <div class="track-title">{track.title}</div>
-          <div class="track-artist">{normalizeArtistKey(track.artist) !== selectedArtist.key ? track.artist : ''}</div>
-          <span class="track-duration">{formatDuration(track.duration_secs)}</span>
-          <span class="track-format">{track.format.toUpperCase()}</span>
+    <section class="artist-detail-hero card">
+      <button class="back-link" on:click={clearArtist}>Back to artists</button>
+      <div class="section-kicker">Rediscovery ritual</div>
+      <div class="hero-row">
+        <div class="hero-copy">
+          <h1>{selectedArtist.primaryName}</h1>
+          <div class="artist-subhead">
+            {selectedArtist.albumCount} albums / {selectedArtist.trackCount} tracks
+            {#if selectedMissingAlbums.length > 0}
+              {' / '}{selectedMissingAlbums.length} still missing
+            {/if}
+          </div>
+          <p>
+            Read the artist as a shelf, a gap map, and a version family. The point here is not to
+            browse everything at once. It is to spot what deserves another listen or another search.
+          </p>
+          <div class="hero-actions">
+            <button class="btn btn-primary" on:click={() => playArtist(selectedArtist)}>Play artist</button>
+            <button class="btn btn-secondary" on:click={() => goto('/collection')}>Back to collection</button>
+          </div>
         </div>
-      {/each}
-    </div>
+      </div>
+    </section>
+
+    <section class="artist-columns">
+      <article class="card artist-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-kicker">On the shelf</div>
+            <h2>Owned albums</h2>
+          </div>
+        </div>
+        <div class="album-list">
+          {#each selectedAlbumSummaries as summary}
+            <button class="album-line mood-card" on:click={() => openAlbum(summary.album.id)}>
+              <span class="album-line-copy">
+                <span class="album-line-title">{summary.album.title}</span>
+                <span class="album-line-meta">{summary.qualityLabel}{#if summary.edition.markers.length > 0} / {summary.edition.markers.slice(0, 2).join(', ')}{/if}</span>
+              </span>
+              <span class="album-line-year">{summary.album.year ?? '-'}</span>
+            </button>
+          {/each}
+        </div>
+      </article>
+
+      <article class="card artist-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-kicker">Missing from artist</div>
+            <h2>Albums still tugging at the shelf</h2>
+          </div>
+        </div>
+        <div class="album-list">
+          {#if selectedMissingAlbums.length === 0}
+            <div class="panel-empty">No missing albums are calling attention here right now.</div>
+          {:else}
+            {#each selectedMissingAlbums as missing}
+              <div class="album-line static-line">
+                <span class="album-line-copy">
+                  <span class="album-line-title">{missing.album}</span>
+                  <span class="album-line-meta">{missing.play_count} plays in history / still missing locally</span>
+                </span>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      </article>
+    </section>
+
+    <section class="card artist-panel">
+      <div class="panel-head">
+        <div>
+          <div class="section-kicker">Related versions</div>
+          <h2>Families on the shelf</h2>
+        </div>
+      </div>
+      <div class="family-list">
+        {#if selectedVersionFamilies.length === 0}
+          <div class="panel-empty">No version families are visible for this artist yet.</div>
+        {:else}
+          {#each selectedVersionFamilies as family}
+            <div class="family-card">
+              <div class="family-title">{family.albums[0].title}</div>
+              <div class="family-albums">
+                {#each family.albums as album}
+                  <button class="family-album mood-card" on:click={() => openAlbum(album.id)}>
+                    <span>{album.title}</span>
+                    <span>{album.year ?? '-'}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </section>
   {/if}
 </div>
 
 <style>
-.artists-page { display: flex; flex-direction: column; min-height: 100%; }
+  .artists-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 18px;
+  }
 
-.page-header-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
+  .artist-hero,
+  .artist-detail-hero,
+  .artist-panel,
+  .artist-card,
+  .loading-card {
+    padding: 20px;
+  }
 
-.artist-header-meta {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
+  .section-kicker {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--accent-bright);
+    font-weight: 700;
+  }
 
-.back-btn {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  background: none;
-  border: none;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  transition: color 0.1s;
-}
+  .hero-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 18px;
+    margin-top: 10px;
+  }
 
-.back-btn:hover { color: var(--text-primary); }
+  .hero-copy {
+    display: grid;
+    gap: 10px;
+    max-width: 60ch;
+  }
 
-.artist-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 16px;
-  padding: 1.5rem;
-}
+  .hero-copy h1 {
+    font-size: clamp(2rem, 4vw, 3rem);
+    line-height: 0.96;
+  }
 
-.artist-card {
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--radius);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
-  overflow: hidden;
-  text-align: center;
-}
+  .hero-copy p,
+  .panel-empty {
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+    line-height: 1.7;
+  }
 
-.artist-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  border-color: var(--border-active);
-}
+  .artist-subhead,
+  .artist-meta,
+  .artist-gap,
+  .album-line-meta {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+  }
 
-.artist-mosaic {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 1;
-  overflow: hidden;
-  background: var(--bg-active);
-}
+  .artist-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+  }
 
-.mosaic-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-  width: 100%;
-  height: 100%;
-  gap: 1px;
-}
+  .artist-card {
+    display: grid;
+    gap: 12px;
+    text-align: left;
+  }
 
-.mosaic-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
+  .artist-mosaic {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--bg-active);
+  }
 
-.mosaic-single {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
+  .mosaic-grid {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 1px;
+  }
 
-.artist-avatar-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 2rem;
-  font-weight: 700;
-  color: var(--accent-bright);
-  background: linear-gradient(135deg, var(--accent-dim), var(--bg-active));
-}
+  .mosaic-img,
+  .mosaic-single {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
 
-.artist-mosaic-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, rgba(8, 11, 18, 0.72) 0%, transparent 55%);
-  pointer-events: none;
-}
+  .artist-avatar-fallback {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent-bright);
+  }
 
-.artist-card-info {
-  padding: 10px 10px 12px;
-}
+  .artist-copy {
+    display: grid;
+    gap: 4px;
+  }
 
-.artist-name { font-weight: 600; font-size: 0.85rem; word-break: break-word; color: var(--text-primary); }
-.artist-meta { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
-.artist-variants { font-size: 0.68rem; color: var(--accent-bright); margin-top: 2px; }
-.album-alias { margin-top: 2px; font-size: 0.7rem; color: var(--text-muted); }
-.track-list { padding: 8px; }
+  .artist-name,
+  .album-line-title,
+  .family-title {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    font-weight: 700;
+  }
+
+  .back-link {
+    width: fit-content;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+
+  .artist-columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .album-list,
+  .family-list,
+  .family-albums {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .album-line,
+  .family-card,
+  .family-album {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-base);
+  }
+
+  .album-line,
+  .family-album {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    text-align: left;
+    padding: 11px 12px;
+  }
+
+  .static-line {
+    cursor: default;
+  }
+
+  .album-line-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+  }
+
+  .album-line-year {
+    color: var(--text-muted);
+    font-size: 0.74rem;
+  }
+
+  .family-card {
+    padding: 12px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .family-title {
+    text-transform: capitalize;
+  }
+
+  .family-album span:last-child {
+    color: var(--text-muted);
+    font-size: 0.74rem;
+  }
+
+  .loading-card {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+  }
+
+  @media (max-width: 920px) {
+    .artist-columns {
+      grid-template-columns: 1fr;
+    }
+  }
 </style>

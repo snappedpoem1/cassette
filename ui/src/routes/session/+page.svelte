@@ -2,15 +2,15 @@
   import SessionComposer from '$lib/components/SessionComposer.svelte';
 </script>
 
-<svelte:head><title>Session Composer · Cassette</title></svelte:head>
+<svelte:head><title>Session - Cassette</title></svelte:head>
 
 <div class="session-page">
-  <section class="session-hero card">
-    <div class="section-kicker">Session Workspace</div>
-    <h1>Session Composer</h1>
+  <section class="session-hero card mood-card">
+    <div class="section-kicker">Arc ritual</div>
+    <h1>Build a listening arc</h1>
     <p>
-      Build explainable listening arcs with duration, era, and transition controls in one dedicated surface.
-      Generate a route, inspect why each handoff was chosen, and queue the full run.
+      Shape a replayable run with memory, branching, and clean handoff in one place. Generate or
+      import an arc, inspect why each move belongs, then save the line when it earns a return.
     </p>
   </section>
 
@@ -30,6 +30,10 @@
     display: grid;
     gap: 8px;
     border-radius: var(--radius-lg);
+    background: rgba(6, 8, 16, 0.55);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(var(--mood-accent-rgb), 0.12);
+    transition: border-color var(--mood-shift-ms) ease;
   }
 
   .section-kicker {

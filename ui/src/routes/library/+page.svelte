@@ -97,7 +97,7 @@
   }
 </script>
 
-<svelte:head><title>Library · Cassette</title></svelte:head>
+<svelte:head><title>Library - Cassette</title></svelte:head>
 
 <div class="library-page">
   <div class="page-header">
@@ -120,7 +120,7 @@
     <div class="search-results">
       <div class="sr-label">{$searchResults.length} results for "{searchInput}"</div>
       {#each $searchResults as track, i}
-        <div class="track-row" role="button" tabindex="0" on:dblclick={() => playTrack($searchResults, i)}>
+        <div class="track-row mood-card" role="button" tabindex="0" on:dblclick={() => playTrack($searchResults, i)}>
           <span class="track-num">{i + 1}</span>
           <div class="track-title">{track.title}</div>
           <div class="track-artist">{track.artist} · {track.album}</div>
@@ -188,7 +188,7 @@
             <div class="track-list">
               {#each albumTracks as track, i}
                 <div
-                  class="track-row"
+                  class="track-row mood-card"
                   role="button"
                   tabindex="0"
                   on:click={() => inspectTrack(track)}
@@ -267,7 +267,7 @@
           {#each $albums as album}
             {@const tint = tintFromHex(album.dominant_color_hex)}
             <div
-              class="album-card"
+              class="album-card mood-card"
               role="button"
               tabindex="0"
               on:click={() => openAlbum(album)}
@@ -303,7 +303,7 @@
         <div class="track-list">
           {#each $tracks as track, i}
             <div
-              class="track-row"
+              class="track-row mood-card"
               role="button"
               tabindex="0"
               on:click={() => inspectTrack(track)}
@@ -379,7 +379,7 @@
       <div class="artist-list">
         {#each $artists as artist}
           <div
-            class="artist-row"
+            class="artist-row mood-card"
             role="button"
             tabindex="0"
             on:click={() => goto('/artists')}
