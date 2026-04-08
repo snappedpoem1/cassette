@@ -13,6 +13,7 @@
   let creating = false;
   let newName = '';
   let newDesc = '';
+  let confirmDeleteId: number | null = null;
   let selectedTrack: Track | null = null;
   let selectedPlaylistGuard: number | null = null;
 
@@ -30,9 +31,15 @@
   }
 
   async function handleDelete(pl: Playlist) {
-    if (confirm(`Delete playlist "${pl.name}"?`)) {
+    if (confirmDeleteId === pl.id) {
       await deletePlaylist(pl.id);
       if ($activePlaylistId === pl.id) activePlaylistId.set(null);
+      confirmDeleteId = null;
+    } else {
+      confirmDeleteId = pl.id;
+      setTimeout(() => {
+        if (confirmDeleteId === pl.id) confirmDeleteId = null;
+      }, 3000);
     }
   }
 
@@ -65,9 +72,8 @@
     <div class="playlist-list">
       {#if $playlists.length === 0}
         <div class="empty-state" style="padding:2rem 1rem;">
-          <div class="empty-icon">📋</div>
-          <div class="empty-title">No playlists yet</div>
-          <div class="empty-body">Create a playlist to get started.</div>
+          <div class="empty-icon-text">No playlists yet</div>
+          <div class="empty-body">Create a playlist to start building your listening arcs.</div>
         </div>
       {:else}
         {#each $playlists as pl}
@@ -86,14 +92,28 @@
               }
             }}
           >
-            <div class="pl-icon">📋</div>
+            <div class="pl-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+                <line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>
+                <line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+              </svg>
+            </div>
             <div class="pl-info">
               <div class="pl-name">{pl.name}</div>
               <div class="pl-meta">{pl.track_count} tracks</div>
             </div>
             <div class="pl-actions">
               <button class="btn-icon" on:click|stopPropagation={() => playPlaylist(pl.id)} title="Play">▶</button>
-              <button class="btn-icon" on:click|stopPropagation={() => handleDelete(pl)} title="Delete" style="color:var(--error)">✕</button>
+              <button
+                class="btn-icon"
+                class:confirming={confirmDeleteId === pl.id}
+                on:click|stopPropagation={() => handleDelete(pl)}
+                title={confirmDeleteId === pl.id ? 'Click again to confirm delete' : 'Delete'}
+                style={confirmDeleteId === pl.id ? 'color:var(--error)' : ''}
+              >
+                {confirmDeleteId === pl.id ? '?' : '✕'}
+              </button>
             </div>
           </div>
         {/each}
@@ -104,13 +124,11 @@
     <div class="playlist-tracks">
       {#if $activePlaylistId === null}
         <div class="empty-state">
-          <div class="empty-icon">🎵</div>
-          <div class="empty-title">Select a playlist</div>
+          <div class="empty-icon-text">Select a playlist</div>
         </div>
       {:else if $activePlaylistItems.length === 0}
         <div class="empty-state">
-          <div class="empty-icon">🎵</div>
-          <div class="empty-title">Empty playlist</div>
+          <div class="empty-icon-text">Empty playlist</div>
           <div class="empty-body">Add tracks from the Library.</div>
         </div>
       {:else}
@@ -182,6 +200,17 @@
   transition: background 0.1s;
 }
 .btn-icon:hover { background: var(--bg-active); }
+.btn-icon.confirming {
+  background: color-mix(in srgb, var(--error) 12%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--error) 30%, var(--border));
+}
+
+.empty-icon-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
 
 .playlist-tracks { overflow-y: auto; padding: 8px; }
 </style>

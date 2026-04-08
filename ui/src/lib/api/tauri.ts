@@ -658,6 +658,15 @@ export const api = {
     invoke<void>('add_to_queue', { track_id: trackId, position }),
   queueTracks: (trackIds: number[], startIndex?: number) =>
     invoke<void>('queue_tracks', { track_ids: trackIds, start_index: startIndex }),
+  reorderQueue: (trackIds: number[], startIndex = 0) =>
+    invoke<void>('queue_tracks', { track_ids: trackIds, start_index: startIndex }),
+  removeQueueItem: (position: number, allTrackIds: number[], startIndex = 0) => {
+    const remaining = allTrackIds.filter((_, i) => i !== position);
+    if (remaining.length === 0) {
+      return invoke<void>('clear_queue');
+    }
+    return invoke<void>('queue_tracks', { track_ids: remaining, start_index: startIndex });
+  },
 
   // Playlists
   getPlaylists: () => invoke<Playlist[]>('get_playlists'),

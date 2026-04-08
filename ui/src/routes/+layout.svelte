@@ -195,12 +195,7 @@
       <span class="brand-divider">//</span>
       <span class="brand-mode">Desktop</span>
     </div>
-    <nav class="topbar-nav" aria-label="Quick actions">
-      <a class="topbar-link" href="/">Home</a>
-      <a class="topbar-link" href="/artists">Artists</a>
-      <a class="topbar-link" href="/library">Library</a>
-      <a class="topbar-link" href="/downloads">Downloads</a>
-    </nav>
+    <div class="topbar-spacer"></div>
     <button class="topbar-link topbar-toggle" type="button" aria-label="Toggle compact player" on:click={toggleCompactPlayerMode}>
       {$compactPlayerMode ? 'Full Player' : 'Mini Player'}
     </button>

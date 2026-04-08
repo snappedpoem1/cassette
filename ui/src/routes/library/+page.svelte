@@ -72,6 +72,29 @@
     ep: 'EP',
     single: 'Single',
   };
+
+  function formatQualityLabel(track: Track): string {
+    const fmt = track.format?.toUpperCase() ?? 'AUDIO';
+    const bits = track.bit_depth ? `${track.bit_depth}-bit` : null;
+    const khz = track.sample_rate ? `${(track.sample_rate / 1000).toFixed(1)}kHz` : null;
+    const kbps = track.bitrate_kbps ? `${track.bitrate_kbps}kbps` : null;
+
+    if (bits && khz) return `${fmt} · ${bits} / ${khz}`;
+    if (kbps) return `${fmt} · ${kbps}`;
+    return fmt;
+  }
+
+  function qualityTierLabel(tier: string | null): string {
+    if (!tier) return '—';
+    const map: Record<string, string> = {
+      lossless_hires: 'Hi-Res Lossless',
+      lossless: 'Lossless',
+      lossy_high: 'High Quality',
+      lossy_mid: 'Standard Quality',
+      lossy_low: 'Low Quality',
+    };
+    return map[tier] ?? tier;
+  }
 </script>
 
 <svelte:head><title>Library · Cassette</title></svelte:head>
@@ -197,15 +220,29 @@
                 <button class="back-btn inspector-close" on:click={clearTrackInspector}>Close</button>
               </div>
               <div class="track-inspector-grid">
+                <div class="inspector-summary">
+                  <span class="inspector-quality-badge">{formatQualityLabel(selectedTrack)}</span>
+                  {#if selectedTrackIdentity?.edition_bucket}
+                    <span class="inspector-edition-badge">{editionBucketLabel[selectedTrackIdentity.edition_bucket] ?? selectedTrackIdentity.edition_bucket}</span>
+                  {/if}
+                  {#if selectedTrack.year}
+                    <span class="inspector-year">{selectedTrack.year}</span>
+                  {/if}
+                </div>
+                <div><span>Quality tier</span><code>{qualityTierLabel(selectedTrack.quality_tier)}</code></div>
+                <div><span>Format</span><code>{selectedTrack.format?.toUpperCase() ?? '—'}</code></div>
                 <div><span>ISRC</span><code>{selectedTrack.isrc ?? '—'}</code></div>
-                <div><span>MB recording</span><code>{selectedTrack.musicbrainz_recording_id ?? '—'}</code></div>
-                <div><span>MB release</span><code>{selectedTrack.musicbrainz_release_id ?? '—'}</code></div>
-                <div><span>MB release group</span><code>{selectedTrackIdentity?.musicbrainz_release_group_id ?? '—'}</code></div>
-                <div><span>Canonical artist</span><code>{selectedTrack.canonical_artist_id ?? '—'}</code></div>
-                <div><span>Canonical release</span><code>{selectedTrack.canonical_release_id ?? '—'}</code></div>
-                <div><span>Edition bucket</span><code>{selectedTrackIdentity?.edition_bucket ? (editionBucketLabel[selectedTrackIdentity.edition_bucket] ?? selectedTrackIdentity.edition_bucket) : '—'}</code></div>
                 <div><span>Edition markers</span><code>{selectedTrackIdentity?.edition_markers?.length ? selectedTrackIdentity.edition_markers.join(', ') : '—'}</code></div>
-                <div><span>Quality tier</span><code>{selectedTrack.quality_tier ?? '—'}</code></div>
+                <details class="inspector-ids">
+                  <summary>Identity details</summary>
+                  <div class="inspector-ids-grid">
+                    <div><span>MB recording</span><code>{selectedTrack.musicbrainz_recording_id ?? '—'}</code></div>
+                    <div><span>MB release</span><code>{selectedTrack.musicbrainz_release_id ?? '—'}</code></div>
+                    <div><span>MB release group</span><code>{selectedTrackIdentity?.musicbrainz_release_group_id ?? '—'}</code></div>
+                    <div><span>Canonical artist</span><code>{selectedTrack.canonical_artist_id ?? '—'}</code></div>
+                    <div><span>Canonical release</span><code>{selectedTrack.canonical_release_id ?? '—'}</code></div>
+                  </div>
+                </details>
                 <div class="track-inspector-wide"><span>Path</span><code>{selectedTrack.path}</code></div>
               </div>
               <div style="margin-top:10px;">
@@ -296,15 +333,29 @@
               <button class="back-btn inspector-close" on:click={clearTrackInspector}>Close</button>
             </div>
             <div class="track-inspector-grid">
+              <div class="inspector-summary">
+                <span class="inspector-quality-badge">{formatQualityLabel(selectedTrack)}</span>
+                {#if selectedTrackIdentity?.edition_bucket}
+                  <span class="inspector-edition-badge">{editionBucketLabel[selectedTrackIdentity.edition_bucket] ?? selectedTrackIdentity.edition_bucket}</span>
+                {/if}
+                {#if selectedTrack.year}
+                  <span class="inspector-year">{selectedTrack.year}</span>
+                {/if}
+              </div>
+              <div><span>Quality tier</span><code>{qualityTierLabel(selectedTrack.quality_tier)}</code></div>
+              <div><span>Format</span><code>{selectedTrack.format?.toUpperCase() ?? '—'}</code></div>
               <div><span>ISRC</span><code>{selectedTrack.isrc ?? '—'}</code></div>
-              <div><span>MB recording</span><code>{selectedTrack.musicbrainz_recording_id ?? '—'}</code></div>
-              <div><span>MB release</span><code>{selectedTrack.musicbrainz_release_id ?? '—'}</code></div>
-              <div><span>MB release group</span><code>{selectedTrackIdentity?.musicbrainz_release_group_id ?? '—'}</code></div>
-              <div><span>Canonical artist</span><code>{selectedTrack.canonical_artist_id ?? '—'}</code></div>
-              <div><span>Canonical release</span><code>{selectedTrack.canonical_release_id ?? '—'}</code></div>
-              <div><span>Edition bucket</span><code>{selectedTrackIdentity?.edition_bucket ? (editionBucketLabel[selectedTrackIdentity.edition_bucket] ?? selectedTrackIdentity.edition_bucket) : '—'}</code></div>
               <div><span>Edition markers</span><code>{selectedTrackIdentity?.edition_markers?.length ? selectedTrackIdentity.edition_markers.join(', ') : '—'}</code></div>
-              <div><span>Content hash</span><code>{selectedTrack.content_hash ?? '—'}</code></div>
+              <details class="inspector-ids">
+                <summary>Identity details</summary>
+                <div class="inspector-ids-grid">
+                  <div><span>MB recording</span><code>{selectedTrack.musicbrainz_recording_id ?? '—'}</code></div>
+                  <div><span>MB release</span><code>{selectedTrack.musicbrainz_release_id ?? '—'}</code></div>
+                  <div><span>MB release group</span><code>{selectedTrackIdentity?.musicbrainz_release_group_id ?? '—'}</code></div>
+                  <div><span>Canonical artist</span><code>{selectedTrack.canonical_artist_id ?? '—'}</code></div>
+                  <div><span>Content hash</span><code>{selectedTrack.content_hash ?? '—'}</code></div>
+                </div>
+              </details>
               <div class="track-inspector-wide"><span>Path</span><code>{selectedTrack.path}</code></div>
             </div>
             <div style="margin-top:10px;">
@@ -468,6 +519,80 @@
 .track-inspector-grid code {
   font-size: 0.72rem;
   color: var(--text-primary);
+  word-break: break-all;
+}
+
+.inspector-summary {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.inspector-quality-badge {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 14%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border));
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.inspector-edition-badge {
+  font-size: 0.72rem;
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.inspector-year {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.inspector-ids {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.inspector-ids summary {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 6px;
+}
+
+.inspector-ids-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin-top: 6px;
+  padding: 8px;
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-dim);
+}
+
+.inspector-ids-grid div { display: flex; flex-direction: column; gap: 3px; }
+
+.inspector-ids-grid span {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.inspector-ids-grid code {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
   word-break: break-all;
 }
 

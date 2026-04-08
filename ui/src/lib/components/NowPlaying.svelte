@@ -122,11 +122,27 @@
   <!-- Center: controls + seek -->
   <div class="np-center">
     <div class="np-controls">
-      <button class="ctrl-btn" on:click={handlePrev} title="Previous">⏮</button>
-      <button class="ctrl-btn play-btn" on:click={() => player.toggle()} title="Play/Pause">
-        {#if $isPlaying}⏸{:else}▶{/if}
+      <button class="ctrl-btn" on:click={handlePrev} title="Previous">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2" fill="none"/>
+        </svg>
       </button>
-      <button class="ctrl-btn" on:click={handleNext} title="Next">⏭</button>
+      <button class="ctrl-btn play-btn" on:click={() => player.toggle()} title="Play/Pause">
+        {#if $isPlaying}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+          </svg>
+        {:else}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+        {/if}
+      </button>
+      <button class="ctrl-btn" on:click={handleNext} title="Next">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2" fill="none"/>
+        </svg>
+      </button>
     </div>
     {#if visualizerEnabled && PlaybackVisualizer}
       <svelte:component this={PlaybackVisualizer}
@@ -152,7 +168,21 @@
 
   <!-- Right: volume -->
   <div class="np-right">
-    <span class="vol-icon">{vol === 0 ? '🔇' : vol < 0.5 ? '🔉' : '🔊'}</span>
+    <span class="vol-icon">
+      {#if vol === 0}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+      {:else if vol < 0.5}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+      {:else}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+      {/if}
+    </span>
     <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div class="volume-bar" bind:this={volBarEl} on:mousedown={onVolMouseDown}>
       <div class="volume-fill" style="width:{vol*100}%"></div>
@@ -220,7 +250,60 @@
 .np-seek  { display: flex; align-items: center; gap: 7px; width: 100%; }
 .np-time  { font-size: 0.68rem; color: var(--text-muted); white-space: nowrap; min-width: 32px; }
 .np-time.right { text-align: right; }
+.seek-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--bg-active);
+  border-radius: 99px;
+  cursor: pointer;
+  position: relative;
+}
+.seek-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--primary);
+  border-radius: 99px;
+  pointer-events: none;
+}
+.seek-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px;
+  height: 10px;
+  background: var(--primary);
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.np-seek:hover .seek-thumb { opacity: 1; }
 
 .np-right   { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
-.vol-icon   { font-size: 0.82rem; color: var(--text-muted); }
+.vol-icon {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.volume-bar {
+  width: 72px;
+  height: 3px;
+  background: var(--bg-active);
+  border-radius: 99px;
+  cursor: pointer;
+  position: relative;
+}
+.volume-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--text-secondary);
+  border-radius: 99px;
+  pointer-events: none;
+}
 </style>
