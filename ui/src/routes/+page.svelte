@@ -551,16 +551,19 @@
     color: var(--text-muted);
   }
 
-  .tone-steady {
-    border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  .summary-card.tone-steady {
+    border-color: var(--border);
+    border-left: 3px solid color-mix(in srgb, var(--primary) 60%, transparent);
   }
 
-  .tone-watch {
-    border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+  .summary-card.tone-watch {
+    border-color: var(--border);
+    border-left: 3px solid color-mix(in srgb, var(--warning) 70%, transparent);
   }
 
-  .tone-action {
-    border-color: color-mix(in srgb, var(--error) 36%, var(--border));
+  .summary-card.tone-action {
+    border-color: var(--border);
+    border-left: 3px solid color-mix(in srgb, var(--error) 80%, transparent);
   }
 
   .arrivals-grid {

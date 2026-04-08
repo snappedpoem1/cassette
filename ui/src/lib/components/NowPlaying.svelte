@@ -327,7 +327,7 @@
     border-radius: 10px;
     overflow: hidden;
     background: var(--bg-card);
-    box-shadow: 0 4px 20px rgba(var(--mood-accent-rgb), 0.2), 0 0 0 1px rgba(255,255,255,0.04);
+    box-shadow: 0 4px 20px rgba(var(--mood-accent-rgb), 0.2), 0 0 0 1px rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.1);
     border: 1px solid rgba(var(--mood-accent-rgb), 0.25);
     transition: border-color var(--mood-shift-ms) ease, box-shadow var(--mood-shift-ms) ease;
     position: relative;

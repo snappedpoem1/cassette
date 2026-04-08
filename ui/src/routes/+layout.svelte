@@ -2,6 +2,7 @@
   import { page } from '$app/stores';
   import '../app.css';
   import { onMount, onDestroy } from 'svelte';
+  import { browser } from '$app/environment';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import NowPlaying from '$lib/components/NowPlaying.svelte';
   import RightSidebar from '$lib/components/RightSidebar.svelte';
@@ -33,6 +34,10 @@
   let moodStyle = '--mood-accent-rgb: 139,180,212; --mood-layer-a: rgba(139,180,212,0.08); --mood-layer-b: rgba(247,180,92,0.06); --mood-blur: 24px; --mood-shift-ms: 460ms;';
   let lastMoodCover = '';
   $: isImmersionRoute = $page.url.pathname === '/now-playing';
+
+  $: if (browser) {
+    document.documentElement.classList.toggle('low-motion', dynamicGlassLowMotion);
+  }
 
   function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));

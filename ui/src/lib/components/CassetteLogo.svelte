@@ -101,7 +101,7 @@
   }
 
   .wm-sub {
-    font-size: 0.52rem;
+    font-size: 0.55rem;
     font-weight: 800;
     letter-spacing: 0.22em;
     text-transform: uppercase;
@@ -109,7 +109,7 @@
   }
 
   .wm-name {
-    font-size: 0.92rem;
+    font-size: 1.4rem;
     font-weight: 800;
     letter-spacing: -0.04em;
     background: linear-gradient(135deg, var(--text-primary) 40%, var(--accent));
