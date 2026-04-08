@@ -17,17 +17,31 @@
 
   let selectedArtist: ArtistCluster | null = null;
   let artistAlbums: Album[] = [];
+  let artistGapCount = 0;
   let selectedAlbum: Album | null = null;
   let albumTracks: Track[] = [];
 
   $: artistClusters = buildArtistClusters($artists);
 
   async function selectArtist(cluster: ArtistCluster) {
+    const selectedKey = cluster.key;
     selectedArtist = cluster;
+    artistGapCount = 0;
     selectedAlbum = null;
     albumTracks = [];
 
     artistAlbums = clusterAlbumsForArtist($albums, cluster);
+
+    try {
+      const gap = await api.getArtistGap(cluster.primaryName);
+      if (selectedArtist?.key === selectedKey) {
+        artistGapCount = Number.isFinite(gap) ? Math.max(0, gap) : 0;
+      }
+    } catch {
+      if (selectedArtist?.key === selectedKey) {
+        artistGapCount = 0;
+      }
+    }
   }
 
   async function selectAlbum(album: Album) {
@@ -43,6 +57,7 @@
     }
 
     selectedArtist = null;
+    artistGapCount = 0;
     artistAlbums = [];
   }
 
@@ -60,7 +75,12 @@
   <div class="page-header">
     {#if selectedArtist}
       <button class="back-btn" on:click={back}>Back</button>
-      <h2>{selectedAlbum ? selectedAlbum.title : selectedArtist.primaryName}</h2>
+      <div class="page-header-copy">
+        <h2>{selectedAlbum ? selectedAlbum.title : selectedArtist.primaryName}</h2>
+        {#if !selectedAlbum}
+          <div class="artist-header-meta">{artistGapCount} albums not in library</div>
+        {/if}
+      </div>
       {#if selectedAlbum}
         <button class="btn btn-primary" on:click={() => selectedAlbum && playAlbum(selectedAlbum)}>Play</button>
       {/if}
@@ -180,6 +200,17 @@
 
 <style>
 .artists-page { display: flex; flex-direction: column; min-height: 100%; }
+
+.page-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.artist-header-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
 
 .back-btn {
   font-size: 0.8rem;

@@ -7,7 +7,12 @@
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import SystemStatusStrip from '$lib/components/SystemStatusStrip.svelte';
   import { api, type Track } from '$lib/api/tauri';
-  import { startPlayerPoll, stopPlayerPoll } from '$lib/stores/player';
+  import {
+    startPlayerEventListener,
+    startPlayerPoll,
+    stopPlayerEventListener,
+    stopPlayerPoll,
+  } from '$lib/stores/player';
   import { currentTrack } from '$lib/stores/player';
   import { loadLibrary } from '$lib/stores/library';
   import {
@@ -174,6 +179,7 @@
   onMount(() => {
     void loadDynamicGlassPrefs();
     startPlayerPoll();
+    void startPlayerEventListener();
     loadLibrary();
     loadQueue();
     loadDownloadConfig();
@@ -184,6 +190,7 @@
 
   onDestroy(() => {
     stopPlayerPoll();
+    stopPlayerEventListener();
     stopDownloadSupervision();
   });
 </script>

@@ -14,6 +14,8 @@
   let visualizerPreset = '';
   let visualizerFpsCap = 30;
   let PlaybackVisualizer: typeof import('$lib/components/PlaybackVisualizer.svelte').default | null = null;
+  let NowPlayingExpanded: typeof import('$lib/components/NowPlayingExpanded.svelte').default | null = null;
+  let isExpandedOpen = false;
 
   onMount(async () => {
     try {
@@ -88,18 +90,30 @@
 
   async function handleNext() { await player.next(); await loadQueue(); }
   async function handlePrev() { await player.prev(); await loadQueue(); }
+
+  async function openExpandedNowPlaying() {
+    if (!NowPlayingExpanded) {
+      const module = await import('$lib/components/NowPlayingExpanded.svelte');
+      NowPlayingExpanded = module.default;
+    }
+    isExpandedOpen = true;
+  }
+
+  function closeExpandedNowPlaying() {
+    isExpandedOpen = false;
+  }
 </script>
 
 <div class="nowplaying">
   <!-- Left: art + info -->
   <div class="np-left">
-    <div class="np-art">
+    <button class="np-art np-art-btn" type="button" on:click={openExpandedNowPlaying} title="Open expanded now playing">
       {#if track?.cover_art_path}
         <img src={coverSrc(track.cover_art_path)} alt="cover" />
       {:else}
         <div class="np-art-ph">🎵</div>
       {/if}
-    </div>
+    </button>
     <div class="np-info">
       <div class="np-title">{track?.title ?? '—'}</div>
       <div class="np-artist">{track?.artist ?? 'No track playing'}</div>
@@ -190,6 +204,10 @@
   </div>
 </div>
 
+{#if NowPlayingExpanded}
+  <svelte:component this={NowPlayingExpanded} open={isExpandedOpen} onClose={closeExpandedNowPlaying} />
+{/if}
+
 <style>
 .nowplaying {
   display: grid;
@@ -204,6 +222,8 @@
 .np-art  { width: 44px; height: 44px; flex-shrink: 0; border-radius: 5px; overflow: hidden; background: var(--bg-card); box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
 .np-art img { width: 100%; height: 100%; object-fit: cover; }
 .np-art-ph  { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: var(--text-muted); }
+.np-art-btn { border: none; padding: 0; cursor: pointer; }
+.np-art-btn:hover { filter: brightness(1.08); }
 .np-info    { overflow: hidden; }
 .np-title   { font-weight: 600; font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); }
 .np-artist  { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }

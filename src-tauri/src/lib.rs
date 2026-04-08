@@ -108,13 +108,13 @@ fn register_tray_menu(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>
                     }
                 }
                 "play_pause" => {
-                    let _ = commands::player::player_toggle(state);
+                    let _ = commands::player::player_toggle(app.clone(), state);
                 }
                 "next" => {
-                    let _ = commands::player::player_next(state);
+                    let _ = commands::player::player_next(app.clone(), state);
                 }
                 "prev" => {
-                    let _ = commands::player::player_prev(state);
+                    let _ = commands::player::player_prev(app.clone(), state);
                 }
                 "quit" => {
                     app.exit(0);
@@ -156,11 +156,11 @@ fn register_media_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::
 
                 let state = app.state::<AppState>();
                 if shortcut.matches(Modifiers::empty(), Code::MediaPlayPause) {
-                    let _ = commands::player::player_toggle(state);
+                    let _ = commands::player::player_toggle(app.clone(), state);
                 } else if shortcut.matches(Modifiers::empty(), Code::MediaTrackNext) {
-                    let _ = commands::player::player_next(state);
+                    let _ = commands::player::player_next(app.clone(), state);
                 } else if shortcut.matches(Modifiers::empty(), Code::MediaTrackPrevious) {
-                    let _ = commands::player::player_prev(state);
+                    let _ = commands::player::player_prev(app.clone(), state);
                 }
             })
             .build(),
@@ -231,8 +231,11 @@ pub fn run() {
             commands::library::get_albums,
             commands::library::get_album_tracks,
             commands::library::get_artists,
+            commands::library::get_artist_gap,
             commands::library::get_track_count,
             commands::library::get_track_identity_context,
+            commands::library::get_most_played_tracks,
+            commands::library::get_collection_stats,
             commands::queue::get_queue,
             commands::queue::clear_queue,
             commands::queue::add_to_queue,

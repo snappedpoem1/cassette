@@ -4,7 +4,8 @@ use crate::director::models::{
 };
 use crate::identity::{normalize_artist_identity, normalize_identity_text};
 use crate::models::{
-    Album, Artist, LibraryRoot, Playlist, PlaylistItem, QueueItem, SpotifyAlbumHistory, Track,
+    Album, Artist, CollectionStats, LibraryRoot, Playlist, PlaylistItem, QueueItem,
+    SpotifyAlbumHistory, Track,
 };
 use crate::Result;
 use chrono::{Duration, Utc};
@@ -884,6 +885,112 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Returns tracks ordered by play_count descending.
+    /// Result count is capped at 100 to keep this query bounded.
+    pub fn get_most_played_tracks(&self, limit: u32) -> Result<Vec<Track>> {
+        let effective_limit = i64::from(limit.clamp(1, 100));
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
+                   duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
+            FROM tracks
+            WHERE play_count > 0
+            ORDER BY play_count DESC, datetime(last_played) DESC, id DESC
+            LIMIT ?1
+        ",
+        )?;
+        let rows = stmt.query_map(params![effective_limit], Self::row_to_track)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_collection_stats(&self) -> Result<CollectionStats> {
+        let total_tracks = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))?;
+        let total_albums = self.conn.query_row(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM tracks GROUP BY album_artist, album)",
+            [],
+            |row| row.get(0),
+        )?;
+        let total_duration_secs = self.conn.query_row(
+            "SELECT COALESCE(SUM(duration_secs), 0.0) FROM tracks",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut by_format = HashMap::new();
+        let mut format_stmt = self.conn.prepare(
+            "SELECT COALESCE(NULLIF(LOWER(TRIM(format)), ''), 'unknown') AS key, COUNT(*)
+             FROM tracks
+             GROUP BY key",
+        )?;
+        let format_rows = format_stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in format_rows {
+            let (key, count) = row?;
+            by_format.insert(key, count);
+        }
+
+        let mut by_decade = HashMap::new();
+        let mut decade_stmt = self.conn.prepare(
+            "SELECT CASE
+                        WHEN year IS NULL OR year < 1000 THEN 'unknown'
+                        ELSE printf('%ds', (year / 10) * 10)
+                    END AS key,
+                    COUNT(*)
+             FROM tracks
+             GROUP BY key",
+        )?;
+        let decade_rows = decade_stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in decade_rows {
+            let (key, count) = row?;
+            by_decade.insert(key, count);
+        }
+
+        let mut by_quality_tier = HashMap::new();
+        let mut quality_stmt = self.conn.prepare(
+            "SELECT COALESCE(NULLIF(LOWER(TRIM(quality_tier)), ''), 'unknown') AS key, COUNT(*)
+             FROM tracks
+             GROUP BY key",
+        )?;
+        let quality_rows = quality_stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in quality_rows {
+            let (key, count) = row?;
+            by_quality_tier.insert(key, count);
+        }
+
+        let lossless_count = self.conn.query_row(
+            "SELECT COUNT(*) FROM tracks
+             WHERE LOWER(TRIM(format)) IN ('flac', 'alac', 'wav', 'aiff', 'ape', 'wv', 'dsf', 'dff')",
+            [],
+            |row| row.get(0),
+        )?;
+        let hires_count = self.conn.query_row(
+            "SELECT COUNT(*) FROM tracks
+             WHERE COALESCE(sample_rate, 0) > 48000 OR COALESCE(bit_depth, 0) > 16",
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(CollectionStats {
+            total_tracks,
+            total_albums,
+            total_duration_secs,
+            by_format,
+            by_decade,
+            by_quality_tier,
+            lossless_count,
+            hires_count,
+        })
+    }
+
     pub fn search_tracks(&self, query: &str) -> Result<Vec<Track>> {
         let pattern = format!("%{query}%");
         let mut stmt = self.conn.prepare(
@@ -1717,6 +1824,24 @@ impl Db {
             .prepare("SELECT MAX(imported_at) FROM spotify_album_history")?;
         let mut rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
         Ok(rows.next().transpose()?.flatten())
+    }
+
+    pub fn get_artist_spotify_gap(&self, artist: &str) -> Result<i64> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT COUNT(*)
+            FROM spotify_album_history sah
+            WHERE lower(trim(sah.artist)) = lower(trim(?1))
+              AND NOT EXISTS (
+                SELECT 1
+                FROM tracks t
+                WHERE lower(trim(COALESCE(NULLIF(t.album_artist, ''), t.artist))) = lower(trim(sah.artist))
+                  AND lower(trim(t.album)) = lower(trim(sah.album))
+              )
+        ",
+        )?;
+        let gap = stmt.query_row(params![artist], |row| row.get::<_, i64>(0))?;
+        Ok(gap)
     }
 
     pub fn save_director_task_result(
@@ -4712,6 +4837,60 @@ mod tests {
     }
 
     #[test]
+    fn get_artist_spotify_gap_counts_only_missing_albums() {
+        let db_path = temp_db_path("artist-spotify-gap");
+        let db = Db::open(&db_path).expect("db should open");
+
+        db.upsert_spotify_album_history("The National", "Boxer", 3_600_000, 12)
+            .expect("spotify history insert should succeed");
+        db.upsert_spotify_album_history("THE NATIONAL", "High Violet", 3_600_000, 10)
+            .expect("spotify history insert should succeed");
+        db.upsert_spotify_album_history("The National", "Trouble Will Find Me", 3_600_000, 8)
+            .expect("spotify history insert should succeed");
+
+        db.conn
+            .execute(
+                "INSERT INTO tracks (path, title, artist, album, album_artist, duration_secs, file_size, format)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    "/test/boxer.flac",
+                    "Fake Empire",
+                    "The National",
+                    "Boxer",
+                    "the national",
+                    240.0_f64,
+                    1_024_000_i64,
+                    "flac",
+                ],
+            )
+            .expect("insert track should succeed");
+
+        db.conn
+            .execute(
+                "INSERT INTO tracks (path, title, artist, album, album_artist, duration_secs, file_size, format)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    "/test/high-violet.flac",
+                    "Terrible Love",
+                    "The National",
+                    "High Violet",
+                    "",
+                    240.0_f64,
+                    1_024_000_i64,
+                    "flac",
+                ],
+            )
+            .expect("insert track should succeed");
+
+        let gap = db
+            .get_artist_spotify_gap("the national")
+            .expect("artist gap query should succeed");
+        assert_eq!(gap, 1);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
     fn test_get_recently_finalized_tracks() {
         let db_path = temp_db_path("recently-finalized-tracks");
         let db = Db::open(&db_path).expect("db should open");
@@ -4738,6 +4917,51 @@ mod tests {
             .expect("recent tracks query should succeed");
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].title, "Test Track");
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_get_most_played_tracks() {
+        let db_path = temp_db_path("most-played-tracks");
+        let db = Db::open(&db_path).expect("db should open");
+
+        db.conn
+            .execute(
+                "INSERT INTO tracks (path, title, artist, album, album_artist, duration_secs, file_size, format, play_count)
+                 VALUES ('/a.flac', 'A', 'Art', 'Alb', 'Art', 180.0, 1024, 'flac', 5)",
+                [],
+            )
+            .expect("insert track should succeed");
+
+        let top = db
+            .get_most_played_tracks(10)
+            .expect("most played query should succeed");
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].title, "A");
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_get_collection_stats() {
+        let db_path = temp_db_path("collection-stats");
+        let db = Db::open(&db_path).expect("db should open");
+
+        db.conn
+            .execute(
+                "INSERT INTO tracks (path, title, artist, album, album_artist, duration_secs, file_size, format, year)
+                 VALUES ('/a.flac', 'A', 'Art', 'Alb', 'Art', 180.0, 1024, 'flac', 1995)",
+                [],
+            )
+            .expect("insert track should succeed");
+
+        let stats = db
+            .get_collection_stats()
+            .expect("collection stats query should succeed");
+        assert_eq!(stats.total_tracks, 1);
+        assert!(stats.by_format.contains_key("flac"));
+        assert!(stats.by_decade.contains_key("1990s"));
 
         let _ = fs::remove_file(db_path);
     }

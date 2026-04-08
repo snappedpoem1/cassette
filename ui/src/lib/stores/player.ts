@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
-import { listen } from '@tauri-apps/api/event';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api, type PlaybackState, type NowPlayingContext } from '$lib/api/tauri';
 import { browser } from '$app/environment';
 import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
@@ -38,10 +38,35 @@ export const progressPct = derived(
 // ── Poll loop ─────────────────────────────────────────────────────────────────
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let unlistenPlayerEvent: UnlistenFn | null = null;
 let lastTrackId: number | null = null;
 let lastTaskbarSignature: string | null = null;
 const scrobbledTrackIds = new Set<number>();
 const failedScrobbleTrackIds = new Set<number>();
+
+async function syncStateSideEffects(state: PlaybackState): Promise<void> {
+  void syncTaskbarPlaybackProgress(state);
+  void maybeScrobbleToLastfm(state);
+
+  const track = state.current_track;
+  if (track && track.id !== lastTrackId) {
+    lastTrackId = track.id;
+    failedScrobbleTrackIds.delete(track.id);
+    try {
+      const ctx = await api.getNowPlayingContext(
+        track.artist,
+        track.title,
+        track.album || undefined
+      );
+      nowPlayingContext.set(ctx);
+    } catch {
+      nowPlayingContext.set(null);
+    }
+  } else if (!track) {
+    lastTrackId = null;
+    nowPlayingContext.set(null);
+  }
+}
 
 function lastfmScrobbleThresholdSecs(durationSecs: number): number {
   const halfTrack = durationSecs > 0 ? durationSecs * 0.5 : 120;
@@ -119,27 +144,7 @@ export function startPlayerPoll() {
     try {
       const state = await api.getPlaybackState();
       playbackState.set(state);
-      void syncTaskbarPlaybackProgress(state);
-      void maybeScrobbleToLastfm(state);
-
-      const track = state.current_track;
-      if (track && track.id !== lastTrackId) {
-        lastTrackId = track.id;
-        failedScrobbleTrackIds.delete(track.id);
-        try {
-          const ctx = await api.getNowPlayingContext(
-            track.artist,
-            track.title,
-            track.album || undefined
-          );
-          nowPlayingContext.set(ctx);
-        } catch {
-          nowPlayingContext.set(null);
-        }
-      } else if (!track) {
-        lastTrackId = null;
-        nowPlayingContext.set(null);
-      }
+      void syncStateSideEffects(state);
     } catch {
       // backend not ready
     }
@@ -150,6 +155,30 @@ export function stopPlayerPoll() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+}
+
+export async function startPlayerEventListener() {
+  if (!browser || unlistenPlayerEvent) {
+    return;
+  }
+
+  unlistenPlayerEvent = await listen<PlaybackState>('playback_state_changed', (event) => {
+    const incoming = event.payload;
+    const seeking = get(isSeeking);
+
+    playbackState.update((current) =>
+      seeking ? { ...incoming, position_secs: current.position_secs } : incoming
+    );
+
+    void syncStateSideEffects(incoming);
+  });
+}
+
+export function stopPlayerEventListener() {
+  if (unlistenPlayerEvent) {
+    unlistenPlayerEvent();
+    unlistenPlayerEvent = null;
   }
 }
 

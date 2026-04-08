@@ -56,6 +56,18 @@ pub struct Artist {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CollectionStats {
+    pub total_tracks: i64,
+    pub total_albums: i64,
+    pub total_duration_secs: f64,
+    pub by_format: std::collections::HashMap<String, i64>,
+    pub by_decade: std::collections::HashMap<String, i64>,
+    pub by_quality_tier: std::collections::HashMap<String, i64>,
+    pub lossless_count: i64,
+    pub hires_count: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LibraryRoot {
     pub id: i64,
     pub path: String,

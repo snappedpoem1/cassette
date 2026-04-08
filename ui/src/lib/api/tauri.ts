@@ -36,6 +36,17 @@ export interface TrackIdentityContext {
   edition_markers: string[];
 }
 
+export interface CollectionStats {
+  total_tracks: number;
+  total_albums: number;
+  total_duration_secs: number;
+  by_format: Record<string, number>;
+  by_decade: Record<string, number>;
+  by_quality_tier: Record<string, number>;
+  lossless_count: number;
+  hires_count: number;
+}
+
 export interface Album {
   id: number;
   title: string;
@@ -610,6 +621,8 @@ export const api = {
   removeLibraryRoot: (path: string) => invoke<void>('remove_library_root', { path }),
   scanLibrary: () => invoke<number>('scan_library'),
   getTracks: (limit = 500, offset = 0) => invoke<Track[]>('get_tracks', { limit, offset }),
+  getMostPlayedTracks: (limit?: number) => invoke<Track[]>('get_most_played_tracks', { limit }),
+  getCollectionStats: () => invoke<CollectionStats>('get_collection_stats'),
   getRecentlyFinalizedTracks: (days?: number) =>
     invoke<Track[]>('get_recently_finalized_tracks', { days }),
   getTrackIdentityContext: (trackId: number) =>
@@ -619,6 +632,7 @@ export const api = {
   getAlbumTracks: (artist: string, album: string) =>
     invoke<Track[]>('get_album_tracks', { artist, album }),
   getArtists: () => invoke<Artist[]>('get_artists'),
+  getArtistGap: (artist: string) => invoke<number>('get_artist_gap', { artist }),
   getTrackCount: () => invoke<number>('get_track_count'),
 
   // Player

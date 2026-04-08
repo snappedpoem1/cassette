@@ -4,7 +4,7 @@ use cassette_core::librarian::enrich::discogs::DiscogsClient;
 use cassette_core::librarian::enrich::lastfm::LastFmClient;
 use cassette_core::models::{NowPlayingContext, PlaybackState};
 use chrono::{Duration, NaiveDateTime, Utc};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 const LYRICS_CACHE_TTL_DAYS: i64 = 30;
 const LYRICS_PREFETCH_PLAYBACK_LIMIT: usize = 12;
@@ -12,60 +12,72 @@ const LYRICS_PREFETCH_FINALIZED_LIMIT: usize = 12;
 const LYRICS_PREFETCH_MAX_ITEMS: usize = 4;
 const LYRICS_PREFETCH_TIMEOUT_SECS: u64 = 6;
 
+fn emit_playback_state(app: &AppHandle, state: &AppState) {
+    let mut ps = state.playback_state.lock().unwrap().clone();
+    ps.position_secs = state.player.position_secs();
+    ps.duration_secs = state.player.duration_secs();
+    ps.is_playing = state.player.is_playing();
+    ps.volume = state.player.volume();
+
+    if let Err(error) = app.emit("playback_state_changed", &ps) {
+        tracing::warn!("[emit_playback_state] failed to emit playback state: {error}");
+    }
+}
+
 #[tauri::command]
-pub fn player_load(state: State<'_, AppState>, path: String) {
+pub fn player_load(app: AppHandle, state: State<'_, AppState>, path: String) {
     state.player.load(path.clone());
     let db = state.db.lock().unwrap();
     if let Ok(Some(t)) = db.get_track_by_path(&path) {
         let mut ps = state.playback_state.lock().unwrap();
         ps.current_track = Some(t);
     }
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
-pub fn player_play(state: State<'_, AppState>) {
+pub fn player_play(app: AppHandle, state: State<'_, AppState>) {
     let was_playing = state.player.is_playing();
     state.player.play();
 
-    if was_playing || state.player.position_secs() > 1.0 {
-        return;
+    if !was_playing && state.player.position_secs() <= 1.0 {
+        let current_track = {
+            let ps = state.playback_state.lock().unwrap();
+            ps.current_track.clone()
+        };
+        if let Some(track) = current_track {
+            let db = state.db.lock().unwrap();
+            if let Err(error) = db.increment_play_count(track.id) {
+                tracing::warn!(
+                    "[player_play] failed to increment play count for track {}: {error}",
+                    track.id
+                );
+            }
+            if let Err(error) = db.record_play_history_event(
+                "local_playback",
+                &track.artist,
+                &track.title,
+                Some(&track.album),
+                None,
+                Some(track.id),
+            ) {
+                tracing::warn!(
+                    "[player_play] failed to record play-history event for track {}: {error}",
+                    track.id
+                );
+            }
+        }
+
+        spawn_lyrics_prefetch_lane(state.clone());
     }
 
-    let current_track = {
-        let ps = state.playback_state.lock().unwrap();
-        ps.current_track.clone()
-    };
-    let Some(track) = current_track else {
-        return;
-    };
-
-    let db = state.db.lock().unwrap();
-    if let Err(error) = db.increment_play_count(track.id) {
-        tracing::warn!(
-            "[player_play] failed to increment play count for track {}: {error}",
-            track.id
-        );
-    }
-    if let Err(error) = db.record_play_history_event(
-        "local_playback",
-        &track.artist,
-        &track.title,
-        Some(&track.album),
-        None,
-        Some(track.id),
-    ) {
-        tracing::warn!(
-            "[player_play] failed to record play-history event for track {}: {error}",
-            track.id
-        );
-    }
-
-    spawn_lyrics_prefetch_lane(state.clone());
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
-pub fn player_pause(state: State<'_, AppState>) {
+pub fn player_pause(app: AppHandle, state: State<'_, AppState>) {
     state.player.pause();
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
@@ -77,12 +89,13 @@ pub fn player_stop(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub fn player_toggle(state: State<'_, AppState>) {
+pub fn player_toggle(app: AppHandle, state: State<'_, AppState>) {
     state.player.toggle();
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
-pub fn player_next(state: State<'_, AppState>) {
+pub fn player_next(app: AppHandle, state: State<'_, AppState>) {
     let was_playing = state.player.is_playing();
     let db = state.db.lock().unwrap();
     let queue = db.get_queue().unwrap_or_default();
@@ -120,10 +133,11 @@ pub fn player_next(state: State<'_, AppState>) {
             spawn_lyrics_prefetch_lane(state.clone());
         }
     }
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
-pub fn player_prev(state: State<'_, AppState>) {
+pub fn player_prev(app: AppHandle, state: State<'_, AppState>) {
     let queue = state.db.lock().unwrap().get_queue().unwrap_or_default();
     let prev_pos = {
         let ps = state.playback_state.lock().unwrap();
@@ -140,18 +154,21 @@ pub fn player_prev(state: State<'_, AppState>) {
             ps.queue_position = prev_pos;
         }
     }
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
-pub fn player_set_volume(state: State<'_, AppState>, volume: f32) {
+pub fn player_set_volume(app: AppHandle, state: State<'_, AppState>, volume: f32) {
     state.player.set_volume(volume);
     let mut ps = state.playback_state.lock().unwrap();
     ps.volume = volume;
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]
-pub fn player_seek(state: State<'_, AppState>, secs: f64) {
+pub fn player_seek(app: AppHandle, state: State<'_, AppState>, secs: f64) {
     state.player.seek(secs);
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]

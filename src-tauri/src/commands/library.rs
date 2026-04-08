@@ -2,7 +2,7 @@ use crate::state::AppState;
 use cassette_core::{
     db::TrackIdentityContext,
     library::Scanner,
-    models::{Album, Artist, LibraryRoot, ScanProgress, Track},
+    models::{Album, Artist, CollectionStats, LibraryRoot, ScanProgress, Track},
 };
 use tauri::{Emitter, State, Window};
 
@@ -102,6 +102,16 @@ pub fn get_artists(state: State<'_, AppState>) -> Vec<Artist> {
 }
 
 #[tauri::command]
+pub fn get_artist_gap(state: State<'_, AppState>, artist: String) -> i64 {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_artist_spotify_gap(&artist)
+        .unwrap_or(0)
+}
+
+#[tauri::command]
 pub fn get_track_count(state: State<'_, AppState>) -> i64 {
     state.db.lock().unwrap().get_track_count().unwrap_or(0)
 }
@@ -117,6 +127,26 @@ pub fn get_track_identity_context(
         .unwrap()
         .get_track_identity_context(track_id)
         .unwrap_or(None)
+}
+
+#[tauri::command]
+pub fn get_most_played_tracks(state: State<'_, AppState>, limit: Option<u32>) -> Vec<Track> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_most_played_tracks(limit.unwrap_or(25))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_collection_stats(state: State<'_, AppState>) -> CollectionStats {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_collection_stats()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
