@@ -2,6 +2,11 @@
 
 Last updated: 2026-04-04
 
+Packet 1 implementation note (2026-04-07):
+
+- `GAP-A01` and `GAP-A02` are complete.
+- Implementation contract details (rationale fields, edition object shape, test expectations) are in `PACKET_1_CONTRACT_SPEC.md`, with runtime implementation in `src-tauri/src/commands/planner.rs`.
+
 ## Goal
 
 Make acquisition intent and identity fidelity explicit end-to-end so planner decisions are edition-aware, explainable, and durable across providers.

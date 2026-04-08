@@ -5,12 +5,12 @@ pub mod test_library;
 
 use crate::director::download::batch_download;
 use crate::director::download::compute_staging_path;
+use crate::director::models::{AcquisitionStrategy, NormalizedTrack, TrackTask, TrackTaskSource};
 use crate::director::provider::Provider;
 use crate::director::providers::{DeezerProvider, QobuzProvider, SlskdProvider};
-use crate::director::sources::{
-    BandcampSource, HttpSource, LocalCacheSource, ProviderBridge, SourceProvider, SpotifySource,
-    YoutubeSource,
-};
+use crate::director::sources::{BandcampSource, HttpSource, LocalCacheSource, SourceProvider, SpotifySource, YoutubeSource};
+use crate::director::strategy::StrategyPlanner;
+use crate::director::temp::TempManager;
 use crate::director::DirectorConfig;
 use crate::gatekeeper::GatekeeperConfig;
 use crate::librarian::models::DesiredTrack;
@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct ValidationConfig {
@@ -694,7 +695,10 @@ fn build_sources(
         slskd_config,
         vec![setup.test_library.clone(), setup.test_staging.clone()],
     ));
-    providers.push(Arc::new(ProviderBridge::new(slskd, &director_config)));
+    providers.push(Arc::new(ValidationProviderSourceAdapter::new(
+        slskd,
+        &director_config,
+    )));
 
     // Qobuz & Deezer: load credentials from env, log registration status.
     let remote_config = RemoteProviderConfig::from_env();
@@ -702,7 +706,10 @@ fn build_sources(
     let has_qobuz = remote_config.qobuz_app_id.is_some() && remote_config.qobuz_email.is_some();
     if has_qobuz {
         let qobuz: Arc<dyn Provider> = Arc::new(QobuzProvider::new(remote_config.clone()));
-        providers.push(Arc::new(ProviderBridge::new(qobuz, &director_config)));
+        providers.push(Arc::new(ValidationProviderSourceAdapter::new(
+            qobuz,
+            &director_config,
+        )));
         println!(
             "[sources] Qobuz provider registered (email={})",
             remote_config.qobuz_email.as_deref().unwrap_or("?")
@@ -726,7 +733,10 @@ fn build_sources(
     let has_deezer = remote_config.deezer_arl.is_some();
     if has_deezer {
         let deezer: Arc<dyn Provider> = Arc::new(DeezerProvider::new(remote_config));
-        providers.push(Arc::new(ProviderBridge::new(deezer, &director_config)));
+        providers.push(Arc::new(ValidationProviderSourceAdapter::new(
+            deezer,
+            &director_config,
+        )));
         println!("[sources] Deezer provider registered (ARL present)");
     } else {
         println!("[sources] Deezer SKIPPED — DEEZER_ARL not set");
@@ -740,6 +750,155 @@ fn build_sources(
     );
 
     providers
+}
+
+struct ValidationProviderSourceAdapter {
+    provider: Arc<dyn Provider>,
+    config: DirectorConfig,
+    name: &'static str,
+}
+
+impl ValidationProviderSourceAdapter {
+    fn new(provider: Arc<dyn Provider>, config: &DirectorConfig) -> Self {
+        let descriptor = provider.descriptor();
+        let name: &'static str = Box::leak(descriptor.id.clone().into_boxed_str());
+        Self {
+            provider,
+            config: config.clone(),
+            name,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SourceProvider for ValidationProviderSourceAdapter {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn can_handle(&self, _track: &DesiredTrack) -> bool {
+        let desc = self.provider.descriptor();
+        desc.capabilities.supports_search && desc.capabilities.supports_download
+    }
+
+    async fn resolve_download_url(
+        &self,
+        track: &DesiredTrack,
+    ) -> std::result::Result<crate::director::sources::ResolvedTrack, crate::director::sources::SourceError> {
+        let task = desired_track_to_task(track);
+        let planner = StrategyPlanner;
+        let strategy = planner.plan(&task, &[self.provider.descriptor()], &self.config);
+
+        let candidates = self
+            .provider
+            .search(&task, &strategy)
+            .await
+            .map_err(|e| crate::director::sources::SourceError::ApiError(format!("{}: {}", self.name, e)))?;
+
+        let best = candidates.first().ok_or_else(|| {
+            crate::director::sources::SourceError::NotAvailable(format!(
+                "{}: no candidates for {} - {}",
+                self.name, track.artist_name, track.track_title
+            ))
+        })?;
+
+        let temp_root = self.config.temp_root.join("validation_adapter");
+        let temp_manager = TempManager::new(temp_root, self.config.temp_recovery.clone());
+        let task_id = Uuid::new_v4().to_string();
+        let temp_context = temp_manager
+            .prepare_task(&task_id)
+            .await
+            .map_err(|e| crate::director::sources::SourceError::ApiError(format!("temp setup: {e}")))?;
+
+        let acquisition = self
+            .provider
+            .acquire(&task, best, &temp_context, &strategy)
+            .await
+            .map_err(|e| {
+                crate::director::sources::SourceError::ApiError(format!(
+                    "{}: acquire failed: {}",
+                    self.name, e
+                ))
+            })?;
+
+        let file_url = format!("file://{}", acquisition.temp_path.to_string_lossy());
+
+        let codec = acquisition
+            .extension_hint
+            .clone()
+            .or_else(|| best.extension_hint.clone());
+        let bitrate = best.bitrate_kbps;
+
+        Ok(crate::director::sources::ResolvedTrack {
+            download_url: file_url,
+            suggested_filename: acquisition
+                .temp_path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("acquired.bin")
+                .to_string(),
+            expected_codec: codec,
+            expected_bitrate: bitrate,
+            expected_duration_ms: track.duration_ms.map(|v| v as u64),
+            metadata: serde_json::json!({
+                "source": self.name,
+                "provider_candidate_id": best.provider_candidate_id,
+                "metadata_confidence": best.metadata_confidence,
+                "artist": best.artist,
+                "title": best.title,
+                "album": best.album,
+            }),
+        })
+    }
+
+    async fn check_availability(
+        &self,
+        track: &DesiredTrack,
+    ) -> std::result::Result<bool, crate::director::sources::SourceError> {
+        let task = desired_track_to_task(track);
+        let planner = StrategyPlanner;
+        let strategy = planner.plan(&task, &[self.provider.descriptor()], &self.config);
+
+        match self.provider.search(&task, &strategy).await {
+            Ok(candidates) => Ok(!candidates.is_empty()),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+fn desired_track_to_task(track: &DesiredTrack) -> TrackTask {
+    TrackTask {
+        task_id: format!("validation-{}", track.id),
+        source: track
+            .source_track_id
+            .as_ref()
+            .filter(|id| id.starts_with("spotify:"))
+            .map(|_| TrackTaskSource::SpotifyLibrary)
+            .unwrap_or(TrackTaskSource::Manual),
+        desired_track_id: Some(track.id),
+        source_operation_id: None,
+        target: NormalizedTrack {
+            spotify_track_id: track.source_track_id.clone(),
+            source_album_id: track.source_album_id.clone(),
+            source_artist_id: track.source_artist_id.clone(),
+            source_playlist: None,
+            artist: track.artist_name.clone(),
+            album_artist: None,
+            title: track.track_title.clone(),
+            album: track.album_title.clone(),
+            track_number: track.track_number.map(|v| v as u32),
+            disc_number: track.disc_number.map(|v| v as u32),
+            year: None,
+            duration_secs: track.duration_ms.map(|v| v as f64 / 1000.0),
+            isrc: track.isrc.clone(),
+            musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+        },
+        strategy: AcquisitionStrategy::Standard,
+    }
 }
 
 fn build_gatekeeper_entries(

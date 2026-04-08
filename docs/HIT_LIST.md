@@ -11,6 +11,16 @@ For full context and acceptance details, see `TODO.md` and `PROJECT_STATE.md`.
 
 Current audited backlog shape:
 
+- [x] Packet 1 complete (`GAP-A01`, `GAP-A02`, `GAP-B01`, `GAP-C01`) - completed 2026-04-07, evidence in `docs/PACKET_1_EXECUTION_LOG.md`
+- [x] Packet 2 Lane B complete (`GAP-B02`, `GAP-B03`) - completed 2026-04-07, evidence in `docs/PACKET_2_EXECUTION_LOG.md`
+- [x] Packet 2 Lane A complete (`GAP-A03`, `GAP-A04`) - completed 2026-04-07, evidence in `docs/PACKET_2_EXECUTION_LOG.md`
+- [x] Packet 2 Lane C complete (`GAP-C02`, `GAP-C03`, `GAP-C04`) - completed 2026-04-07, evidence in `docs/PACKET_2_EXECUTION_LOG.md` and `docs/LANE_C_PROBE_RUNBOOK.md`
+- [x] Packet 3 Lane D complete (`GAP-D01`, `GAP-D02`, `GAP-D03`) - completed 2026-04-07, evidence in `docs/PACKET_3_EXECUTION_LOG.md`
+- [x] Packet 3 Lane E complete (`GAP-E01`, `GAP-E02`, `GAP-E03`) - completed 2026-04-07, evidence in `docs/PACKET_3_EXECUTION_LOG.md` and `scripts/check_docs_state.ps1`
+- [x] Post-packet Lane B follow-on complete (`GAP-B04`) - completed 2026-04-07, evidence in `src-tauri/src/commands/planner.rs` and `docs/OPEN_GAPS_EXECUTION_BOARD.md`
+- [x] Post-packet planner explainability tightening complete - completed 2026-04-07, evidence in `src-tauri/src/commands/planner.rs` and `docs/PROJECT_INDEX.md`
+- [x] Post-packet provider reliability cadence hardening complete - completed 2026-04-07, evidence in `scripts/capture_provider_reliability_snapshot.ps1`, `docs/LANE_C_PROBE_RUNBOOK.md`, and `docs/PROVIDER_EVIDENCE_LEDGER.md`
+
 - [x] 51 completed items
 - [x] 0 remaining items on legacy stage board (active remaining work tracked in `docs/WORK_ORDER_REMAINING.md`)
 - [x] Green verification snapshot recorded on 2026-03-30

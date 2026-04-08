@@ -187,13 +187,14 @@ export async function refreshBacklogStatus() {
   }
 }
 
-export async function startBacklogRun(batchSize?: number, limit?: number) {
-  try {
-    const status = await api.startBacklogRun(batchSize, limit);
-    backlogStatus.set(status);
-  } catch (e) {
-    console.error('startBacklogRun failed:', e);
-  }
+export async function startBacklogRun(
+  batchSize?: number,
+  limit?: number,
+  operatorDirectSubmit?: boolean,
+) {
+  const status = await api.startBacklogRun(batchSize, limit, operatorDirectSubmit);
+  backlogStatus.set(status);
+  return status;
 }
 
 export async function stopBacklogRun() {

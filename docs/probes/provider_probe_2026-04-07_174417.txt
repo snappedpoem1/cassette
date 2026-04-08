@@ -1,0 +1,18 @@
+﻿cargo.exe :     Finished `dev` profile [unoptimized + debuginfo] target(s) in 
+0.53s
+At C:\Cassette Music\scripts\capture_provider_reliability_snapshot.ps1:25 
+char:24
++ ... erProbeOutput = & cargo run -p cassette --bin provider_probe_cli 2>&1
++                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `d...get(s) in 0.53s 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Running `target\debug\provider_probe_cli.exe`
+provider   status detail
+slskd      FAIL   daemon reachable but credentials rejected (HTTP 403)
+qobuz      FAIL   auth refresh failed after retrying 2 credential mode(s); stale token cleared
+deezer     OK     search OK (1 album result(s) in probe)
+spotify    SKIP   token and client credentials missing
+usenet     SKIP   nzbgeek_api_key and/or usenet_host missing
+yt-dlp     OK     installed (2026.03.17)

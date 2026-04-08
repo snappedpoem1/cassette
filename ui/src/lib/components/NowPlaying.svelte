@@ -3,7 +3,6 @@
   import { api } from '$lib/api/tauri';
   import { playbackState, isPlaying, progressPct, isSeeking, seekPreview, player, nowPlayingContext } from '$lib/stores/player';
   import { loadQueue } from '$lib/stores/queue';
-  import PlaybackVisualizer from '$lib/components/PlaybackVisualizer.svelte';
   import { formatDuration, coverSrc, clamp } from '$lib/utils';
 
   let seekBarEl: HTMLDivElement;
@@ -14,6 +13,7 @@
   let visualizerMode: 'waveform' | 'spectrum' | 'milkdrop' = 'spectrum';
   let visualizerPreset = '';
   let visualizerFpsCap = 30;
+  let PlaybackVisualizer: typeof import('$lib/components/PlaybackVisualizer.svelte').default | null = null;
 
   onMount(async () => {
     try {
@@ -37,6 +37,9 @@
       visualizerPreset = '';
       visualizerFpsCap = 30;
     }
+
+    const module = await import('$lib/components/PlaybackVisualizer.svelte');
+    PlaybackVisualizer = module.default;
   });
 
   function getSeekPct(e: MouseEvent): number {
@@ -125,8 +128,8 @@
       </button>
       <button class="ctrl-btn" on:click={handleNext} title="Next">⏭</button>
     </div>
-    {#if visualizerEnabled}
-      <PlaybackVisualizer
+    {#if visualizerEnabled && PlaybackVisualizer}
+      <svelte:component this={PlaybackVisualizer}
         positionSecs={pos}
         durationSecs={dur}
         isPlaying={$isPlaying}

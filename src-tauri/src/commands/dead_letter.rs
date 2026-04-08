@@ -50,7 +50,7 @@ pub async fn replay_dead_letter(
     let approved = planner::approve_planned_request(
         state,
         planned.request.id,
-        Some("dead_letter_replay".to_string()),
+        Some("dead_letter_replay approve_low_trust".to_string()),
         None,
     )
     .await?;

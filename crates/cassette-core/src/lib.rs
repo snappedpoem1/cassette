@@ -27,9 +27,6 @@ pub mod acquisition;
 pub mod custodian;
 pub mod db;
 pub mod director;
-/// Compatibility-only provider settings/config surface.
-/// Runtime acquisition ownership lives under `director/providers/`.
-pub mod downloader;
 pub mod gatekeeper;
 pub mod identity;
 pub mod librarian;

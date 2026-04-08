@@ -332,11 +332,11 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 - The active runtime acquisition flow lives in Director, not the older `downloader/` path.
 - Keeping that ambiguous makes hardening work land in the wrong place and confuses future agents.
-- `downloader/` now exists only as a compatibility re-export for provider-settings types, not as a second runtime acquisition lane.
+- The legacy `downloader/` compatibility module and `ProviderBridge` adapter were retired in GAP-D03 (2026-04-07).
 
 **Tradeoffs**:
 
-- Some legacy modules remain in-tree until cleanup lands
+- Validation needed a local adapter replacement before compatibility-module deletion
 - Requires docs and future deletion/marking work
 
 **Revisit Condition**:
@@ -795,7 +795,7 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Tradeoffs**:
 
 - Desktop startup now owns one more child-process lifecycle and one more place where local machine state can fail.
-- The smoke script still checks port `5030` independently, so it does not yet prove the managed-runtime path by itself.
+- Smoke verification now uses the managed runtime probe path (`slskd_runtime_probe_cli`) and no longer relies on a standalone port-5030 socket check.
 
 **Revisit Condition**:
 

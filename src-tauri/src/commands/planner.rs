@@ -16,6 +16,7 @@ use cassette_core::director::DirectorProgress;
 use cassette_core::librarian::models::AcquisitionRequestRow;
 use chrono::{NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::State;
@@ -31,11 +32,20 @@ const EDITION_MARKERS: &[&str] = &[
     "live",
 ];
 const PLANNER_EXCLUSION_MEMORY_PREFIX: &str = "planner.exclusion_memory.v1";
+const PLANNER_IDENTITY_ENVELOPE_PREFIX: &str = "planner.identity_envelope.v1";
+const LOW_TRUST_APPROVAL_TOKEN: &str = "approve_low_trust";
+const LOW_TRUST_PROVIDER_IDS: &[&str] = &["yt_dlp", "real_debrid", "tpb_apibay"];
+const PREFLIGHT_REASON_MISSING_CANDIDATE_SET: &str = "missing_candidate_set";
+const PREFLIGHT_REASON_NO_CANDIDATES: &str = "no_candidates";
+const PREFLIGHT_REASON_NO_PROVIDER_SEARCH_RECORDS: &str = "no_provider_search_records";
+const PREFLIGHT_REASON_NO_SELECTED_CANDIDATE: &str = "no_selected_candidate";
+const PREFLIGHT_VALIDATION_ERROR: &str = "validation_error:preflight_failed";
 
 #[derive(Debug, Serialize)]
 pub struct PlannedAcquisitionResult {
     pub request: AcquisitionRequestRow,
     pub identity_lane: PlannerIdentityLane,
+    pub edition: Option<EditionContext>,
     pub provider_order: Vec<String>,
     pub cached_provider_ids: Vec<String>,
     pub summary: Option<StoredCandidateSetSummary>,
@@ -60,6 +70,10 @@ pub struct PlannerIdentityLane {
 pub struct RequestRationale {
     pub request: AcquisitionRequestRow,
     pub identity_lane: PlannerIdentityLane,
+    pub identity_confidence: String,
+    pub edition_match_outcome: String,
+    pub candidate_count_considered: usize,
+    pub edition: Option<EditionContext>,
     pub timeline: Vec<cassette_core::librarian::models::AcquisitionRequestEvent>,
     pub candidate_set: Option<StoredCandidateSetSummary>,
     pub provider_searches: Vec<StoredProviderSearchRecord>,
@@ -68,8 +82,39 @@ pub struct RequestRationale {
     pub provider_response_cache: Vec<StoredProviderResponseCache>,
     pub identity_resolution_evidence: Vec<StoredIdentityResolutionEvidence>,
     pub source_aliases: Vec<StoredSourceAlias>,
+    pub preflight: ReviewPreflightResult,
     pub execution: Option<cassette_core::db::TaskExecutionSummary>,
     pub provenance: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewContract {
+    pub request: AcquisitionRequestRow,
+    pub identity_lane: PlannerIdentityLane,
+    pub edition: Option<EditionContext>,
+    pub candidate_set: Option<StoredCandidateSetSummary>,
+    pub provider_searches: Vec<StoredProviderSearchRecord>,
+    pub candidate_review: Vec<CandidateReviewItem>,
+    pub preflight: ReviewPreflightResult,
+    pub approval: ReviewApprovalPolicy,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewApprovalPolicy {
+    pub required: bool,
+    pub token: Option<String>,
+    pub low_trust_selected_providers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewPreflightResult {
+    pub passed: bool,
+    pub checked_at: String,
+    pub reason_codes: Vec<String>,
+    pub selected_candidate_count: usize,
+    pub provider_search_count: usize,
+    pub provider_success_count: usize,
+    pub candidate_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,15 +123,64 @@ struct PersistedProviderResponseEnvelope {
     candidate_records: Vec<CandidateRecord>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditionContext {
+    pub policy: Option<String>,
+    pub markers: EditionMarkers,
+    pub evidence: EditionEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditionMarkers {
+    pub is_live: bool,
+    pub is_deluxe: bool,
+    pub is_remaster: bool,
+    pub country: Option<String>,
+    pub label: Option<String>,
+    pub catalog_number: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditionEvidence {
+    pub source: String,
+    pub confidence: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SelectedAlbumsPayload {
+    targets: SelectedAlbumTargets,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SelectedAlbumTargets {
+    #[serde(default)]
+    include: Vec<AlbumTarget>,
+    #[serde(default)]
+    exclude: Vec<AlbumTarget>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AlbumTarget {
+    #[serde(default)]
+    artist: Option<String>,
+    #[serde(default)]
+    album: Option<String>,
+    #[serde(default)]
+    release_group_id: Option<String>,
+}
+
 #[tauri::command]
 pub async fn plan_acquisition(
     state: State<'_, AppState>,
     mut request: AcquisitionRequest,
 ) -> Result<PlannedAcquisitionResult, String> {
+    augment_request_payload_with_edition_context(&mut request)?;
+    augment_request_payload_with_identity_envelope(&mut request)?;
+    validate_selected_albums_grammar(&request)?;
     apply_exclusion_memory(&state, &mut request)?;
 
     if request.request_signature.is_none() {
-        request.request_signature = Some(request.request_fingerprint());
+        request.request_signature = Some(planner_identity_envelope_from_request(&request));
     }
     if request.task_id.is_none() {
         request.task_id = Some(request.effective_task_id());
@@ -182,6 +276,33 @@ pub async fn plan_acquisition(
         .await
         .map_err(|error| error.to_string())?;
 
+    let preflight = {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        let candidate_set = db
+            .get_candidate_set_summary(&task.task_id)
+            .map_err(|error| error.to_string())?;
+        let provider_searches = db
+            .get_provider_search_records(&task.task_id)
+            .map_err(|error| error.to_string())?;
+        let candidate_review = db
+            .get_candidate_review(&task.task_id)
+            .map_err(|error| error.to_string())?;
+        build_review_preflight_result(&candidate_set, &provider_searches, &candidate_review)
+    };
+    let preflight_payload = serde_json::to_string(&preflight).map_err(|error| error.to_string())?;
+    state
+        .control_db
+        .append_acquisition_request_event(
+            row.id,
+            request.task_id.as_deref(),
+            "review_preflight",
+            AcquisitionRequestStatus::Reviewing.as_str(),
+            Some("review preflight evaluated"),
+            Some(preflight_payload.as_str()),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
     load_planned_acquisition_result(&state, row.id, plan.provider_order, cached_provider_ids).await
 }
 
@@ -196,9 +317,12 @@ pub async fn get_candidate_set(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("request {request_id} not found"))?;
+    let edition = edition_context_from_payload(request.raw_payload_json.as_deref());
     let Some(task_id) = request.task_id.as_deref() else {
         return Ok(serde_json::json!({
             "request": request,
+            "edition": edition,
+            "preflight": null,
             "candidate_set": null,
             "provider_searches": [],
             "candidate_review": [],
@@ -206,11 +330,24 @@ pub async fn get_candidate_set(
     };
 
     let db = state.db.lock().map_err(|error| error.to_string())?;
+    let candidate_set = db
+        .get_candidate_set_summary(task_id)
+        .map_err(|error| error.to_string())?;
+    let provider_searches = db
+        .get_provider_search_records(task_id)
+        .map_err(|error| error.to_string())?;
+    let candidate_review = db
+        .get_candidate_review(task_id)
+        .map_err(|error| error.to_string())?;
+    let preflight = build_review_preflight_result(&candidate_set, &provider_searches, &candidate_review);
+
     Ok(serde_json::json!({
         "request": request,
-        "candidate_set": db.get_candidate_set_summary(task_id).map_err(|error| error.to_string())?,
-        "provider_searches": db.get_provider_search_records(task_id).map_err(|error| error.to_string())?,
-        "candidate_review": db.get_candidate_review(task_id).map_err(|error| error.to_string())?,
+        "edition": edition,
+        "preflight": preflight,
+        "candidate_set": candidate_set,
+        "provider_searches": provider_searches,
+        "candidate_review": candidate_review,
     }))
 }
 
@@ -262,9 +399,23 @@ pub async fn get_request_rationale(
     let source_aliases = db
         .get_source_aliases_for_entity("request_signature", &request.request_signature)
         .map_err(|error| error.to_string())?;
+    let rationale_preflight = latest_preflight_from_timeline(&timeline).unwrap_or_else(|| {
+        build_review_preflight_result(&candidate_set, &provider_searches, &candidate_review)
+    });
 
     Ok(RequestRationale {
         identity_lane: planner_identity_lane_from_row(&request),
+        identity_confidence: derive_identity_confidence(&request),
+        edition_match_outcome: derive_edition_match_outcome(
+            request.edition_policy.as_deref(),
+            &candidate_set,
+            &provider_searches,
+        ),
+        candidate_count_considered: candidate_set
+            .as_ref()
+            .map(|summary| summary.candidate_count)
+            .unwrap_or(0),
+        edition: edition_context_from_payload(request.raw_payload_json.as_deref()),
         request,
         timeline,
         candidate_set,
@@ -274,8 +425,66 @@ pub async fn get_request_rationale(
         provider_response_cache,
         identity_resolution_evidence,
         source_aliases,
+        preflight: rationale_preflight,
         execution,
         provenance,
+    })
+}
+
+#[tauri::command]
+pub async fn get_review_contract(
+    state: State<'_, AppState>,
+    request_id: i64,
+) -> Result<ReviewContract, String> {
+    let request = state
+        .control_db
+        .get_acquisition_request(request_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("request {request_id} not found"))?;
+
+    let (candidate_set, provider_searches, candidate_review) =
+        if let Some(task_id) = request.task_id.as_deref() {
+            let db = state.db.lock().map_err(|error| error.to_string())?;
+            (
+                db.get_candidate_set_summary(task_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_provider_search_records(task_id)
+                    .map_err(|error| error.to_string())?,
+                db.get_candidate_review(task_id)
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            (None, Vec::new(), Vec::new())
+        };
+
+    let low_trust_selected_providers = selected_low_trust_provider_ids(&candidate_review);
+    let timeline = state
+        .control_db
+        .get_acquisition_request_timeline(request_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let preflight = latest_preflight_from_timeline(&timeline).unwrap_or_else(|| {
+        build_review_preflight_result(&candidate_set, &provider_searches, &candidate_review)
+    });
+
+    Ok(ReviewContract {
+        identity_lane: planner_identity_lane_from_row(&request),
+        edition: edition_context_from_payload(request.raw_payload_json.as_deref()),
+        request,
+        candidate_set,
+        provider_searches,
+        candidate_review,
+        preflight,
+        approval: ReviewApprovalPolicy {
+            required: !low_trust_selected_providers.is_empty(),
+            token: if low_trust_selected_providers.is_empty() {
+                None
+            } else {
+                Some(LOW_TRUST_APPROVAL_TOKEN.to_string())
+            },
+            low_trust_selected_providers,
+        },
     })
 }
 
@@ -305,6 +514,49 @@ pub async fn approve_planned_request(
         ));
     }
 
+    let (candidate_set, provider_searches, review) = {
+        let db = state.db.lock().map_err(|error| error.to_string())?;
+        (
+            db.get_candidate_set_summary(&task_id)
+                .map_err(|error| error.to_string())?,
+            db.get_provider_search_records(&task_id)
+                .map_err(|error| error.to_string())?,
+            db.get_candidate_review(&task_id)
+                .map_err(|error| error.to_string())?,
+        )
+    };
+    let preflight = build_review_preflight_result(&candidate_set, &provider_searches, &review);
+    let preflight_payload = serde_json::to_string(&preflight).map_err(|error| error.to_string())?;
+    state
+        .control_db
+        .append_acquisition_request_event(
+            request.id,
+            Some(&task_id),
+            "review_preflight",
+            request.status.as_str(),
+            Some("review preflight evaluated before approval"),
+            Some(preflight_payload.as_str()),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if !preflight.passed {
+        let reasons = if preflight.reason_codes.is_empty() {
+            "unknown".to_string()
+        } else {
+            preflight.reason_codes.join(",")
+        };
+        return Err(format!(
+            "{PREFLIGHT_VALIDATION_ERROR}: approval blocked; reason_codes=[{reasons}]"
+        ));
+    }
+
+    let selected_low_trust = {
+        selected_low_trust_provider_ids(&review)
+    };
+
+    validate_low_trust_approval(note.as_deref(), &selected_low_trust)?;
+
     let remembered = remember_exclusions_for_request(
         &state,
         &request,
@@ -320,6 +572,8 @@ pub async fn approve_planned_request(
         "review_action": "approved",
         "remembered_excluded_providers": remembered,
         "memory_key": memory_key,
+        "low_trust_selected_providers": selected_low_trust,
+        "low_trust_approval_artifact": has_low_trust_approval_artifact(note.as_deref()),
     })
     .to_string();
     state
@@ -541,17 +795,7 @@ fn remember_exclusions_for_request(
 
 fn planner_exclusion_memory_key_from_request(request: &AcquisitionRequest) -> String {
     planner_exclusion_memory_key(
-        request.scope.as_str(),
-        normalize_provider_value(Some(request.artist.as_str())),
-        normalize_provider_value(request.album.as_deref()),
-        normalize_provider_value(Some(request.title.as_str())),
-        request.track_number,
-        request.disc_number,
-        request.musicbrainz_recording_id.as_deref(),
-        request.musicbrainz_release_group_id.as_deref(),
-        request.musicbrainz_release_id.as_deref(),
-        request.canonical_artist_id,
-        request.canonical_release_id,
+        planner_identity_envelope_from_request(request),
         request.quality_policy.as_deref(),
         request.edition_policy.as_deref(),
         Some(request.confirmation_policy.as_str()),
@@ -560,57 +804,22 @@ fn planner_exclusion_memory_key_from_request(request: &AcquisitionRequest) -> St
 
 fn planner_exclusion_memory_key_from_row(request: &AcquisitionRequestRow) -> String {
     planner_exclusion_memory_key(
-        request.scope.as_str(),
-        normalize_provider_value(Some(request.normalized_artist.as_str())),
-        normalize_provider_value(request.normalized_album.as_deref()),
-        normalize_provider_value(Some(request.normalized_title.as_str())),
-        request.track_number.and_then(|value| u32::try_from(value).ok()),
-        request.disc_number.and_then(|value| u32::try_from(value).ok()),
-        request.musicbrainz_recording_id.as_deref(),
-        request.musicbrainz_release_group_id.as_deref(),
-        request.musicbrainz_release_id.as_deref(),
-        request.canonical_artist_id,
-        request.canonical_release_id,
+        planner_identity_envelope_from_row(request),
         request.quality_policy.as_deref(),
         request.edition_policy.as_deref(),
         Some(request.confirmation_policy.as_str()),
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn planner_exclusion_memory_key(
-    scope: &str,
-    artist: String,
-    album: String,
-    title: String,
-    track_number: Option<u32>,
-    disc_number: Option<u32>,
-    recording_id: Option<&str>,
-    release_group_id: Option<&str>,
-    release_id: Option<&str>,
-    canonical_artist_id: Option<i64>,
-    canonical_release_id: Option<i64>,
+    identity_envelope_key: String,
     quality_policy: Option<&str>,
     edition_policy: Option<&str>,
     confirmation_policy: Option<&str>,
 ) -> String {
     [
         PLANNER_EXCLUSION_MEMORY_PREFIX.to_string(),
-        normalize_provider_value(Some(scope)),
-        artist,
-        album,
-        title,
-        track_number.map(|value| value.to_string()).unwrap_or_default(),
-        disc_number.map(|value| value.to_string()).unwrap_or_default(),
-        normalize_provider_value(recording_id),
-        normalize_provider_value(release_group_id),
-        normalize_provider_value(release_id),
-        canonical_artist_id
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        canonical_release_id
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
+        identity_envelope_key,
         normalize_provider_value(quality_policy),
         normalize_provider_value(edition_policy),
         normalize_provider_value(confirmation_policy),
@@ -650,6 +859,103 @@ fn merge_excluded_providers(existing: &[String], remembered: &[String]) -> Vec<S
         }
     }
     merged
+}
+
+fn selected_low_trust_provider_ids(candidate_review: &[CandidateReviewItem]) -> Vec<String> {
+    let mut selected = Vec::new();
+    for item in candidate_review {
+        if !item.is_selected {
+            continue;
+        }
+
+        let provider_id = item.provider_id.trim().to_ascii_lowercase();
+        if provider_id.is_empty() || selected.contains(&provider_id) {
+            continue;
+        }
+
+        if LOW_TRUST_PROVIDER_IDS
+            .iter()
+            .any(|known| provider_id == *known)
+        {
+            selected.push(provider_id);
+        }
+    }
+    selected
+}
+
+fn has_low_trust_approval_artifact(note: Option<&str>) -> bool {
+    note.map(str::to_ascii_lowercase)
+        .map(|value| value.contains(LOW_TRUST_APPROVAL_TOKEN))
+        .unwrap_or(false)
+}
+
+fn validate_low_trust_approval(
+    note: Option<&str>,
+    selected_low_trust: &[String],
+) -> Result<(), String> {
+    if selected_low_trust.is_empty() || has_low_trust_approval_artifact(note) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "validation_error:low_trust_approval_required: explicit '{}' token required for providers [{}]",
+        LOW_TRUST_APPROVAL_TOKEN,
+        selected_low_trust.join(",")
+    ))
+}
+
+fn latest_preflight_from_timeline(
+    timeline: &[cassette_core::librarian::models::AcquisitionRequestEvent],
+) -> Option<ReviewPreflightResult> {
+    timeline.iter().rev().find_map(|event| {
+        if event.event_type != "review_preflight" {
+            return None;
+        }
+        event
+            .payload_json
+            .as_deref()
+            .and_then(|payload| serde_json::from_str::<ReviewPreflightResult>(payload).ok())
+    })
+}
+
+fn build_review_preflight_result(
+    candidate_set: &Option<StoredCandidateSetSummary>,
+    provider_searches: &[StoredProviderSearchRecord],
+    candidate_review: &[CandidateReviewItem],
+) -> ReviewPreflightResult {
+    let selected_candidate_count = candidate_review.iter().filter(|item| item.is_selected).count();
+    let provider_success_count = provider_searches
+        .iter()
+        .filter(|entry| entry.candidate_count > 0)
+        .count();
+    let candidate_count = candidate_set
+        .as_ref()
+        .map(|summary| summary.candidate_count)
+        .unwrap_or(0);
+
+    let mut reason_codes = Vec::new();
+    if candidate_set.is_none() {
+        reason_codes.push(PREFLIGHT_REASON_MISSING_CANDIDATE_SET.to_string());
+    }
+    if candidate_count == 0 {
+        reason_codes.push(PREFLIGHT_REASON_NO_CANDIDATES.to_string());
+    }
+    if provider_searches.is_empty() {
+        reason_codes.push(PREFLIGHT_REASON_NO_PROVIDER_SEARCH_RECORDS.to_string());
+    }
+    if selected_candidate_count == 0 {
+        reason_codes.push(PREFLIGHT_REASON_NO_SELECTED_CANDIDATE.to_string());
+    }
+
+    ReviewPreflightResult {
+        passed: reason_codes.is_empty(),
+        checked_at: Utc::now().to_rfc3339(),
+        reason_codes,
+        selected_candidate_count,
+        provider_search_count: provider_searches.len(),
+        provider_success_count,
+        candidate_count,
+    }
 }
 
 fn parse_track_task_source(source_name: &str) -> Result<TrackTaskSource, String> {
@@ -706,6 +1012,7 @@ async fn load_planned_acquisition_result(
 
     Ok(PlannedAcquisitionResult {
         identity_lane: planner_identity_lane_from_row(&request),
+        edition: edition_context_from_payload(request.raw_payload_json.as_deref()),
         request,
         provider_order,
         cached_provider_ids,
@@ -713,6 +1020,284 @@ async fn load_planned_acquisition_result(
         provider_searches,
         candidate_review,
     })
+}
+
+fn derive_identity_confidence(request: &AcquisitionRequestRow) -> String {
+    if request.musicbrainz_recording_id.is_some()
+        || request.musicbrainz_release_id.is_some()
+        || request.musicbrainz_release_group_id.is_some()
+    {
+        return "high".to_string();
+    }
+
+    if request.canonical_artist_id.is_some() || request.canonical_release_id.is_some() {
+        return "medium".to_string();
+    }
+
+    "low".to_string()
+}
+
+fn derive_edition_match_outcome(
+    edition_policy: Option<&str>,
+    candidate_set: &Option<StoredCandidateSetSummary>,
+    provider_searches: &[StoredProviderSearchRecord],
+) -> String {
+    if edition_policy
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        return "insufficient_evidence".to_string();
+    }
+
+    if provider_searches
+        .iter()
+        .any(|entry| entry.outcome == "no_results_after_policy_filter")
+    {
+        return "mismatch".to_string();
+    }
+
+    if candidate_set
+        .as_ref()
+        .map(|summary| summary.candidate_count > 0)
+        .unwrap_or(false)
+    {
+        return "match".to_string();
+    }
+
+    "insufficient_evidence".to_string()
+}
+
+fn planner_identity_envelope_from_request(request: &AcquisitionRequest) -> String {
+    planner_identity_envelope_key(
+        request.scope.as_str(),
+        normalize_provider_value(Some(request.artist.as_str())),
+        normalize_provider_value(request.album.as_deref()),
+        normalize_provider_value(Some(request.title.as_str())),
+        request.track_number,
+        request.disc_number,
+        request.musicbrainz_recording_id.as_deref(),
+        request.musicbrainz_release_group_id.as_deref(),
+        request.musicbrainz_release_id.as_deref(),
+        request.canonical_artist_id,
+        request.canonical_release_id,
+    )
+}
+
+fn planner_identity_envelope_from_row(request: &AcquisitionRequestRow) -> String {
+    planner_identity_envelope_key(
+        request.scope.as_str(),
+        normalize_provider_value(Some(request.normalized_artist.as_str())),
+        normalize_provider_value(request.normalized_album.as_deref()),
+        normalize_provider_value(Some(request.normalized_title.as_str())),
+        request.track_number.and_then(|value| u32::try_from(value).ok()),
+        request.disc_number.and_then(|value| u32::try_from(value).ok()),
+        request.musicbrainz_recording_id.as_deref(),
+        request.musicbrainz_release_group_id.as_deref(),
+        request.musicbrainz_release_id.as_deref(),
+        request.canonical_artist_id,
+        request.canonical_release_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn planner_identity_envelope_key(
+    scope: &str,
+    artist: String,
+    album: String,
+    title: String,
+    track_number: Option<u32>,
+    disc_number: Option<u32>,
+    recording_id: Option<&str>,
+    release_group_id: Option<&str>,
+    release_id: Option<&str>,
+    canonical_artist_id: Option<i64>,
+    canonical_release_id: Option<i64>,
+) -> String {
+    let mbid_segment = if let Some(value) = normalize_optional_identity(release_group_id) {
+        format!("release_group:{value}")
+    } else if let Some(value) = normalize_optional_identity(release_id) {
+        format!("release:{value}")
+    } else if let Some(value) = normalize_optional_identity(recording_id) {
+        format!("recording:{value}")
+    } else {
+        "".to_string()
+    };
+
+    let canonical_segment = match (canonical_artist_id, canonical_release_id) {
+        (Some(artist_id), Some(release_id)) => format!("canon:{artist_id}:{release_id}"),
+        (Some(artist_id), None) => format!("canon_artist:{artist_id}"),
+        (None, Some(release_id)) => format!("canon_release:{release_id}"),
+        (None, None) => String::new(),
+    };
+
+    [
+        PLANNER_IDENTITY_ENVELOPE_PREFIX.to_string(),
+        normalize_provider_value(Some(scope)),
+        mbid_segment,
+        canonical_segment,
+        artist,
+        album,
+        title,
+        track_number.map(|value| value.to_string()).unwrap_or_default(),
+        disc_number.map(|value| value.to_string()).unwrap_or_default(),
+    ]
+    .join("::")
+}
+
+fn normalize_optional_identity(value: Option<&str>) -> Option<String> {
+    value
+        .map(|segment| segment.trim().to_ascii_lowercase())
+        .filter(|segment| !segment.is_empty())
+}
+
+fn augment_request_payload_with_edition_context(
+    request: &mut AcquisitionRequest,
+) -> Result<(), String> {
+    let mut payload = parse_or_initialize_payload(request.raw_payload_json.as_deref());
+    payload["edition"] = serde_json::to_value(edition_context_from_request(request))
+        .map_err(|error| error.to_string())?;
+    request.raw_payload_json = Some(payload.to_string());
+    Ok(())
+}
+
+fn augment_request_payload_with_identity_envelope(
+    request: &mut AcquisitionRequest,
+) -> Result<(), String> {
+    let mut payload = parse_or_initialize_payload(request.raw_payload_json.as_deref());
+    payload["identity_envelope_key"] = serde_json::to_value(planner_identity_envelope_from_request(request))
+        .map_err(|error| error.to_string())?;
+    request.raw_payload_json = Some(payload.to_string());
+    Ok(())
+}
+
+fn parse_or_initialize_payload(raw_payload_json: Option<&str>) -> Value {
+    let Some(raw) = raw_payload_json else {
+        return json!({});
+    };
+
+    let Ok(parsed) = serde_json::from_str::<Value>(raw) else {
+        return json!({ "legacy_payload": raw });
+    };
+
+    if parsed.is_object() {
+        parsed
+    } else {
+        json!({ "legacy_payload": parsed })
+    }
+}
+
+fn edition_context_from_request(request: &AcquisitionRequest) -> EditionContext {
+    let album = request.album.as_deref().unwrap_or_default();
+    let title = request.title.as_str();
+    let combined = format!("{album} {title}").to_ascii_lowercase();
+
+    let evidence_source = if request.musicbrainz_release_id.is_some()
+        || request.musicbrainz_release_group_id.is_some()
+    {
+        "musicbrainz"
+    } else {
+        "inferred"
+    };
+
+    let confidence = if evidence_source == "musicbrainz" {
+        "high"
+    } else {
+        "low"
+    };
+
+    EditionContext {
+        policy: request.edition_policy.clone(),
+        markers: EditionMarkers {
+            is_live: combined.contains("live"),
+            is_deluxe: combined.contains("deluxe") || combined.contains("expanded"),
+            is_remaster: combined.contains("remaster"),
+            country: None,
+            label: None,
+            catalog_number: None,
+        },
+        evidence: EditionEvidence {
+            source: evidence_source.to_string(),
+            confidence: confidence.to_string(),
+        },
+    }
+}
+
+fn edition_context_from_payload(raw_payload_json: Option<&str>) -> Option<EditionContext> {
+    let raw = raw_payload_json?;
+    let parsed = serde_json::from_str::<Value>(raw).ok()?;
+    let edition_value = parsed.get("edition")?;
+    serde_json::from_value::<EditionContext>(edition_value.clone()).ok()
+}
+
+fn validate_selected_albums_grammar(request: &AcquisitionRequest) -> Result<(), String> {
+    if request.scope != cassette_core::acquisition::AcquisitionScope::SelectedAlbums {
+        return Ok(());
+    }
+
+    let payload = request
+        .raw_payload_json
+        .as_deref()
+        .ok_or_else(|| "validation_error:include_empty:selected_albums requires targets.include".to_string())?;
+
+    let parsed = serde_json::from_str::<SelectedAlbumsPayload>(payload).map_err(|_| {
+        "validation_error:ambiguous_album_identity:selected_albums payload is invalid".to_string()
+    })?;
+
+    if parsed.targets.include.is_empty() {
+        return Err("validation_error:include_empty:selected_albums include list is empty".to_string());
+    }
+
+    let mut include_keys = Vec::with_capacity(parsed.targets.include.len());
+    for entry in &parsed.targets.include {
+        include_keys.push(normalized_album_target_key(entry)?);
+    }
+
+    for entry in &parsed.targets.exclude {
+        let key = normalized_album_target_key(entry)?;
+        if include_keys.contains(&key) {
+            return Err(
+                "validation_error:include_exclude_conflict:entry exists in both include and exclude"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn normalized_album_target_key(entry: &AlbumTarget) -> Result<String, String> {
+    let release_group_id = entry
+        .release_group_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+
+    if let Some(release_group_id) = release_group_id {
+        return Ok(format!("rg::{release_group_id}"));
+    }
+
+    let artist = entry
+        .artist
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    let album = entry
+        .album
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+
+    match (artist, album) {
+        (Some(artist), Some(album)) => Ok(format!("aa::{artist}::{album}")),
+        _ => Err(
+            "validation_error:ambiguous_album_identity:album target requires release_group_id or artist+album"
+                .to_string(),
+        ),
+    }
 }
 
 fn planner_identity_lane_from_request(request: &AcquisitionRequest) -> PlannerIdentityLane {
@@ -1088,17 +1673,30 @@ fn provider_error_outcome(error: &ProviderError) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_edition_policy_filter, cache_is_fresh, merge_excluded_providers,
-        parse_acquisition_strategy, parse_track_task_source,
+        apply_edition_policy_filter, augment_request_payload_with_edition_context,
+        augment_request_payload_with_identity_envelope, cache_is_fresh,
+        build_review_preflight_result,
+        CandidateReviewItem,
+        derive_edition_match_outcome, derive_identity_confidence, edition_context_from_payload,
+        has_low_trust_approval_artifact, merge_excluded_providers, parse_acquisition_strategy,
+        latest_preflight_from_timeline,
+        planner_identity_envelope_from_request,
+        parse_track_task_source,
         planner_exclusion_memory_key_from_request, planner_identity_lane_from_request,
+        ReviewPreflightResult, validate_low_trust_approval,
+        selected_low_trust_provider_ids,
+        validate_selected_albums_grammar,
     };
     use cassette_core::acquisition::{
         AcquisitionRequest, AcquisitionRequestStatus, AcquisitionScope, ConfirmationPolicy,
     };
+    use cassette_core::librarian::models::AcquisitionRequestEvent;
+    use cassette_core::db::{StoredCandidateSetSummary, StoredProviderSearchRecord};
     use cassette_core::director::models::{
         AcquisitionStrategy, ProviderSearchCandidate, TrackTaskSource,
     };
     use chrono::Utc;
+    use serde_json::json;
 
     #[test]
     fn fresh_cache_rows_are_accepted() {
@@ -1279,5 +1877,487 @@ mod tests {
         assert!(key.contains("planner.exclusion_memory.v1"));
         assert!(key.contains("test artist"));
         assert!(key.contains("manual_review"));
+    }
+
+    #[test]
+    fn selected_albums_grammar_rejects_include_exclude_conflict() {
+        let mut request = AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::SelectedAlbums,
+            source: TrackTaskSource::Manual,
+            source_name: "manual".to_string(),
+            source_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
+            artist: "Artist".to_string(),
+            album: Some("Album".to_string()),
+            title: "Song".to_string(),
+            track_number: None,
+            disc_number: None,
+            year: None,
+            duration_secs: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            strategy: AcquisitionStrategy::DiscographyBatch,
+            quality_policy: None,
+            excluded_providers: Vec::new(),
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::ManualReview,
+            desired_track_id: None,
+            source_operation_id: None,
+            task_id: Some("task-selected-albums".to_string()),
+            request_signature: None,
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: Some(
+                json!({
+                    "targets": {
+                        "include": [{"artist":"A","album":"B"}],
+                        "exclude": [{"artist":"A","album":"B"}]
+                    }
+                })
+                .to_string(),
+            ),
+        };
+
+        augment_request_payload_with_edition_context(&mut request)
+            .expect("edition context should serialize");
+        let error = validate_selected_albums_grammar(&request).expect_err("must fail conflict");
+        assert!(error.contains("validation_error:include_exclude_conflict"));
+    }
+
+    #[test]
+    fn selected_albums_grammar_accepts_release_group_targets() {
+        let mut request = AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::SelectedAlbums,
+            source: TrackTaskSource::Manual,
+            source_name: "manual".to_string(),
+            source_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
+            artist: "Artist".to_string(),
+            album: Some("Album".to_string()),
+            title: "Song".to_string(),
+            track_number: None,
+            disc_number: None,
+            year: None,
+            duration_secs: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            strategy: AcquisitionStrategy::DiscographyBatch,
+            quality_policy: None,
+            excluded_providers: Vec::new(),
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::ManualReview,
+            desired_track_id: None,
+            source_operation_id: None,
+            task_id: Some("task-selected-albums-ok".to_string()),
+            request_signature: None,
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: Some(
+                json!({
+                    "targets": {
+                        "include": [{"release_group_id":"rg-1"}],
+                        "exclude": []
+                    }
+                })
+                .to_string(),
+            ),
+        };
+
+        augment_request_payload_with_edition_context(&mut request)
+            .expect("edition context should serialize");
+        validate_selected_albums_grammar(&request).expect("valid grammar should pass");
+    }
+
+    #[test]
+    fn request_payload_round_trips_edition_context() {
+        let mut request = AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::Album,
+            source: TrackTaskSource::Manual,
+            source_name: "manual".to_string(),
+            source_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
+            artist: "Artist".to_string(),
+            album: Some("Album (Deluxe)".to_string()),
+            title: "Song".to_string(),
+            track_number: None,
+            disc_number: None,
+            year: None,
+            duration_secs: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: Some("mb-rg-1".to_string()),
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            strategy: AcquisitionStrategy::Standard,
+            quality_policy: None,
+            excluded_providers: Vec::new(),
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::ManualReview,
+            desired_track_id: None,
+            source_operation_id: None,
+            task_id: Some("task-edition-ctx".to_string()),
+            request_signature: None,
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: None,
+        };
+
+        augment_request_payload_with_edition_context(&mut request)
+            .expect("edition context should serialize");
+        let edition = edition_context_from_payload(request.raw_payload_json.as_deref())
+            .expect("edition context should parse back");
+        assert_eq!(edition.policy.as_deref(), Some("standard_only"));
+        assert!(edition.markers.is_deluxe);
+        assert_eq!(edition.evidence.source, "musicbrainz");
+    }
+
+    #[test]
+    fn identity_confidence_prefers_musicbrainz_ids() {
+        let row = cassette_core::librarian::models::AcquisitionRequestRow {
+            id: 1,
+            scope: "track".to_string(),
+            source_name: "manual".to_string(),
+            source_track_id: None,
+            source_album_id: None,
+            source_artist_id: None,
+            artist: "Artist".to_string(),
+            album: None,
+            title: "Song".to_string(),
+            normalized_artist: "artist".to_string(),
+            normalized_album: None,
+            normalized_title: "song".to_string(),
+            track_number: None,
+            disc_number: None,
+            year: None,
+            duration_secs: None,
+            isrc: None,
+            musicbrainz_recording_id: Some("mb-rec-1".to_string()),
+            musicbrainz_release_group_id: None,
+            musicbrainz_release_id: None,
+            canonical_artist_id: None,
+            canonical_release_id: None,
+            strategy: "standard".to_string(),
+            quality_policy: None,
+            excluded_providers_json: None,
+            edition_policy: None,
+            confirmation_policy: "manual_review".to_string(),
+            desired_track_id: None,
+            source_operation_id: None,
+            task_id: Some("task-1".to_string()),
+            request_signature: "sig-1".to_string(),
+            status: "reviewing".to_string(),
+            raw_payload_json: None,
+            created_at: "2026-04-07 00:00:00".to_string(),
+            updated_at: "2026-04-07 00:00:00".to_string(),
+        };
+
+        assert_eq!(derive_identity_confidence(&row), "high");
+    }
+
+    #[test]
+    fn edition_match_outcome_reports_mismatch_after_policy_filter() {
+        let provider_searches = vec![StoredProviderSearchRecord {
+            provider_id: "qobuz".to_string(),
+            provider_display_name: "Qobuz".to_string(),
+            provider_trust_rank: 10,
+            provider_order_index: 0,
+            outcome: "no_results_after_policy_filter".to_string(),
+            candidate_count: 0,
+            error: None,
+            retryable: false,
+            recorded_at: "2026-04-07 00:00:00".to_string(),
+        }];
+        let candidate_set = Some(StoredCandidateSetSummary {
+            task_id: "task-1".to_string(),
+            request_signature: Some("sig-1".to_string()),
+            request_strategy: Some("standard".to_string()),
+            disposition: "reviewing".to_string(),
+            selected_provider: None,
+            candidate_count: 0,
+            provider_count: 1,
+            updated_at: "2026-04-07 00:00:00".to_string(),
+        });
+
+        assert_eq!(
+            derive_edition_match_outcome(Some("standard_only"), &candidate_set, &provider_searches),
+            "mismatch"
+        );
+    }
+
+    #[test]
+    fn selected_low_trust_provider_ids_only_returns_selected_low_trust() {
+        let review = vec![
+            CandidateReviewItem {
+                task_id: "task-1".to_string(),
+                provider_id: "yt_dlp".to_string(),
+                provider_display_name: "yt-dlp".to_string(),
+                provider_trust_rank: 50,
+                provider_candidate_id: "cand-1".to_string(),
+                outcome: "planned".to_string(),
+                rejection_reason: None,
+                is_selected: true,
+                score_total: None,
+                candidate_json: "{}".to_string(),
+                validation_json: None,
+                score_reason_json: None,
+            },
+            CandidateReviewItem {
+                task_id: "task-1".to_string(),
+                provider_id: "qobuz".to_string(),
+                provider_display_name: "Qobuz".to_string(),
+                provider_trust_rank: 10,
+                provider_candidate_id: "cand-2".to_string(),
+                outcome: "planned".to_string(),
+                rejection_reason: None,
+                is_selected: true,
+                score_total: None,
+                candidate_json: "{}".to_string(),
+                validation_json: None,
+                score_reason_json: None,
+            },
+            CandidateReviewItem {
+                task_id: "task-1".to_string(),
+                provider_id: "real_debrid".to_string(),
+                provider_display_name: "Real-Debrid".to_string(),
+                provider_trust_rank: 80,
+                provider_candidate_id: "cand-3".to_string(),
+                outcome: "planned".to_string(),
+                rejection_reason: None,
+                is_selected: false,
+                score_total: None,
+                candidate_json: "{}".to_string(),
+                validation_json: None,
+                score_reason_json: None,
+            },
+        ];
+
+        let selected = selected_low_trust_provider_ids(&review);
+        assert_eq!(selected, vec!["yt_dlp".to_string()]);
+    }
+
+    #[test]
+    fn low_trust_approval_artifact_token_is_required() {
+        assert!(!has_low_trust_approval_artifact(None));
+        assert!(!has_low_trust_approval_artifact(Some("looks good")));
+        assert!(has_low_trust_approval_artifact(Some(
+            "manual review approve_low_trust"
+        )));
+    }
+
+    #[test]
+    fn low_trust_approval_requires_explicit_token_for_selected_low_trust_providers() {
+        let selected = vec!["yt_dlp".to_string(), "real_debrid".to_string()];
+
+        let err = validate_low_trust_approval(Some("looks good"), &selected)
+            .expect_err("missing approval token should be rejected");
+        assert!(err.contains("approve_low_trust"));
+        assert!(err.contains("yt_dlp"));
+
+        assert!(validate_low_trust_approval(
+            Some("approved with approve_low_trust token"),
+            &selected
+        )
+        .is_ok());
+        assert!(validate_low_trust_approval(None, &[]).is_ok());
+    }
+
+    #[test]
+    fn identity_envelope_is_stable_across_source_aliases() {
+        let mut request_a = AcquisitionRequest {
+            id: None,
+            scope: AcquisitionScope::Track,
+            source: TrackTaskSource::SpotifyLibrary,
+            source_name: "spotify_library".to_string(),
+            source_track_id: Some("spotify:track:123".to_string()),
+            source_album_id: Some("spotify:album:321".to_string()),
+            source_artist_id: Some("spotify:artist:456".to_string()),
+            artist: "The Artist".to_string(),
+            album: Some("The Album".to_string()),
+            title: "The Song".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2020),
+            duration_secs: Some(240.0),
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_release_group_id: Some("mb-rg-123".to_string()),
+            musicbrainz_release_id: None,
+            canonical_artist_id: Some(11),
+            canonical_release_id: Some(22),
+            strategy: AcquisitionStrategy::Standard,
+            quality_policy: Some("balanced".to_string()),
+            excluded_providers: Vec::new(),
+            edition_policy: Some("standard_only".to_string()),
+            confirmation_policy: ConfirmationPolicy::ManualReview,
+            desired_track_id: None,
+            source_operation_id: Some("op-a".to_string()),
+            task_id: None,
+            request_signature: None,
+            status: AcquisitionRequestStatus::Pending,
+            raw_payload_json: None,
+        };
+        let mut request_b = request_a.clone();
+        request_b.source = TrackTaskSource::SpotifyHistory;
+        request_b.source_name = "spotify_history".to_string();
+        request_b.source_track_id = Some("history:track:999".to_string());
+        request_b.source_album_id = Some("history:album:999".to_string());
+        request_b.source_artist_id = Some("history:artist:999".to_string());
+        request_b.source_operation_id = Some("op-b".to_string());
+
+        let envelope_a = planner_identity_envelope_from_request(&request_a);
+        let envelope_b = planner_identity_envelope_from_request(&request_b);
+        assert_eq!(envelope_a, envelope_b);
+
+        augment_request_payload_with_identity_envelope(&mut request_a)
+            .expect("identity envelope should serialize");
+        let payload = serde_json::from_str::<serde_json::Value>(
+            request_a.raw_payload_json.as_deref().expect("payload should exist"),
+        )
+        .expect("payload should parse");
+        assert_eq!(
+            payload
+                .get("identity_envelope_key")
+                .and_then(|value| value.as_str()),
+            Some(envelope_a.as_str())
+        );
+    }
+
+    #[test]
+    fn review_preflight_fails_when_no_selection_exists() {
+        let candidate_set = Some(StoredCandidateSetSummary {
+            task_id: "task-1".to_string(),
+            request_signature: Some("sig-1".to_string()),
+            request_strategy: Some("standard".to_string()),
+            disposition: "reviewing".to_string(),
+            selected_provider: None,
+            candidate_count: 2,
+            provider_count: 1,
+            updated_at: "2026-04-07 00:00:00".to_string(),
+        });
+        let provider_searches = vec![StoredProviderSearchRecord {
+            provider_id: "qobuz".to_string(),
+            provider_display_name: "Qobuz".to_string(),
+            provider_trust_rank: 10,
+            provider_order_index: 0,
+            outcome: "planned".to_string(),
+            candidate_count: 2,
+            error: None,
+            retryable: false,
+            recorded_at: "2026-04-07 00:00:00".to_string(),
+        }];
+        let candidate_review = vec![CandidateReviewItem {
+            task_id: "task-1".to_string(),
+            provider_id: "qobuz".to_string(),
+            provider_display_name: "Qobuz".to_string(),
+            provider_trust_rank: 10,
+            provider_candidate_id: "cand-1".to_string(),
+            outcome: "planned".to_string(),
+            rejection_reason: None,
+            is_selected: false,
+            score_total: Some(90),
+            candidate_json: "{}".to_string(),
+            validation_json: None,
+            score_reason_json: None,
+        }];
+
+        let preflight =
+            build_review_preflight_result(&candidate_set, &provider_searches, &candidate_review);
+        assert!(!preflight.passed);
+        assert!(preflight.reason_codes.contains(&"no_selected_candidate".to_string()));
+    }
+
+    #[test]
+    fn review_preflight_passes_with_candidate_selection() {
+        let candidate_set = Some(StoredCandidateSetSummary {
+            task_id: "task-2".to_string(),
+            request_signature: Some("sig-2".to_string()),
+            request_strategy: Some("standard".to_string()),
+            disposition: "reviewing".to_string(),
+            selected_provider: Some("qobuz".to_string()),
+            candidate_count: 1,
+            provider_count: 1,
+            updated_at: "2026-04-07 00:00:00".to_string(),
+        });
+        let provider_searches = vec![StoredProviderSearchRecord {
+            provider_id: "qobuz".to_string(),
+            provider_display_name: "Qobuz".to_string(),
+            provider_trust_rank: 10,
+            provider_order_index: 0,
+            outcome: "planned".to_string(),
+            candidate_count: 1,
+            error: None,
+            retryable: false,
+            recorded_at: "2026-04-07 00:00:00".to_string(),
+        }];
+        let candidate_review = vec![CandidateReviewItem {
+            task_id: "task-2".to_string(),
+            provider_id: "qobuz".to_string(),
+            provider_display_name: "Qobuz".to_string(),
+            provider_trust_rank: 10,
+            provider_candidate_id: "cand-1".to_string(),
+            outcome: "planned".to_string(),
+            rejection_reason: None,
+            is_selected: true,
+            score_total: Some(92),
+            candidate_json: "{}".to_string(),
+            validation_json: None,
+            score_reason_json: None,
+        }];
+
+        let preflight =
+            build_review_preflight_result(&candidate_set, &provider_searches, &candidate_review);
+        assert!(preflight.passed);
+        assert!(preflight.reason_codes.is_empty());
+    }
+
+    #[test]
+    fn latest_preflight_is_loaded_from_timeline_payload() {
+        let persisted = ReviewPreflightResult {
+            passed: true,
+            checked_at: "2026-04-07T00:00:00Z".to_string(),
+            reason_codes: Vec::new(),
+            selected_candidate_count: 1,
+            provider_search_count: 2,
+            provider_success_count: 1,
+            candidate_count: 1,
+        };
+        let timeline = vec![
+            AcquisitionRequestEvent {
+                id: 1,
+                request_id: 1,
+                task_id: Some("task-1".to_string()),
+                event_type: "planning_completed".to_string(),
+                status: "reviewing".to_string(),
+                message: Some("planning done".to_string()),
+                payload_json: None,
+                created_at: "2026-04-07 00:00:00".to_string(),
+            },
+            AcquisitionRequestEvent {
+                id: 2,
+                request_id: 1,
+                task_id: Some("task-1".to_string()),
+                event_type: "review_preflight".to_string(),
+                status: "reviewing".to_string(),
+                message: Some("preflight".to_string()),
+                payload_json: Some(serde_json::to_string(&persisted).expect("serialize")),
+                created_at: "2026-04-07 00:00:01".to_string(),
+            },
+        ];
+
+        let loaded = latest_preflight_from_timeline(&timeline).expect("preflight must exist");
+        assert!(loaded.passed);
+        assert_eq!(loaded.selected_candidate_count, 1);
     }
 }

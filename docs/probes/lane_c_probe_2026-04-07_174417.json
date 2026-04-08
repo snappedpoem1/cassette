@@ -1,0 +1,25 @@
+﻿{
+    "generated_at_utc":  "2026-04-07T21:44:30.1761781Z",
+    "db_path":  "C:\\Users\\Admin\\AppData\\Roaming\\dev.cassette.app\\cassette.db",
+    "source_provider_probe":  "provider_probe_2026-04-07_174417.txt",
+    "sab":  {
+                "configured":  false,
+                "queue_probe":  null,
+                "history_probe":  null,
+                "classification":  "unverified",
+                "notes":  [
+                              "Missing sabnzbd_url and/or sabnzbd_api_key in runtime settings."
+                          ]
+            },
+    "lrclib":  {
+                   "http_probe":  {
+                                      "ok":  true,
+                                      "has_plain":  true,
+                                      "has_synced":  true
+                                  },
+                   "classification":  "bounded-probe",
+                   "notes":  [
+                                 "LRCLIB HTTP endpoint reachable and returned lyrics payload for probe query."
+                             ]
+               }
+}

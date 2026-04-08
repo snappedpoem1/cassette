@@ -2,6 +2,10 @@
 
 Last audited: 2026-04-03
 
+Packet 1 implementation note (2026-04-07):
+
+- `GAP-B01` is complete. Contract grammar and validation/error model are implemented in `src-tauri/src/commands/planner.rs` and specified in `PACKET_1_CONTRACT_SPEC.md`.
+
 Status values:
 
 - `Supported Today`

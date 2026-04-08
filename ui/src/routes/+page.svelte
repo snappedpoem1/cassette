@@ -1,7 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
-  import SessionComposer from '$lib/components/SessionComposer.svelte';
   import { buildArtistClusters } from '$lib/artist-clusters';
   import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory, type TaskResultSummary, type TrustReasonDistributionEntry } from '$lib/api/tauri';
   import { artists, trackCount } from '$lib/stores/library';
@@ -20,6 +19,7 @@
   let recentRequests: AcquisitionRequestListItem[] = [];
   let trustDistribution: TrustReasonDistributionEntry[] = [];
   let loading = true;
+  let SessionComposer: typeof import('$lib/components/SessionComposer.svelte').default | null = null;
 
   $: artistClusters = buildArtistClusters($artists);
   $: topArtists = artistClusters.slice(0, 8);
@@ -62,6 +62,9 @@
     } finally {
       loading = false;
     }
+
+    const module = await import('$lib/components/SessionComposer.svelte');
+    SessionComposer = module.default;
   });
 
   function buildWhileAwayMessages(input: {
@@ -311,7 +314,9 @@
     </div>
   </section>
 
-  <SessionComposer />
+  {#if SessionComposer}
+    <svelte:component this={SessionComposer} />
+  {/if}
 </div>
 
 <style>

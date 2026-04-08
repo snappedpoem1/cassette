@@ -160,12 +160,13 @@ The Tauri command layer exposes commands across these areas:
 - [x] Async hardening has coordinator recovery/resume proof coverage and bounded retry/cooldown controls.
 - [x] Performance telemetry now uses repeatable capture artifacts and explicit regression gating.
 - [ ] Provider reliability remains configuration- and machine-dependent.
-- [ ] Planner-stage vocabulary and explainability reuse can still be tightened across surfaces.
+  Progress logged: `scripts/capture_provider_reliability_snapshot.ps1` now captures timestamped probe artifacts and updates are reflected in `docs/LANE_C_PROBE_RUNBOOK.md` + `docs/PROVIDER_EVIDENCE_LEDGER.md`.
+- [x] Planner-stage vocabulary and explainability reuse tightened with shared preflight reason-code contract across planner review/rationale/candidate-set surfaces.
 
 ### P2 - Improvement
 
-- [ ] `downloader/` remains in-tree as a legacy compatibility re-export for provider settings.
-  Runtime acquisition ownership is `director/providers/`; no new runtime behavior should land in `downloader/`.
+- [x] Legacy compatibility surfaces (`downloader/`, `ProviderBridge`) were retired in GAP-D03.
+  Runtime acquisition ownership remains `director/providers/`.
 - [x] `MetadataRepairOnly` is implemented for runtime DB-backed local metadata repair flows.
 - [x] Long-session desktop reliability now has documented soak procedure and baseline evidence.
 - [x] Album/artist projection IDs now use deterministic hash IDs rather than seeded `DefaultHasher`
@@ -262,6 +263,11 @@ Full rationale in [DECISIONS.md](DECISIONS.md).
 - [PATTERNS.md](PATTERNS.md)
 - [TELEMETRY.md](TELEMETRY.md)
 - [PROJECT_STATE.md](PROJECT_STATE.md)
+- [OPEN_GAPS_EXECUTION_BOARD.md](OPEN_GAPS_EXECUTION_BOARD.md)
+- [PACKET_1_EXECUTION_LOG.md](PACKET_1_EXECUTION_LOG.md)
+- [PACKET_2_EXECUTION_LOG.md](PACKET_2_EXECUTION_LOG.md)
+- [PACKET_3_EXECUTION_LOG.md](PACKET_3_EXECUTION_LOG.md)
+- [LANE_C_PROBE_RUNBOOK.md](LANE_C_PROBE_RUNBOOK.md)
 - [CLEAN_MACHINE_CHECKLIST.md](CLEAN_MACHINE_CHECKLIST.md)
 - [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)
 - [RECOVERY_STATUS.md](RECOVERY_STATUS.md)

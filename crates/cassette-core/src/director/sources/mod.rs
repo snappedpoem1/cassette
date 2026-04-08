@@ -1,7 +1,6 @@
 pub mod bandcamp;
 pub mod http;
 pub mod local_cache;
-pub mod provider_bridge;
 pub mod spotify;
 pub mod youtube;
 
@@ -54,6 +53,5 @@ pub trait SourceProvider: Send + Sync {
 pub use bandcamp::BandcampSource;
 pub use http::HttpSource;
 pub use local_cache::LocalCacheSource;
-pub use provider_bridge::ProviderBridge;
 pub use spotify::SpotifySource;
 pub use youtube::YoutubeSource;

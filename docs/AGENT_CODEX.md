@@ -107,6 +107,12 @@ Write a short plan to cover:
 - what could break
 - how you will verify
 - what assumptions you are making
+- which `GAP-*` ID(s) from `OPEN_GAPS_EXECUTION_BOARD.md` the work closes
+
+Gap-ID rule:
+
+- do not start implementation work without a mapped `GAP-*` ID
+- if the gap is new, add it to `OPEN_GAPS_EXECUTION_BOARD.md` first
 
 ### Phase 3: Implement
 

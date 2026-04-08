@@ -487,6 +487,76 @@ export interface PlannerIdentityLane {
   confirmation_policy: string;
 }
 
+export interface EditionMarkers {
+  is_live: boolean;
+  is_deluxe: boolean;
+  is_remaster: boolean;
+  country?: string | null;
+  label?: string | null;
+  catalog_number?: string | null;
+}
+
+export interface EditionEvidence {
+  source: string;
+  confidence: string;
+}
+
+export interface EditionContext {
+  policy?: string | null;
+  markers: EditionMarkers;
+  evidence: EditionEvidence;
+}
+
+export interface StoredCandidateSetSummary {
+  task_id: string;
+  request_signature?: string | null;
+  request_strategy?: string | null;
+  disposition: string;
+  selected_provider?: string | null;
+  candidate_count: number;
+  provider_count: number;
+  updated_at: string;
+}
+
+export interface StoredProviderSearchRecord {
+  provider_id: string;
+  provider_display_name: string;
+  provider_trust_rank: number;
+  provider_order_index: number;
+  outcome: string;
+  candidate_count: number;
+  error?: string | null;
+  retryable: boolean;
+  recorded_at: string;
+}
+
+export interface ReviewPreflightResult {
+  passed: boolean;
+  checked_at: string;
+  reason_codes: string[];
+  selected_candidate_count: number;
+  provider_search_count: number;
+  provider_success_count: number;
+  candidate_count: number;
+}
+
+export interface ReviewApprovalPolicy {
+  required: boolean;
+  token?: string | null;
+  low_trust_selected_providers: string[];
+}
+
+export interface ReviewContract {
+  request: AcquisitionRequest;
+  identity_lane: PlannerIdentityLane;
+  edition?: EditionContext | null;
+  candidate_set?: StoredCandidateSetSummary | null;
+  provider_searches: StoredProviderSearchRecord[];
+  candidate_review: CandidateReviewItem[];
+  preflight: ReviewPreflightResult;
+  approval: ReviewApprovalPolicy;
+}
+
 export interface TaskExecutionSummary {
   task_id: string;
   disposition: string;
@@ -664,6 +734,8 @@ export const api = {
     invoke('create_acquisition_request', { request }),
   planAcquisition: (request: AcquisitionRequest) =>
     invoke<PlannedAcquisitionResult>('plan_acquisition', { request }),
+  getReviewContract: (requestId: number) =>
+    invoke<ReviewContract>('get_review_contract', { requestId }),
   approvePlannedRequest: (requestId: number, note?: string, excludedProviderIds?: string[]) =>
     invoke('approve_planned_request', { requestId, note, excludedProviderIds }),
   rejectPlannedRequest: (requestId: number, reason?: string, excludedProviderIds?: string[]) =>
@@ -726,8 +798,12 @@ export const api = {
   persistEffectiveConfig: () => invoke<void>('persist_effective_config'),
 
   // Background backlog downloader
-  startBacklogRun: (batchSize?: number, limit?: number) =>
-    invoke<BacklogRunStatus>('start_backlog_run', { batch_size: batchSize, limit }),
+  startBacklogRun: (batchSize?: number, limit?: number, operatorDirectSubmit?: boolean) =>
+    invoke<BacklogRunStatus>('start_backlog_run', {
+      batch_size: batchSize,
+      limit,
+      operator_direct_submit: operatorDirectSubmit,
+    }),
   stopBacklogRun: () => invoke<void>('stop_backlog_run'),
   getBacklogStatus: () => invoke<BacklogRunStatus>('get_backlog_status'),
   getDirectorDebugStats: (limit?: number) =>

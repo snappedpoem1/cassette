@@ -154,6 +154,7 @@ Role clarification:
 - Planner candidate sets now persist into runtime candidate/search tables before byte acquisition starts, and planner runs refresh request-scoped source-alias and identity-evidence rows
 - Planner review mutations now exist in the command surface via `approve_planned_request` and `reject_planned_request`, and those approvals now submit to Director with audit events and pending-task persistence
 - Active queue submissions now use planner-first flow (`plan_acquisition` -> `approve_planned_request`) for song requests and album/artist expansion requests; remaining bypass and operator lanes are still pending cutover
+- Planner review now includes a persisted preflight validation contract (`review_preflight` events) and blocks approval when candidate/search readiness checks fail
 - Direct-submit bypass CLIs are now explicitly operator-only via `--operator-direct-submit` gating (`acquire_cli`, `batch_download_cli`, and `engine_pipeline_cli --import-spotify-missing`)
 - Director task result persistence to `director_task_history`
 - Terminal history retains the original `TrackTask` request payload and strategy for failed/cancelled/finalized results
@@ -365,7 +366,7 @@ Skips albums already in `desired_tracks` to avoid duplicates. Respects MusicBrai
 - Candidate persistence now feeds the Downloads pre-acquisition review panel (timeline plus approve/reject), and explicit provider exclusion toggles now persist exclusion memory for future planner decisions on the same request identity
 - Fingerprint accumulation is now bounded and incremental, not a full-library canonical backfill worker; large libraries will converge over repeated syncs rather than one sweep
 - `batch_download_cli` still uses the older album-history/manual workflow and has not been removed yet
-- `director/providers/` is the active acquisition path; `downloader/` is now only a legacy compatibility re-export for provider settings types
+- `director/providers/` is the active acquisition path; the legacy `downloader/` compatibility module and `ProviderBridge` adapter were retired in GAP-D03
 - Organizer repair tooling is deeper now, and both the live app-DB repair proof and bounded live organize proof are captured in canonical docs
 - Album batching currently groups queue work into `DiscographyBatch` strategy selection in the coordinator, but provider locking remains strategy-led rather than a separately persisted album lane
 - Structured run observability is improved through queue claims and persisted request payloads, but the frontend does not yet expose a dedicated coordinator timeline view

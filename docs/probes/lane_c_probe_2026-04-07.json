@@ -1,0 +1,30 @@
+﻿{
+    "generated_at_utc":  "2026-04-07T21:15:36.8752681Z",
+    "db_path":  "C:\\Users\\Admin\\AppData\\Roaming\\dev.cassette.app\\cassette.db",
+    "gap_ids":  [
+                    "GAP-C02",
+                    "GAP-C03",
+                    "GAP-C04"
+                ],
+    "sab":  {
+                "configured":  false,
+                "queue_probe":  null,
+                "history_probe":  null,
+                "classification":  "unverified",
+                "notes":  [
+                              "Missing sabnzbd_url and/or sabnzbd_api_key in runtime settings."
+                          ]
+            },
+    "lrclib":  {
+                   "http_probe":  {
+                                      "ok":  true,
+                                      "has_plain":  true,
+                                      "has_synced":  true
+                                  },
+                   "classification":  "bounded-probe",
+                   "notes":  [
+                                 "LRCLIB HTTP endpoint reachable and returned lyrics payload for probe query.",
+                                 "Probe validates endpoint behavior only; playback-path integration remains covered by runtime tests and command flow."
+                             ]
+               }
+}

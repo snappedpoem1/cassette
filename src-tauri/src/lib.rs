@@ -280,6 +280,7 @@ pub fn run() {
             commands::planner::plan_acquisition,
             commands::planner::get_candidate_set,
             commands::planner::get_request_rationale,
+            commands::planner::get_review_contract,
             commands::planner::approve_planned_request,
             commands::planner::reject_planned_request,
             commands::playlists::get_playlists,

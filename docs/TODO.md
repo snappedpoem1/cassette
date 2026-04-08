@@ -10,6 +10,13 @@ Scope note:
 - Terms such as "shipping blocker" and related release language mean personal reliability/readiness blockers only.
 
 Short execution board: see `HIT_LIST.md`.
+Open gap execution board: see `OPEN_GAPS_EXECUTION_BOARD.md`.
+
+Gap ID policy:
+
+- Every new implementation or docs-hardening task must map to one `GAP-*` ID from `OPEN_GAPS_EXECUTION_BOARD.md`.
+- If no `GAP-*` row exists, add one before starting work.
+- Completion claims must include evidence link(s) or artifact path(s).
 
 ---
 

@@ -1188,6 +1188,17 @@ fn now_iso() -> String {
     format!("epoch+{}d {:02}:{:02}", days_since_epoch, hours, mins)
 }
 
+fn validate_operator_direct_submit(operator_direct_submit: Option<bool>) -> Result<(), String> {
+    if operator_direct_submit.unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(
+            "start_backlog_run performs direct Director submission and is operator-only; use planner review flows or re-run with operator_direct_submit=true"
+                .to_string(),
+        )
+    }
+}
+
 /// Start a background run that processes the Spotify missing-album backlog.
 /// Emits `director-backlog-progress` events on the app handle as it runs.
 /// Only one backlog run can be active at a time; a second call is a no-op.
@@ -1197,7 +1208,10 @@ pub async fn start_backlog_run(
     app_handle: tauri::AppHandle,
     batch_size: Option<usize>,
     limit: Option<usize>,
+    operator_direct_submit: Option<bool>,
 ) -> Result<BacklogRunStatus, String> {
+    validate_operator_direct_submit(operator_direct_submit)?;
+
     {
         let status = state.backlog_status.lock().map_err(|e| e.to_string())?;
         if status.running {
@@ -1546,6 +1560,18 @@ mod tests {
 
         let result = validate_request_identity_contract(&task, &request);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn operator_direct_submit_gate_defaults_to_disabled() {
+        assert!(validate_operator_direct_submit(Some(true)).is_ok());
+        assert!(validate_operator_direct_submit(None).is_err());
+        assert!(validate_operator_direct_submit(Some(false)).is_err());
+        assert!(
+            validate_operator_direct_submit(None)
+                .expect_err("operator gate should reject missing flag")
+                .contains("operator-only")
+        );
     }
 }
 

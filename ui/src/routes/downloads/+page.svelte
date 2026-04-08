@@ -6,7 +6,7 @@
     refreshBacklogStatus, refreshDebugStats, startBacklogRun, stopBacklogRun, providerHealth,
     providerStatuses, slskdRuntimeStatus, loadDownloadConfig,
   } from '$lib/stores/downloads';
-  import { api, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DeadLetterSummary, type DownloadAlbumResult, type RequestLineage, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
+  import { api, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DeadLetterSummary, type DownloadAlbumResult, type RequestLineage, type ReviewContract, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
   import { debounce } from '$lib/utils';
 
   let searchInput = '';
@@ -39,6 +39,7 @@
   let requestTimeline: AcquisitionRequestEvent[] = [];
   let requestCandidates: CandidateReviewItem[] = [];
   let requestLineage: RequestLineage | null = null;
+  let requestReviewContract: ReviewContract | null = null;
   let requestExcludedProviders: Record<number, string[]> = {};
 
   let deadLetterSummary: DeadLetterSummary | null = null;
@@ -276,6 +277,16 @@
     await loadDownloadJobs();
   }
 
+  async function runBacklog() {
+    queueNotice = null;
+    try {
+      await startBacklogRun(10, backlogLimit, true);
+      queueNotice = 'Backlog run started.';
+    } catch (error) {
+      queueNotice = `Backlog run failed: ${String(error)}`;
+    }
+  }
+
   async function toggleReview(taskId: string) {
     if (expandedJob === taskId) {
       expandedJob = null;
@@ -300,6 +311,7 @@
       requestTimeline = [];
       requestCandidates = [];
       requestLineage = null;
+      requestReviewContract = null;
       return;
     }
 
@@ -307,16 +319,19 @@
     requestTimeline = [];
     requestCandidates = [];
     requestLineage = null;
+    requestReviewContract = null;
 
     try {
-      const [timeline, candidates, lineage] = await Promise.all([
+      const [timeline, candidates, lineage, reviewContract] = await Promise.all([
         api.getAcquisitionRequestTimeline(request.id),
         api.getRequestCandidateReview(request.id),
         api.getRequestLineage(request.id),
+        api.getReviewContract(request.id),
       ]);
       requestTimeline = timeline;
       requestCandidates = candidates;
       requestLineage = lineage;
+      requestReviewContract = reviewContract;
       const defaultExcluded = candidates
         .filter((candidate) => !candidate.is_selected)
         .map((candidate) => candidate.provider_id);
@@ -328,6 +343,7 @@
       requestTimeline = [];
       requestCandidates = [];
       requestLineage = null;
+      requestReviewContract = null;
     }
   }
 
@@ -353,9 +369,13 @@
   }
 
   async function approveRequest(requestId: number) {
+    const lowTrustToken = requestReviewContract?.approval.token?.trim();
+    const note = lowTrustToken
+      ? `approved from command center ${lowTrustToken}`
+      : 'approved from command center';
     await api.approvePlannedRequest(
       requestId,
-      'approved from command center',
+      note,
       excludedProvidersForRequest(requestId),
     );
     await Promise.all([loadRecentRequests(), loadDownloadJobs()]);
@@ -417,7 +437,7 @@
           {#if $backlogStatus?.running}
             <button class="btn btn-secondary" on:click={stopBacklogRun}>Stop</button>
           {:else}
-            <button class="btn btn-primary" on:click={() => startBacklogRun(10, backlogLimit)}>Run backlog</button>
+            <button class="btn btn-primary" on:click={runBacklog}>Run backlog</button>
           {/if}
         </div>
       </div>
@@ -740,6 +760,15 @@
                   <strong>{requestLineage.trust.headline}</strong>
                   <div class="timeline-message">{requestLineage.trust.detail}</div>
                   <div class="trust-evidence">{requestLineage.trust.evidence_count} evidence points recorded</div>
+                </div>
+              {/if}
+              {#if requestReviewContract?.approval.required}
+                <div class="trust-card">
+                  <div class="trust-eyebrow">low trust approval</div>
+                  <strong>Explicit operator approval is required</strong>
+                  <div class="timeline-message">
+                    Selected low-trust providers: {requestReviewContract.approval.low_trust_selected_providers.join(', ')}
+                  </div>
                 </div>
               {/if}
               <div class="request-actions">

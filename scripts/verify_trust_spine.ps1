@@ -59,6 +59,10 @@ Invoke-Step -Label "desktop smoke" -Action {
 	& (Join-Path $repoRoot "scripts\smoke_desktop.ps1") -Strict
 }
 
+Invoke-Step -Label "docs consistency" -Action {
+	& (Join-Path $repoRoot "scripts\check_docs_state.ps1")
+}
+
 if ($RunCleanroomLocal) {
 	Invoke-Step -Label "clean-room local verification ($CleanroomMode)" -Action {
 		& (Join-Path $repoRoot "scripts\verify_cleanroom_local.ps1") -Mode $CleanroomMode

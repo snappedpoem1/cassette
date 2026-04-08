@@ -35,12 +35,14 @@ Recent docs/runtime evidence alignment (2026-04-06):
 | Queue | Working | Persist/restore across sessions |
 | Downloads dashboard | Working | Director events surface correctly |
 | Pending-task startup recovery | Working | Deterministic startup replay proven with `recovery_probe_cli` |
-| Qobuz acquisition | Partial | Wired, but latest `provider_probe_cli` run returned `auth failed: HTTP 401 Unauthorized`; credentials/session require refresh |
-| Deezer acquisition | Working | Live full-track FLAC probe succeeded on 2026-03-27 |
-| slskd acquisition | Partial | Managed runtime probe passes; standalone provider probe now reports clear daemon-unavailable diagnostics when app-owned runtime is not active |
-| Usenet acquisition | Partial | SABnzbd handoff wired; end-to-end not formally proven |
-| Jackett torrent search | Partial | Active in Director and CLI, but still needs broader live proof |
+| Qobuz acquisition | unverified | Latest `provider_probe_cli` run failed auth refresh; credentials/session require refresh |
+| Deezer acquisition | local-proven | Live full-track FLAC probe succeeded on 2026-03-27; provider probe still returns search OK |
+| slskd acquisition | unverified | Latest `provider_probe_cli` run returned HTTP 403 (daemon reachable, credentials rejected) |
+| Usenet acquisition | unverified | `provider_probe_cli` indicates missing `nzbgeek_api_key` and/or `usenet_host`; SAB completion runbook now captured in `docs/LANE_C_PROBE_RUNBOOK.md` |
+| Jackett torrent search | unverified | Active in Director/CLI path, but still awaiting broader bounded probe coverage |
+| LRCLIB endpoint probe | bounded-probe | Direct probe artifact `docs/probes/lane_c_probe_2026-04-07.json` confirms endpoint reachability with plain+synced lyrics payload |
 | Discogs/Last.fm enrichment probe | Working (bounded) | 2026-04-07 credentialed probe (`--limit 25`) reported `Discogs 25/25` and `Last.fm 0/25` on sampled corpus |
+| Provider reliability snapshot cadence | Working (repeatable) | `scripts/capture_provider_reliability_snapshot.ps1` now writes timestamped artifacts (latest: `docs/probes/provider_probe_2026-04-07_174445.txt`, `docs/probes/lane_c_probe_2026-04-07_174445.json`) |
 | Cleanroom packaging verification | Working (local) | 2026-04-07 `scripts/verify_cleanroom_local.ps1` passed in DisposableProfile mode; installer bundle and runtime/sidecar DB checks passed |
 | yt-dlp acquisition | Wired | Depends on yt-dlp binary in PATH |
 | Spotify import | Working | JSON export parsing and album queue confirmed |
