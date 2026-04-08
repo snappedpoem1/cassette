@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { buildArtistClusters } from '$lib/artist-clusters';
-  import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory, type TaskResultSummary, type TrustReasonDistributionEntry } from '$lib/api/tauri';
+  import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory, type TaskResultSummary, type Track, type TrustReasonDistributionEntry } from '$lib/api/tauri';
   import { artists, trackCount } from '$lib/stores/library';
   import { backlogStatus, slskdRuntimeStatus } from '$lib/stores/downloads';
   import { currentTrack, nowPlayingContext, playbackState, player } from '$lib/stores/player';
@@ -17,9 +17,9 @@
   let missingAlbums: SpotifyAlbumHistory[] = [];
   let recentResults: TaskResultSummary[] = [];
   let recentRequests: AcquisitionRequestListItem[] = [];
+  let recentTracks: Track[] = [];
   let trustDistribution: TrustReasonDistributionEntry[] = [];
   let loading = true;
-  let SessionComposer: typeof import('$lib/components/SessionComposer.svelte').default | null = null;
 
   $: artistClusters = buildArtistClusters($artists);
   $: topArtists = artistClusters.slice(0, 8);
@@ -49,22 +49,21 @@
 
   onMount(async () => {
     try {
-      const [missing, results, requests, trust] = await Promise.all([
+      const [missing, results, requests, trust, recent] = await Promise.all([
         api.getMissingSpotifyAlbums(10),
         api.getRecentTaskResults(12),
         api.listAcquisitionRequests(undefined, 32),
         api.getTrustReasonDistribution(6),
+        api.getRecentlyFinalizedTracks(7),
       ]);
       missingAlbums = missing;
       recentResults = results;
       recentRequests = requests;
       trustDistribution = trust;
+      recentTracks = recent;
     } finally {
       loading = false;
     }
-
-    const module = await import('$lib/components/SessionComposer.svelte');
-    SessionComposer = module.default;
   });
 
   function buildWhileAwayMessages(input: {
@@ -157,6 +156,7 @@
 
       <div class="hero-actions">
         <button class="btn btn-primary" on:click={() => goto('/artists')}>Open artists</button>
+        <button class="btn btn-secondary" on:click={() => goto('/session')}>Open session composer</button>
         <button class="btn btn-ghost" on:click={() => goto('/downloads')}>Open downloads</button>
         {#if current}
           <button class="btn btn-ghost" on:click={resumePlayback}>
@@ -217,6 +217,38 @@
       </div>
     {/if}
   </section>
+
+  {#if recentTracks.length > 0}
+    <section class="home-band">
+      <div class="band-heading">
+        <div>
+          <div class="section-kicker">New in your library</div>
+          <h2>Recently arrived</h2>
+        </div>
+        <button class="band-link" on:click={() => goto('/library')}>Browse library</button>
+      </div>
+
+      <div class="arrivals-grid">
+        {#each recentTracks.slice(0, 8) as track}
+          <div class="arrival-card">
+            {#if track.cover_art_path}
+              <img class="arrival-art" src={coverSrc(track.cover_art_path)} alt="" loading="lazy" />
+            {:else}
+              <div class="arrival-art-ph"></div>
+            {/if}
+
+            <div class="arrival-info">
+              <div class="arrival-title">{track.title}</div>
+              <div class="arrival-meta">{track.artist}</div>
+              {#if track.quality_tier === 'lossless_hires' || track.quality_tier === 'lossless'}
+                <span class="arrival-badge">Lossless</span>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
 
   <section class="home-columns">
     <div class="column-block">
@@ -314,9 +346,6 @@
     </div>
   </section>
 
-  {#if SessionComposer}
-    <svelte:component this={SessionComposer} />
-  {/if}
 </div>
 
 <style>
@@ -492,6 +521,74 @@
 .tone-steady { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); }
 .tone-watch { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
 .tone-action { border-color: color-mix(in srgb, var(--error) 36%, var(--border)); }
+
+.arrivals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.arrival-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.arrival-card:hover {
+  border-color: var(--border-active);
+  transform: translateY(-1px);
+}
+
+.arrival-art {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+}
+
+.arrival-art-ph {
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--bg-active);
+}
+
+.arrival-info {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.arrival-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arrival-meta {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arrival-badge {
+  font-size: 0.62rem;
+  color: var(--status-ok);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
 
 .home-columns {
   display: grid;

@@ -42,6 +42,20 @@ pub fn replace_playlist_tracks(state: State<'_, AppState>, playlist_id: i64, tra
 }
 
 #[tauri::command]
+pub fn add_track_to_playlist(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    track_id: i64,
+) -> Result<(), String> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .add_track_to_playlist(playlist_id, track_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn delete_playlist(state: State<'_, AppState>, playlist_id: i64) {
     let _ = state.db.lock().unwrap().delete_playlist(playlist_id);
 }

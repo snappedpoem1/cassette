@@ -27,8 +27,7 @@
     selectedAlbum = null;
     albumTracks = [];
 
-    const allAlbums = await api.getAlbums();
-    artistAlbums = clusterAlbumsForArtist(allAlbums, cluster);
+    artistAlbums = clusterAlbumsForArtist($albums, cluster);
   }
 
   async function selectAlbum(album: Album) {

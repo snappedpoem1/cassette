@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { tick } from 'svelte';
+  import { api, type Track } from '$lib/api/tauri';
+  import { loadQueue, queueTracks } from '$lib/stores/queue';
   import {
     isPaletteOpen,
     filteredCommands,
@@ -14,11 +16,74 @@
 
   let selectedIndex = 0;
   let inputEl: HTMLInputElement;
+  let trackResults: Track[] = [];
+  let isTrackSearchLoading = false;
+  let didTrackSearchRun = false;
+  let trackSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  let trackSearchGeneration = 0;
 
   $: visibleCommands = $filteredCommands;
+  $: normalizedQuery = $paletteSearchQuery.trim();
+  $: shouldSearchTracks = $isPaletteOpen && visibleCommands.length === 0 && normalizedQuery.length >= 2;
+
+  $: {
+    const query = normalizedQuery;
+
+    if (trackSearchTimer) {
+      clearTimeout(trackSearchTimer);
+      trackSearchTimer = null;
+    }
+
+    if (!shouldSearchTracks) {
+      trackResults = [];
+      isTrackSearchLoading = false;
+      didTrackSearchRun = false;
+    } else {
+      const generation = ++trackSearchGeneration;
+      isTrackSearchLoading = true;
+      trackSearchTimer = setTimeout(async () => {
+        try {
+          const results = await api.searchTracks(query);
+          if (generation !== trackSearchGeneration) {
+            return;
+          }
+          trackResults = results.slice(0, 10);
+          didTrackSearchRun = true;
+        } catch {
+          if (generation !== trackSearchGeneration) {
+            return;
+          }
+          trackResults = [];
+          didTrackSearchRun = true;
+        } finally {
+          if (generation === trackSearchGeneration) {
+            isTrackSearchLoading = false;
+          }
+        }
+      }, 220);
+    }
+  }
+
   $: if ($isPaletteOpen) {
     selectedIndex = 0;
     tick().then(() => inputEl?.focus());
+  }
+
+  onDestroy(() => {
+    if (trackSearchTimer) {
+      clearTimeout(trackSearchTimer);
+    }
+  });
+
+  async function playTrackResult(track: Track): Promise<void> {
+    await queueTracks([track], 0);
+    closePalette();
+  }
+
+  async function queueTrackResult(track: Track): Promise<void> {
+    await api.addToQueue(track.id);
+    await loadQueue();
+    closePalette();
   }
 
   onMount(() => {
@@ -106,7 +171,34 @@
       />
 
       {#if visibleCommands.length === 0}
-        <div class="command-empty">No commands found.</div>
+        {#if shouldSearchTracks}
+          <div class="track-results" role="region" aria-label="Track results">
+            <div class="track-results-header">Tracks</div>
+
+            {#if isTrackSearchLoading}
+              <div class="command-empty">Searching tracks...</div>
+            {:else if trackResults.length === 0 && didTrackSearchRun}
+              <div class="command-empty">No tracks found.</div>
+            {:else}
+              <div class="track-list">
+                {#each trackResults as track}
+                  <div class="track-item">
+                    <div class="track-meta">
+                      <div class="track-title">{track.title}</div>
+                      <div class="track-details">{track.artist} • {track.album}</div>
+                    </div>
+                    <div class="track-actions">
+                      <button class="track-action" on:click={() => playTrackResult(track)}>Play</button>
+                      <button class="track-action" on:click={() => queueTrackResult(track)}>Queue</button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div class="command-empty">No commands found.</div>
+        {/if}
       {:else}
         <div class="command-list" role="listbox" aria-label="Commands">
           {#each visibleCommands as command, index}
@@ -221,5 +313,93 @@
   .command-empty {
     padding: 22px 16px;
     color: var(--text-secondary);
+  }
+
+  .track-results {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .track-results-header {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 0 4px;
+  }
+
+  .track-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .track-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border: 1px solid rgba(247, 180, 92, 0.18);
+    border-radius: 8px;
+    background: rgba(247, 180, 92, 0.06);
+    padding: 10px 12px;
+  }
+
+  .track-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .track-title {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .track-details {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .track-actions {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .track-action {
+    border: 1px solid rgba(247, 180, 92, 0.35);
+    border-radius: 999px;
+    background: rgba(247, 180, 92, 0.12);
+    color: var(--text-primary);
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+
+  .track-action:hover {
+    background: rgba(247, 180, 92, 0.2);
+  }
+
+  @media (max-width: 640px) {
+    .track-item {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .track-actions {
+      justify-content: flex-end;
+    }
   }
 </style>

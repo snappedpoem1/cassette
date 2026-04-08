@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { addToQueue, loadQueue, queueTracks } from '$lib/stores/queue';
-  import { api, type Track } from '$lib/api/tauri';
+  import { api, type Playlist, type Track } from '$lib/api/tauri';
 
   export let track: Track | null = null;
   export let album: { artist: string; title: string } | null = null;
@@ -12,6 +12,9 @@
 
   let busy = false;
   let message = '';
+  let showPlaylistPicker = false;
+  let playlists: Playlist[] = [];
+  let loadingPlaylists = false;
 
   function setStatus(text: string) {
     message = text;
@@ -117,6 +120,29 @@
     });
   }
 
+  async function showAddToPlaylist() {
+    showPlaylistPicker = !showPlaylistPicker;
+    if (showPlaylistPicker && playlists.length === 0) {
+      loadingPlaylists = true;
+      try {
+        playlists = await api.getPlaylists();
+      } finally {
+        loadingPlaylists = false;
+      }
+    }
+  }
+
+  async function addToPlaylist(playlistId: number) {
+    if (!track) {
+      return;
+    }
+    await withBusy(async () => {
+      await api.addTrackToPlaylist(playlistId, track.id);
+      setStatus('Added to playlist');
+      showPlaylistPicker = false;
+    });
+  }
+
   $: hasContext = !!track || !!album || !!artistName;
 </script>
 
@@ -128,6 +154,7 @@
       {#if track}
         <button class="rail-btn" disabled={busy} on:click={playTrackNow}>Play Track</button>
         <button class="rail-btn" disabled={busy} on:click={queueTrackNext}>Queue Track</button>
+        <button class="rail-btn" disabled={busy} on:click={showAddToPlaylist}>+ Playlist</button>
         <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={acquireTrack}>Acquire Track</button>
       {/if}
 
@@ -141,6 +168,22 @@
         <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={acquireArtist}>Acquire Artist</button>
       {/if}
     </div>
+
+    {#if showPlaylistPicker && track}
+      <div class="playlist-picker">
+        {#if loadingPlaylists}
+          <div class="picker-loading">Loading playlists...</div>
+        {:else if playlists.length === 0}
+          <div class="picker-empty">No playlists yet - create one in Playlists.</div>
+        {:else}
+          {#each playlists as pl}
+            <button class="picker-item" disabled={busy} on:click={() => addToPlaylist(pl.id)}>
+              {pl.name} <span class="picker-count">{pl.track_count} tracks</span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
 
     {#if message}
       <div class="rail-status">{message}</div>
@@ -205,6 +248,56 @@
 
   .rail-status {
     font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  .playlist-picker {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-deep);
+    overflow: hidden;
+    margin-top: 2px;
+  }
+
+  .picker-loading,
+  .picker-empty {
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+
+  .picker-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    border-top: 1px solid var(--border-dim);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .picker-item:first-child {
+    border-top: none;
+  }
+
+  .picker-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .picker-item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .picker-count {
+    font-size: 0.68rem;
     color: var(--text-muted);
   }
 </style>

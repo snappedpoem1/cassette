@@ -610,6 +610,8 @@ export const api = {
   removeLibraryRoot: (path: string) => invoke<void>('remove_library_root', { path }),
   scanLibrary: () => invoke<number>('scan_library'),
   getTracks: (limit = 500, offset = 0) => invoke<Track[]>('get_tracks', { limit, offset }),
+  getRecentlyFinalizedTracks: (days?: number) =>
+    invoke<Track[]>('get_recently_finalized_tracks', { days }),
   getTrackIdentityContext: (trackId: number) =>
     invoke<TrackIdentityContext | null>('get_track_identity_context', { track_id: trackId }),
   searchTracks: (query: string) => invoke<Track[]>('search_tracks', { query }),
@@ -676,6 +678,12 @@ export const api = {
     invoke<number>('create_playlist', { name, description, track_ids: trackIds }),
   replacePlaylistTracks: (playlistId: number, trackIds: number[]) =>
     invoke<void>('replace_playlist_tracks', { playlist_id: playlistId, track_ids: trackIds }),
+  async addTrackToPlaylist(playlistId: number, trackId: number): Promise<void> {
+    await invoke<void>('add_track_to_playlist', {
+      playlist_id: playlistId,
+      track_id: trackId,
+    });
+  },
   deletePlaylist: (playlistId: number) =>
     invoke<void>('delete_playlist', { playlist_id: playlistId }),
   playPlaylist: (playlistId: number, startIndex?: number) =>

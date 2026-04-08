@@ -865,6 +865,25 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Returns tracks added within the last `days` days, newest first.
+    /// Result count is capped at 50 to keep this query bounded.
+    pub fn get_recently_finalized_tracks(&self, days: u32) -> Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT id,path,title,artist,album,album_artist,track_number,disc_number,year,
+                   duration_secs,sample_rate,bit_depth,bitrate_kbps,format,file_size,
+                   cover_art_path,isrc,musicbrainz_recording_id,musicbrainz_release_id,
+                   canonical_artist_id,canonical_release_id,quality_tier,content_hash,added_at
+            FROM tracks
+            WHERE datetime(added_at) >= datetime('now', '-' || ?1 || ' days')
+            ORDER BY datetime(added_at) DESC
+            LIMIT 50
+        ",
+        )?;
+        let rows = stmt.query_map(params![days], Self::row_to_track)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn search_tracks(&self, query: &str) -> Result<Vec<Track>> {
         let pattern = format!("%{query}%");
         let mut stmt = self.conn.prepare(
@@ -3313,6 +3332,20 @@ impl Db {
         Ok(())
     }
 
+    /// Appends a single track to a playlist at the next available position.
+    pub fn add_track_to_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
+        let next_pos: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+            |row| row.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO playlist_items (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+            params![playlist_id, track_id, next_pos],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_playlist(&self, playlist_id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM playlists WHERE id = ?1", params![playlist_id])?;
@@ -4674,6 +4707,72 @@ mod tests {
             .get_spotify_album_history_last_imported_at()
             .expect("import timestamp should be readable");
         assert!(last_imported.is_some());
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_get_recently_finalized_tracks() {
+        let db_path = temp_db_path("recently-finalized-tracks");
+        let db = Db::open(&db_path).expect("db should open");
+
+        db.conn
+            .execute(
+                "INSERT INTO tracks (path, title, artist, album, album_artist, duration_secs, file_size, format, added_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))",
+                params![
+                    "/test/track.flac",
+                    "Test Track",
+                    "Test Artist",
+                    "Test Album",
+                    "Test Artist",
+                    180.0_f64,
+                    1_024_000_i64,
+                    "flac",
+                ],
+            )
+            .expect("insert track should succeed");
+
+        let recent = db
+            .get_recently_finalized_tracks(7)
+            .expect("recent tracks query should succeed");
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].title, "Test Track");
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_add_track_to_playlist() {
+        let db_path = temp_db_path("add-track-to-playlist");
+        let db = Db::open(&db_path).expect("db should open");
+
+        db.conn
+            .execute(
+                "INSERT INTO tracks (path, title, artist, album, album_artist, duration_secs, file_size, format)
+                 VALUES ('/t.flac','T','A','B','A', 180.0, 1024, 'flac')",
+                [],
+            )
+            .expect("insert track should succeed");
+        let track_id: i64 = db
+            .conn
+            .query_row("SELECT id FROM tracks WHERE path='/t.flac'", [], |row| {
+                row.get(0)
+            })
+            .expect("track id should exist");
+
+        let playlist_id = db
+            .create_playlist("Test", None, &[])
+            .expect("playlist should create");
+
+        db.add_track_to_playlist(playlist_id, track_id)
+            .expect("track should be added");
+
+        let items = db
+            .get_playlist_items(playlist_id)
+            .expect("playlist items should load");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].track_id, track_id);
 
         let _ = fs::remove_file(db_path);
     }

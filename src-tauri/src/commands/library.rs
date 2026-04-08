@@ -118,3 +118,16 @@ pub fn get_track_identity_context(
         .get_track_identity_context(track_id)
         .unwrap_or(None)
 }
+
+#[tauri::command]
+pub fn get_recently_finalized_tracks(
+    state: State<'_, AppState>,
+    days: Option<u32>,
+) -> Vec<Track> {
+    state
+        .db
+        .lock()
+        .unwrap()
+        .get_recently_finalized_tracks(days.unwrap_or(7))
+        .unwrap_or_default()
+}
