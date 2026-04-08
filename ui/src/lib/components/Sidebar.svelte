@@ -1,12 +1,24 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { trackCount, albums, isScanning, scanProgress } from '$lib/stores/library';
+  import CassetteLogo from '$lib/components/CassetteLogo.svelte';
+  import { isPlaying } from '$lib/stores/player';
 
-  const coreLinks = [
+  const listeningLinks = [
     {
       href: '/',
       label: 'Home',
       icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+    },
+    {
+      href: '/collection',
+      label: 'Collection',
+      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="6" height="18" rx="2"/><rect x="14" y="3" width="6" height="18" rx="2"/></svg>`,
+    },
+    {
+      href: '/now-playing',
+      label: 'Now Playing',
+      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 9.5v5l5-2.5-5-2.5z"/></svg>`,
     },
     {
       href: '/artists',
@@ -14,29 +26,19 @@
       icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>`,
     },
     {
-      href: '/library',
-      label: 'Library',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>`,
-    },
-    {
-      href: '/downloads',
-      label: 'Acquire',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
-    },
-    {
       href: '/playlists',
       label: 'Playlists',
       icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`,
     },
     {
-      href: '/history',
-      label: 'History',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13a9 9 0 1 0 2.1-5.9L3 8"/><path d="M12 7v5l3 3"/></svg>`,
+      href: '/queue',
+      label: 'Queue',
+      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12"/><path d="M4 12h16"/><path d="M4 18h10"/><path d="m18 17 3 3 3-3"/></svg>`,
     },
     {
-      href: '/collection',
-      label: 'Collection',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`,
+      href: '/crates',
+      label: 'Crates',
+      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18"/><path d="M5 7l2 12h10l2-12"/><path d="M9 11h6"/><path d="M10 15h4"/></svg>`,
     },
     {
       href: '/session',
@@ -47,19 +49,9 @@
 
   const utilityLinks = [
     {
-      href: '/import',
-      label: 'Import',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
-    },
-    {
-      href: '/tools',
-      label: 'Tools',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
-    },
-    {
-      href: '/settings',
-      label: 'Settings',
-      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+      href: '/workstation',
+      label: 'Workstation',
+      icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/><path d="M12 18v2"/></svg>`,
     },
   ];
 
@@ -71,15 +63,15 @@
 
 <nav class="sidebar">
   <div class="sidebar-logo">
-    <span class="logo-tape">TAPE</span>
-    <span class="logo-name">Cassette</span>
+    <CassetteLogo size={32} spinning={$isPlaying} withWordmark />
   </div>
 
   <ul class="nav-list">
-    {#each coreLinks as link}
+    <li class="nav-heading">Listen</li>
+    {#each listeningLinks as link}
       {@const active = isActive(link.href, $page.url.pathname)}
       <li>
-        <a href={link.href} class="nav-item" class:active>
+        <a href={link.href} class="nav-item" class:active aria-current={active ? 'page' : undefined}>
           <span class="nav-icon">{@html link.icon}</span>
           <span class="nav-label">{link.label}</span>
         </a>
@@ -90,10 +82,11 @@
   <div class="nav-divider"></div>
 
   <ul class="nav-list">
+    <li class="nav-heading">Control</li>
     {#each utilityLinks as link}
       {@const active = isActive(link.href, $page.url.pathname)}
       <li>
-        <a href={link.href} class="nav-item" class:active>
+        <a href={link.href} class="nav-item" class:active aria-current={active ? 'page' : undefined}>
           <span class="nav-icon">{@html link.icon}</span>
           <span class="nav-label">{link.label}</span>
         </a>
@@ -105,7 +98,7 @@
     {#if $isScanning}
       <div class="scan-widget">
         <div class="scan-label">
-          <span>Scanning…</span>
+          <span>Scanning...</span>
           {#if $scanProgress}
             <span>{$scanProgress.scanned.toLocaleString()}</span>
           {/if}
@@ -126,7 +119,7 @@
     <div class="stat-row">
       <span class="stat-value">{$trackCount.toLocaleString()}</span>
       <span class="stat-label">tracks</span>
-      <span class="stat-sep">·</span>
+      <span class="stat-sep">/</span>
       <span class="stat-value">{$albums.length.toLocaleString()}</span>
       <span class="stat-label">albums</span>
     </div>
@@ -134,78 +127,209 @@
 </nav>
 
 <style>
-.sidebar {
-  display: flex; flex-direction: column;
-  height: 100%; padding-bottom: 8px;
-  user-select: none;
-}
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding-bottom: 8px;
+    user-select: none;
+  }
 
-.sidebar-logo {
-  display: flex; flex-direction: column;
-  padding: 14px 14px 12px;
-  border-bottom: 1px solid var(--border-dim);
-  margin-bottom: 6px;
-}
-.logo-tape {
-  font-size: 0.62rem; font-weight: 800; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--primary);
-}
-.logo-name {
-  font-size: 0.85rem; font-weight: 700; letter-spacing: -0.01em;
-  color: var(--text-primary); margin-top: 1px;
-}
+  .sidebar-logo {
+    display: flex;
+    align-items: center;
+    padding: 14px 14px 12px;
+    border-bottom: 1px solid var(--border-dim);
+    margin-bottom: 8px;
+  }
 
-.nav-list { list-style: none; margin: 0; padding: 0 6px; display: flex; flex-direction: column; gap: 1px; }
+  .nav-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
 
-.nav-item {
-  display: flex; align-items: center; gap: 7px;
-  padding: 7px 8px 7px 6px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 0.78rem; font-weight: 500;
-  border-right: 2px solid transparent;
-  transition: color 0.1s, background 0.1s;
-  text-decoration: none;
-  margin-right: -6px;
-  padding-right: 14px;
-}
-.nav-item:hover { color: var(--text-secondary); background: rgba(139,180,212,0.04); }
-.nav-item.active {
-  color: var(--primary);
-  background: var(--bg-active);
-  border-right-color: var(--primary);
-}
+  .nav-heading {
+    padding: 8px 8px 4px;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+    font-weight: 700;
+  }
 
-.nav-icon {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: inherit;
-}
-.nav-label { flex: 1; }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 8px 8px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-right: 2px solid transparent;
+    transition: color 0.1s, background 0.1s, border-color 0.1s;
+    text-decoration: none;
+    margin-right: -8px;
+    padding-right: 16px;
+  }
 
-.nav-divider { height: 1px; background: var(--border-dim); margin: 6px 10px; }
+  .nav-item:hover {
+    color: var(--text-primary);
+    background: rgba(var(--mood-accent-rgb), 0.05);
+  }
 
-.sidebar-footer {
-  margin-top: auto; padding: 10px 8px 0;
-  border-top: 1px solid var(--border-dim);
-  display: flex; flex-direction: column; gap: 6px;
-}
+  .nav-item.active {
+    color: rgba(var(--mood-accent-rgb), 1);
+    background: linear-gradient(90deg, rgba(var(--mood-accent-rgb), 0.1), transparent 85%);
+    border-right-color: rgba(var(--mood-accent-rgb), 0.9);
+    transition: color var(--mood-shift-ms) ease, background var(--mood-shift-ms) ease, border-color var(--mood-shift-ms) ease;
+  }
 
-.stat-row { display: flex; align-items: baseline; gap: 5px; padding: 2px 6px; }
-.stat-value { font-size: 0.85rem; font-weight: 600; color: var(--text-primary); }
-.stat-label { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.stat-sep { font-size: 0.65rem; color: var(--text-muted); margin: 0 2px; }
+  .nav-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+  }
 
-.scan-widget {
-  padding: 7px 8px; background: var(--bg-card);
-  border-radius: var(--radius-sm); border: 1px solid var(--border);
-}
-.scan-label { display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--text-secondary); margin-bottom: 5px; }
-.scan-track { height: 2px; background: var(--bg-active); border-radius: 99px; overflow: hidden; }
-.scan-fill { height: 100%; background: var(--primary); border-radius: 99px; transition: width 0.3s; min-width: 6px; }
-.scan-file { font-size: 0.62rem; color: var(--text-muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-label {
+    flex: 1;
+  }
+
+  .nav-divider {
+    height: 1px;
+    background: var(--border-dim);
+    margin: 8px 12px;
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 12px 10px 0;
+    border-top: 1px solid var(--border-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .stat-row {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 6px;
+  }
+
+  .stat-value {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .stat-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .stat-sep {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin: 0 2px;
+  }
+
+  .scan-widget {
+    padding: 8px 9px;
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+  }
+
+  .scan-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  .scan-track {
+    height: 3px;
+    background: var(--bg-active);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+
+  .scan-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 99px;
+    transition: width 0.3s;
+    min-width: 6px;
+  }
+
+  .scan-file {
+    font-size: 0.66rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 960px) {
+    .sidebar-logo {
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+
+    .nav-list {
+      padding-left: 6px;
+      padding-right: 6px;
+    }
+
+    .nav-item {
+      justify-content: center;
+      margin-right: 0;
+      padding: 8px;
+      border-right-width: 0;
+      border-left: 2px solid transparent;
+    }
+
+    .nav-item.active {
+      border-left-color: rgba(var(--mood-accent-rgb), 0.9);
+      background: linear-gradient(90deg, rgba(var(--mood-accent-rgb), 0.12), transparent 78%);
+    }
+
+    .nav-label,
+    .nav-heading,
+    .stat-label,
+    .stat-sep {
+      display: none;
+    }
+
+    .scan-widget {
+      padding: 6px;
+    }
+
+    .scan-label {
+      justify-content: center;
+    }
+
+    .sidebar-footer {
+      padding-left: 6px;
+      padding-right: 6px;
+    }
+
+    .stat-row {
+      justify-content: center;
+      gap: 7px;
+    }
+  }
 </style>
