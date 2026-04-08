@@ -9,15 +9,15 @@
   $: scanLabel = $isScanning
     ? `Scanning ${$scanProgress?.scanned?.toLocaleString() ?? 0}${$scanProgress?.total ? ` / ${$scanProgress.total.toLocaleString()}` : ''}`
     : 'Scan idle';
-  $: queueLabel = $queue.length > 0 ? `${$queue.length} queued` : 'Queue clear';
+  $: queueLabel = $queue.length > 0 ? `${$queue.length} waiting` : 'Queue clear';
   $: backlogLabel = $backlogStatus?.running
-    ? `Backlog running${$backlogStatus.current_album ? `: ${$backlogStatus.current_album}` : ''}`
-    : 'Backlog idle';
+    ? `Catching up${$backlogStatus.current_album ? `: ${$backlogStatus.current_album}` : ''}`
+    : 'Inbox resting';
   $: serviceLabel = $slskdRuntimeStatus?.ready
-    ? 'slskd ready'
+    ? 'Soulseek ready'
     : $slskdRuntimeStatus?.binary_found
-      ? 'slskd down'
-      : 'slskd missing';
+      ? 'Soulseek waiting'
+      : 'Soulseek missing';
 </script>
 
 <div class="status-strip">
@@ -32,20 +32,20 @@
   </div>
 
   <div class="status-pill" class:is-busy={$backlogStatus?.running}>
-    <span class="status-label">Backlog</span>
+    <span class="status-label">Inbox</span>
     <span class="status-value">{backlogLabel}</span>
   </div>
 
   <div class="status-pill" class:is-down={!$slskdRuntimeStatus?.ready}>
-    <span class="status-label">Service</span>
+    <span class="status-label">Soulseek</span>
     <span class="status-value">{serviceLabel}</span>
   </div>
 
   <div class="status-pill" class:is-down={downProviders.length > 0}>
-    <span class="status-label">Providers</span>
+    <span class="status-label">Sources</span>
     <span class="status-value">
       {#if Object.keys($providerHealth).length > 0}
-        {healthyProviders.length} healthy / {downProviders.length} down
+        {healthyProviders.length} steady / {downProviders.length} down
       {:else}
         {configuredProviders.length} configured
       {/if}
@@ -56,34 +56,41 @@
 <style>
 .status-strip {
   display: flex;
-  gap: 8px;
-  padding: 8px 12px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 14px;
+  height: var(--statusstrip-h);
   overflow-x: auto;
-  border-top: 1px solid var(--border-dim);
-  border-bottom: 1px solid var(--border-dim);
-  background:
-    linear-gradient(180deg, rgba(247, 180, 92, 0.04), transparent 65%),
-    linear-gradient(90deg, rgba(139, 180, 212, 0.06), transparent 45%),
-    var(--bg-deep);
+  scrollbar-width: none;
+  background: rgba(6, 8, 16, 0.55);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(var(--mood-accent-rgb), 0.1);
+  transition: border-color var(--mood-shift-ms) ease;
+}
+
+.status-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .status-pill {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: max-content;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+  transition: border-color var(--mood-shift-ms) ease, background var(--mood-shift-ms) ease;
 }
 
 .status-pill.is-busy {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-left-color: rgba(var(--mood-accent-rgb), 0.7);
+  background: rgba(var(--mood-accent-rgb), 0.07);
 }
 
 .status-pill.is-down {
-  border-color: color-mix(in srgb, var(--error) 44%, var(--border));
+  border-left-color: rgba(239, 68, 68, 0.8);
+  background: rgba(239, 68, 68, 0.06);
 }
 
 .status-label {
