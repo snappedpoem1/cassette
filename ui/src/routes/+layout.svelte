@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { page } from '$app/stores';
   import '../app.css';
   import { onMount, onDestroy } from 'svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
@@ -31,6 +32,7 @@
   let dynamicGlassIntensity = 62;
   let moodStyle = '--mood-accent-rgb: 139,180,212; --mood-layer-a: rgba(139,180,212,0.08); --mood-layer-b: rgba(247,180,92,0.06); --mood-blur: 24px; --mood-shift-ms: 460ms;';
   let lastMoodCover = '';
+  $: isImmersionRoute = $page.url.pathname === '/now-playing';
 
   function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
@@ -195,22 +197,34 @@
   });
 </script>
 
-<div class="app-shell" class:compact-player={$compactPlayerMode} class:mood-enabled={dynamicGlassEnabled} style={moodStyle}>
+<div
+  class="app-shell"
+  class:compact-player={$compactPlayerMode}
+  class:mood-enabled={dynamicGlassEnabled}
+  class:immersive-route={isImmersionRoute}
+  class:low-motion={dynamicGlassLowMotion}
+  style={moodStyle}
+>
+  <div class="app-backdrop" aria-hidden="true">
+    <div class="backdrop-blob blob-a"></div>
+    <div class="backdrop-blob blob-b"></div>
+    <div class="backdrop-blob blob-c"></div>
+  </div>
   <header class="app-topbar">
     <div class="topbar-brand">
       <span class="brand-wordmark">Cassette</span>
       <span class="brand-divider">//</span>
-      <span class="brand-mode">Desktop</span>
+      <span class="brand-mode">Listening Room</span>
     </div>
     <div class="topbar-spacer"></div>
     <button class="topbar-link topbar-toggle" type="button" aria-label="Toggle compact player" on:click={toggleCompactPlayerMode}>
-      {$compactPlayerMode ? 'Full Player' : 'Mini Player'}
+      {$compactPlayerMode ? 'Full Player' : 'Compact Player'}
     </button>
     <button class="topbar-link topbar-toggle" type="button" aria-label="Minimize app" on:click={minimizeAppWindow}>
       Minimize
     </button>
     <button class="topbar-command" type="button" aria-label="Open command palette" on:click={openPalette}>
-      Commands
+      Go To
     </button>
   </header>
 
@@ -222,9 +236,11 @@
     <slot />
   </main>
 
-  <aside class="app-right">
-    <RightSidebar />
-  </aside>
+  {#if !isImmersionRoute}
+    <aside class="app-right">
+      <RightSidebar />
+    </aside>
+  {/if}
 
   <footer class="app-nowplaying">
     <SystemStatusStrip />
@@ -233,3 +249,64 @@
 
   <CommandPalette />
 </div>
+
+<style>
+  .app-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .backdrop-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.14;
+    will-change: transform;
+  }
+
+  .blob-a {
+    width: 640px;
+    height: 640px;
+    top: -220px;
+    left: -120px;
+    background: radial-gradient(circle, rgba(var(--mood-accent-rgb), 1), transparent 70%);
+    animation: blob-drift-a 22s ease-in-out infinite alternate;
+    transition: background var(--mood-shift-ms) ease;
+  }
+
+  .blob-b {
+    width: 520px;
+    height: 520px;
+    bottom: -160px;
+    right: -120px;
+    background: radial-gradient(circle, rgba(247, 180, 92, 1), transparent 70%);
+    animation: blob-drift-b 17s ease-in-out infinite alternate;
+    animation-delay: -8s;
+  }
+
+  .blob-c {
+    width: 420px;
+    height: 420px;
+    top: 35%;
+    left: 38%;
+    background: radial-gradient(circle, rgba(139, 180, 212, 1), transparent 70%);
+    animation: blob-drift-c 26s ease-in-out infinite alternate;
+    animation-delay: -14s;
+  }
+
+  .low-motion .backdrop-blob {
+    animation: none;
+  }
+
+  .app-sidebar,
+  .app-main,
+  .app-right,
+  .app-nowplaying,
+  .app-topbar {
+    position: relative;
+    z-index: 1;
+  }
+</style>
