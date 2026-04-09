@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
-  import { tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { api, type Track } from '$lib/api/tauri';
   import { loadQueue, queueTracks } from '$lib/stores/queue';
   import {
@@ -157,14 +156,14 @@
       class="command-panel"
       role="dialog"
       aria-modal="true"
-      aria-label="Command Palette"
+      aria-label="Go to palette"
       tabindex="-1"
       on:click|stopPropagation
     >
       <input
         class="command-input"
         type="text"
-        placeholder="Type a command or route..."
+        placeholder="Open a surface, jump to a route, or find a track..."
         bind:this={inputEl}
         value={$paletteSearchQuery}
         on:input={(event) => setPaletteQuery((event.currentTarget as HTMLInputElement).value)}
@@ -185,7 +184,7 @@
                   <div class="track-item">
                     <div class="track-meta">
                       <div class="track-title">{track.title}</div>
-                      <div class="track-details">{track.artist} • {track.album}</div>
+                      <div class="track-details">{track.artist} / {track.album}</div>
                     </div>
                     <div class="track-actions">
                       <button class="track-action" on:click={() => playTrackResult(track)}>Play</button>
@@ -197,10 +196,10 @@
             {/if}
           </div>
         {:else}
-          <div class="command-empty">No commands found.</div>
+          <div class="command-empty">No matching surfaces or actions.</div>
         {/if}
       {:else}
-        <div class="command-list" role="listbox" aria-label="Commands">
+        <div class="command-list" role="listbox" aria-label="Navigation and playback actions">
           {#each visibleCommands as command, index}
             <button
               class="command-item"
@@ -239,8 +238,8 @@
   .command-panel {
     width: min(760px, calc(100vw - 40px));
     max-height: min(70vh, 620px);
-    border-radius: 12px;
-    border: 1px solid rgba(247, 180, 92, 0.25);
+    border-radius: 14px;
+    border: 1px solid rgba(139, 180, 212, 0.24);
     background: linear-gradient(180deg, rgba(27, 34, 46, 0.98), rgba(17, 22, 31, 0.98));
     box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
     overflow: hidden;
@@ -250,7 +249,7 @@
 
   .command-input {
     width: 100%;
-    padding: 14px 16px;
+    padding: 15px 16px;
     border: none;
     border-bottom: 1px solid var(--border);
     color: var(--text-primary);
@@ -269,7 +268,7 @@
 
   .command-item {
     width: 100%;
-    padding: 10px 12px;
+    padding: 11px 12px;
     border-radius: 8px;
     border: 1px solid transparent;
     display: flex;
@@ -283,8 +282,8 @@
 
   .command-item:hover,
   .command-item.active {
-    background: rgba(247, 180, 92, 0.12);
-    border-color: rgba(247, 180, 92, 0.24);
+    background: rgba(139, 180, 212, 0.12);
+    border-color: rgba(139, 180, 212, 0.24);
   }
 
   .command-label {
@@ -341,9 +340,9 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    border: 1px solid rgba(247, 180, 92, 0.18);
+    border: 1px solid rgba(139, 180, 212, 0.18);
     border-radius: 8px;
-    background: rgba(247, 180, 92, 0.06);
+    background: rgba(139, 180, 212, 0.06);
     padding: 10px 12px;
   }
 
@@ -377,9 +376,9 @@
   }
 
   .track-action {
-    border: 1px solid rgba(247, 180, 92, 0.35);
+    border: 1px solid rgba(139, 180, 212, 0.35);
     border-radius: 999px;
-    background: rgba(247, 180, 92, 0.12);
+    background: rgba(139, 180, 212, 0.12);
     color: var(--text-primary);
     padding: 4px 10px;
     font-size: 0.72rem;
@@ -389,7 +388,7 @@
   }
 
   .track-action:hover {
-    background: rgba(247, 180, 92, 0.2);
+    background: rgba(139, 180, 212, 0.2);
   }
 
   @media (max-width: 640px) {

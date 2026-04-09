@@ -1,0 +1,84 @@
+<h2>Three approaches to the full sweep</h2>
+<p class="subtitle">Same destination — different engineering paths. My recommendation is highlighted.</p>
+
+<div class="options">
+  <div class="option" data-choice="layered" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Layered CSS system <span style="font-size:0.7rem;color:#8bb4d4;font-weight:400;margin-left:8px;">— my recommendation</span></h3>
+      <p>Extend the existing <code>--mood-*</code> CSS variable system to cover every morph surface. Add a <code>::before</code> backdrop blob layer on <code>.app-shell</code>, push grain as a pseudo-element, wire all glow/border colors to derived mood vars. The layout.svelte color sampler already does the heavy lifting — we just widen what it feeds.</p>
+      <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div style="padding:8px 10px;background:rgba(94,196,160,0.08);border:1px solid rgba(94,196,160,0.2);border-radius:6px;">
+          <div style="font-size:0.65rem;color:#5ec4a0;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Pros</div>
+          <ul style="font-size:0.74rem;color:#93a3b7;margin:0;padding-left:14px;line-height:1.8;">
+            <li>Builds on working code</li>
+            <li>CSS transitions = free 60fps</li>
+            <li>low_motion already respected</li>
+            <li>No new JS complexity</li>
+          </ul>
+        </div>
+        <div style="padding:8px 10px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.14);border-radius:6px;">
+          <div style="font-size:0.65rem;color:#ef4444;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Cons</div>
+          <ul style="font-size:0.74rem;color:#93a3b7;margin:0;padding-left:14px;line-height:1.8;">
+            <li>Backdrop blobs need careful perf tuning</li>
+            <li>Grain overlay is a pseudo-element trick</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="canvas" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Canvas backdrop renderer</h3>
+      <p>A dedicated <code>&lt;canvas&gt;</code> behind the app shell renders animated color blobs using the sampled track color. More control over the animation, true "morphing" blobs, can react to audio amplitude. More complex to build and maintain.</p>
+      <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div style="padding:8px 10px;background:rgba(94,196,160,0.08);border:1px solid rgba(94,196,160,0.2);border-radius:6px;">
+          <div style="font-size:0.65rem;color:#5ec4a0;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Pros</div>
+          <ul style="font-size:0.74rem;color:#93a3b7;margin:0;padding-left:14px;line-height:1.8;">
+            <li>Most expressive motion</li>
+            <li>Could react to actual audio</li>
+          </ul>
+        </div>
+        <div style="padding:8px 10px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.14);border-radius:6px;">
+          <div style="font-size:0.65rem;color:#ef4444;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Cons</div>
+          <ul style="font-size:0.74rem;color:#93a3b7;margin:0;padding-left:14px;line-height:1.8;">
+            <li>New JS animation loop</li>
+            <li>Harder to respect low_motion</li>
+            <li>Overkill for the backdrop layer</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="hybrid" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybrid — CSS system + one JS enhancement</h3>
+      <p>Do the CSS variable expansion (approach A) for everything except the backdrop blobs, where we use a lightweight JS-driven CSS animation that morphs between two blob positions using <code>@keyframes</code> with dynamic inline styles. Best of both: CSS does the heavy lifting, JS only touches the backdrop.</p>
+      <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div style="padding:8px 10px;background:rgba(94,196,160,0.08);border:1px solid rgba(94,196,160,0.2);border-radius:6px;">
+          <div style="font-size:0.65rem;color:#5ec4a0;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Pros</div>
+          <ul style="font-size:0.74rem;color:#93a3b7;margin:0;padding-left:14px;line-height:1.8;">
+            <li>Backdrop actually morphs shape</li>
+            <li>Still CSS-native for transitions</li>
+            <li>Manageable complexity</li>
+          </ul>
+        </div>
+        <div style="padding:8px 10px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.14);border-radius:6px;">
+          <div style="font-size:0.65rem;color:#ef4444;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Cons</div>
+          <ul style="font-size:0.74rem;color:#93a3b7;margin:0;padding-left:14px;line-height:1.8;">
+            <li>Slightly more code than pure CSS</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:14px 16px;background:rgba(139,180,212,0.06);border:1px solid rgba(139,180,212,0.16);border-radius:10px;">
+  <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.1em;color:#8bb4d4;margin-bottom:6px;">My recommendation: A (with blob animation from C if you want it)</div>
+  <p style="font-size:0.78rem;color:#93a3b7;line-height:1.7;margin:0;">The existing color sampler in <code>+layout.svelte</code> already produces <code>--mood-accent-rgb</code> per track. Widening that to drive the whole visual system is low-risk, fast to ship, and produces the morph effect you're after. We can always layer the animated blobs on top later.</p>
+</div>

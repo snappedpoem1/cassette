@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 ## Architecture
 
@@ -68,11 +68,38 @@ Last updated: 2026-04-07
 - Library, Artists, and Playlists now expose a shared context-action rail for artist/album/track surfaces (play, queue, and bounded acquisition actions)
 - Settings now exposes optional Now Playing visualizer controls (`ui_visualizer_enabled`, `ui_visualizer_low_motion`), and player bar rendering honors global disable and low-motion preferences
 - Now Playing now also supports an optional appreciation signal lane (`ui_appreciation_lane_enabled`) that surfaces compact artist tags, listener scale, and lyrics-source context without changing playback behavior
-- Visualizer stack now includes a MilkDrop-style Butterchurn mode with imported preset packs and persisted mode/preset settings (`ui_visualizer_mode`, `ui_visualizer_preset`) alongside the lightweight bars fallback
+- Visualizer stack now includes a MilkDrop-style Butterchurn mode with the lightweight curated preset pack and persisted mode/preset settings (`ui_visualizer_mode`, `ui_visualizer_preset`) alongside the lightweight bars fallback
 - Visualizer settings now expose explicit `waveform` and `spectrum` modes in addition to optional MilkDrop mode, and frame-budget behavior is bounded through persisted FPS cap plus hidden-tab/idle render throttling (`ui_visualizer_fps_cap`)
 - Dynamic Glass mooding now adapts shell overlays from now-playing artwork/identity with persisted safety controls (`ui_dynamic_glass_enabled`, `ui_dynamic_glass_low_motion`, `ui_dynamic_glass_intensity`) and static fallback defaults when unavailable
 - Home now includes Session Composer v1: explainable listening-arc generation with reusable saved modes plus replay/skip transition feedback persistence (`ui_session_composer_modes_json`, `ui_session_composer_feedback_json`)
 - Settings now includes Stage D Safe Extension Surface controls: capability-scoped extension manifests (visual-pack, enricher, provider-adapter), explicit deterministic-core boundary (`deterministicCoreAccess: false`), isolated per-extension health probes, and persisted extension telemetry (`ui_extension_health_telemetry_json`)
+
+### Signature Surface Rebuild Waves 2-4 (2026-04-08)
+
+- Collection is now ownership-first: `ui/src/routes/collection/+page.svelte` leads with best-copy shelves, archive-health, provenance, edition markers, and missing-from-artist pressure instead of charts-first dashboarding
+- Album now has a dedicated edition ritual route at `ui/src/routes/albums/[albumId]/+page.svelte` with duplicate-copy comparison, related versions, provenance cues, and family context
+- Artist now acts as a rediscovery surface: `ui/src/routes/artists/+page.svelte` prioritizes owned albums, missing releases, and related-version rails
+- Shared ownership logic for best-copy ranking, edition markers, related versions, and missing summaries lives in `ui/src/lib/ownership.ts`
+- Playlists now carry authored-state overlays in `ui/src/routes/playlists/+page.svelte`: notes, mood line, sections, arc labels, and variants are additive to existing playlist CRUD rather than a backend schema fork
+- Crates are now first-class listening objects at `ui/src/routes/crates/+page.svelte`, supporting saved and temporary collection slices built from collection filters, playlists, or the active queue
+- Queue is now a sculpting surface at `ui/src/routes/queue/+page.svelte` with play-after-current, pin, hold, cut-after-this, queue scenes, and pivot actions
+- Session now preserves arc memory in `ui/src/lib/components/SessionComposer.svelte` and `ui/src/routes/session/+page.svelte`: sessions can be saved, replayed, branched, imported from playlist/crate/queue scene, and exported back to playlists
+- Now Playing now has a dedicated shrine route at `ui/src/routes/now-playing/+page.svelte` powered by `ui/src/lib/components/NowPlayingShrine.svelte`, with art-led focus, provenance context, lyrics, up-next, calmer chrome, and low-motion-aware immersion
+- The listening shell now treats `/now-playing` and `/crates` as first-class listening routes through `ui/src/lib/components/Sidebar.svelte`, `ui/src/lib/stores/commands.ts`, and `ui/src/routes/+layout.svelte`
+- Additive authored-state persistence for playlists, crates, queue scenes, queue ritual state, and saved sessions now lives in `ui/src/lib/stores/rituals.ts` using existing settings storage instead of backend/schema expansion
+
+### Signature Surface Rebuild Waves 5-6 (2026-04-08)
+
+- Calm automation now has an explicit threshold ladder in `ui/src/lib/automation-digest.ts`: `silent`, `digest`, `soft attention`, and `explicit intervention`
+- `ui/src/lib/components/AutomationDigestPanel.svelte` is now the shared surface for background recap, soft attention, and explicit intervention handoff
+- Home now shows digest-level automation summary instead of raw operator pressure counts through `ui/src/routes/+page.svelte`
+- The right rail now has a dedicated `Room` tab in `ui/src/lib/components/RightSidebar.svelte`, so the listening shell can surface background state without opening the full workstation
+- Workstation now acts as the explicit automation boundary in `ui/src/routes/workstation/+page.svelte`, with the digest ladder, review entry points, and deeper control links gathered in one place
+- Downloads stays detailed, but that detail is now explicitly workstation-owned: `ui/src/routes/downloads/+page.svelte` leads with the shared digest and hides troubleshooting behind a diagnostics toggle
+- The shell visual system is now more coherent through `ui/src/app.css`: stronger text contrast, calmer surface treatments, improved spacing rhythm, and more consistent topbar/sidebar/now-playing hierarchy
+- Sidebar navigation now separates `Listen` from `Control` in `ui/src/lib/components/Sidebar.svelte`
+- Settings improves keyboard semantics by replacing faux-button subnav elements with real buttons in `ui/src/routes/settings/+page.svelte`
+- Import and Tools now read as workstation-owned ritual surfaces instead of stray admin panels in `ui/src/routes/import/+page.svelte` and `ui/src/routes/tools/+page.svelte`
 
 ### Acquisition Pipeline (Director Engine)
 - Two-pass waterfall orchestration with per-provider semaphores
@@ -570,7 +597,7 @@ Summary: 25 tracks probed | Discogs hits: 25/25 | Last.fm hits: 0/25
 
 ## Verification Snapshot
 
-Verified on 2026-04-06:
+Verified on 2026-04-08:
 
 - `cargo check --workspace` passes
 - `cargo test -p cassette-core` passes

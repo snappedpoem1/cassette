@@ -1,0 +1,98 @@
+<h2>The Blend: Three Directions in One System</h2>
+<p class="subtitle">Where each direction lives in Cassette's UI — and how they reinforce each other</p>
+
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin:24px 0;">
+
+  <!-- Cinematic -->
+  <div style="background:linear-gradient(160deg,#0d1520,#060810);border:1px solid rgba(139,180,212,0.22);border-radius:14px;padding:20px;">
+    <div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.14em;color:#f7b45c;font-weight:700;margin-bottom:10px;">Cinematic / Premium</div>
+    <div style="font-size:0.88rem;color:#edf4fb;font-weight:600;margin-bottom:8px;">Lives in the hero surfaces</div>
+    <ul style="font-size:0.78rem;color:#93a3b7;line-height:1.9;padding-left:16px;margin:0;">
+      <li>Full-bleed cover art backdrops with deep blur</li>
+      <li>Glass panels with backdrop-filter</li>
+      <li>Album art cast as ambient room light</li>
+      <li>Now Playing Shrine as a true cinema moment</li>
+      <li>Large typographic hierarchy — artist name owns the frame</li>
+    </ul>
+    <div style="margin-top:14px;padding:10px 12px;background:rgba(139,180,212,0.07);border-radius:8px;border:1px solid rgba(139,180,212,0.14);">
+      <div style="font-size:0.68rem;color:#8bb4d4;text-transform:uppercase;letter-spacing:0.08em;">Surfaces</div>
+      <div style="font-size:0.78rem;color:#c4d1df;margin-top:4px;">Home hero · Now Playing · Album detail · Artist pages</div>
+    </div>
+  </div>
+
+  <!-- Analog Warmth -->
+  <div style="background:linear-gradient(160deg,#120d08,#0a0608);border:1px solid rgba(247,180,92,0.22);border-radius:14px;padding:20px;">
+    <div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.14em;color:#ffd08a;font-weight:700;margin-bottom:10px;">Analog Warmth</div>
+    <div style="font-size:0.88rem;color:#edf4fb;font-weight:600;margin-bottom:8px;">Lives in the texture layer</div>
+    <ul style="font-size:0.78rem;color:#93a3b7;line-height:1.9;padding-left:16px;margin:0;">
+      <li>Subtle grain/noise overlay (CSS, no images)</li>
+      <li>Warm amber glow on active/hover states</li>
+      <li>Cassette brand mark treatment on the logo</li>
+      <li>Track list rows feel like a cue sheet</li>
+      <li>Slightly warm shadows (amber-tinted, not cold grey)</li>
+    </ul>
+    <div style="margin-top:14px;padding:10px 12px;background:rgba(247,180,92,0.07);border-radius:8px;border:1px solid rgba(247,180,92,0.14);">
+      <div style="font-size:0.68rem;color:#f7b45c;text-transform:uppercase;letter-spacing:0.08em;">Surfaces</div>
+      <div style="font-size:0.78rem;color:#c4d1df;margin-top:4px;">Sidebar · Player bar · Cards · Track rows</div>
+    </div>
+  </div>
+
+  <!-- Club Energy -->
+  <div style="background:linear-gradient(160deg,#090d18,#060810);border:1px solid rgba(180,139,212,0.22);border-radius:14px;padding:20px;">
+    <div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.14em;color:#c4a8ff;font-weight:700;margin-bottom:10px;">Club / DJ Energy</div>
+    <div style="font-size:0.88rem;color:#edf4fb;font-weight:600;margin-bottom:8px;">Lives in the motion layer</div>
+    <ul style="font-size:0.78rem;color:#93a3b7;line-height:1.9;padding-left:16px;margin:0;">
+      <li>Seek bar with glow pulse during playback</li>
+      <li>Play button with breathing ring animation</li>
+      <li>Visualizer frequencies more vivid, more present</li>
+      <li>Active state transitions — not instant, not slow</li>
+      <li>Status chips with a heartbeat-style alive indicator</li>
+    </ul>
+    <div style="margin-top:14px;padding:10px 12px;background:rgba(180,139,212,0.07);border-radius:8px;border:1px solid rgba(180,139,212,0.14);">
+      <div style="font-size:0.68rem;color:#c4a8ff;text-transform:uppercase;letter-spacing:0.08em;">Surfaces</div>
+      <div style="font-size:0.78rem;color:#c4d1df;margin-top:4px;">Player bar · Visualizer · Seek/vol controls · Live badges</div>
+    </div>
+  </div>
+</div>
+
+<div style="background:linear-gradient(135deg,rgba(139,180,212,0.06),rgba(247,180,92,0.06),rgba(180,139,212,0.06));border:1px solid rgba(255,255,255,0.1);border-radius:14px;padding:20px;margin-top:8px;">
+  <div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.12em;color:#edf4fb;font-weight:700;margin-bottom:12px;">The unified system in one sentence</div>
+  <p style="font-size:0.9rem;color:#c4d1df;line-height:1.75;margin:0;">
+    Cinematic depth sets the stage. Analog texture makes it feel <em>worn and loved</em>. Club energy makes it feel <em>alive while music plays</em>.
+    Together: a room that looks premium when still and crackles when something's spinning.
+  </p>
+</div>
+
+<div style="margin-top:20px;">
+  <div style="font-size:0.78rem;color:#93a3b7;margin-bottom:12px;">Now — which surface should we nail first? Pick the one that matters most to you:</div>
+  <div class="options">
+    <div class="option" data-choice="player" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>The Player Bar</h3>
+        <p>Where you look 100% of the time music is playing. Seek glow, play button energy, the visualizer presence. Most immediate impact.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="home" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>Home + Hero surfaces</h3>
+        <p>The first impression. Cinematic backdrop, glass panels, cover art as ambient light, the "return ritual" moment.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="global" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>Global texture pass</h3>
+        <p>Apply the grain layer, warm hover glows, and refined typography across the whole app at once. Everything feels more alive immediately.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="all" onclick="toggleSelect(this)">
+      <div class="letter">D</div>
+      <div class="content">
+        <h3>All of it, in order</h3>
+        <p>Global texture first (cheapest gains), then player bar, then hero surfaces. Full sweep.</p>
+      </div>
+    </div>
+  </div>
+</div>

@@ -32,7 +32,6 @@
     await loadSlskdRuntimeStatus();
     await loadPolicyProfile();
     await loadVisualizerPrefs();
-    await loadMilkdropPresets();
     await loadExtensionSurface();
   });
 
@@ -94,6 +93,15 @@
 
   $: if (milkdropPresetNames.length > 0 && !milkdropPresetNames.includes(visualizerPreset)) {
     visualizerPreset = milkdropPresetNames[0];
+  }
+
+  $: if (
+    activeSection === 'tools' &&
+    visualizerMode === 'milkdrop' &&
+    !loadingMilkdropPresets &&
+    milkdropPresetNames.length === 0
+  ) {
+    void loadMilkdropPresets();
   }
 
   $: extensionRows = SAFE_EXTENSIONS.map((extension) => ({
@@ -376,26 +384,28 @@
   }
 </script>
 
-<svelte:head><title>Settings · Cassette</title></svelte:head>
+<svelte:head><title>Settings - Cassette</title></svelte:head>
 
 <div class="settings-page">
   <div class="settings-layout">
     <nav class="settings-subnav">
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="subnav-item" class:active={activeSection === 'library'}    on:click={() => activeSection = 'library'}    role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'library')}>Library</div>
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="subnav-item" class:active={activeSection === 'providers'}  on:click={() => activeSection = 'providers'}  role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'providers')}>Providers</div>
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="subnav-item" class:active={activeSection === 'enrichment'} on:click={() => activeSection = 'enrichment'} role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'enrichment')}>Enrichment</div>
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="subnav-item" class:active={activeSection === 'tools'}      on:click={() => activeSection = 'tools'}      role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'tools')}>Tools</div>
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="subnav-item" class:active={activeSection === 'lastfm'}     on:click={() => activeSection = 'lastfm'}     role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'lastfm')}>Last.fm</div>
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      <div class="subnav-item" class:active={activeSection === 'extensions'} on:click={() => activeSection = 'extensions'} role="button" tabindex="0" on:keydown={(e) => e.key === 'Enter' && (activeSection = 'extensions')}>Extensions</div>
+      <button type="button" class="subnav-item" class:active={activeSection === 'library'} on:click={() => activeSection = 'library'}>Library</button>
+      <button type="button" class="subnav-item" class:active={activeSection === 'providers'} on:click={() => activeSection = 'providers'}>Providers</button>
+      <button type="button" class="subnav-item" class:active={activeSection === 'enrichment'} on:click={() => activeSection = 'enrichment'}>Enrichment</button>
+      <button type="button" class="subnav-item" class:active={activeSection === 'tools'} on:click={() => activeSection = 'tools'}>Tools</button>
+      <button type="button" class="subnav-item" class:active={activeSection === 'lastfm'} on:click={() => activeSection = 'lastfm'}>Last.fm</button>
+      <button type="button" class="subnav-item" class:active={activeSection === 'extensions'} on:click={() => activeSection = 'extensions'}>Extensions</button>
     </nav>
 
     <div class="settings-content">
+      <div class="settings-hero">
+        <div class="section-title">Settings</div>
+        <div class="section-sub">
+          Library paths, provider keys, policy profiles, visual comfort, and safe extension boundaries all live here.
+          This is a control room, not the front door.
+        </div>
+      </div>
+
       <!-- LIBRARY -->
       {#if activeSection === 'library'}
         <div class="settings-section">
@@ -629,7 +639,7 @@
 
         <div class="settings-section">
           <div class="section-title">Now Playing Visualizer</div>
-          <div class="section-sub">Optional player-bar visualizer and appreciation signal lanes with low-motion fallback mode. MilkDrop mode uses imported Butterchurn presets.</div>
+          <div class="section-sub">Optional player-bar visualizer and appreciation signal lanes with low-motion fallback mode. MilkDrop mode uses the lightweight curated Butterchurn preset pack.</div>
           <div class="field-group">
             <div class="field field-full">
               <label class="checkbox-field">
@@ -797,12 +807,22 @@
   padding: 7px 14px; font-size: 0.78rem; cursor: pointer;
   color: var(--text-muted); border-right: 2px solid transparent;
   transition: color 0.1s, background 0.1s;
+  text-align: left;
+  width: 100%;
 }
 .subnav-item:hover { color: var(--text-secondary); background: rgba(139,180,212,0.04); }
 .subnav-item.active { color: var(--primary); background: rgba(139,180,212,0.06); border-right-color: var(--primary); }
 
 /* content */
 .settings-content { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 20px; }
+.settings-hero {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-base));
+}
 
 .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .section-title {

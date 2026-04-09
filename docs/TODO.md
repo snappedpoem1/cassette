@@ -2,7 +2,7 @@
 
 **Method**: Prioritize by user impact, reliability risk, and execution clarity.  
 **Rule**: If a task is not in this file, it is not committed project scope yet.  
-**Last Updated**: 2026-04-07
+**Last Updated**: 2026-04-08
 
 Scope note:
 
@@ -207,6 +207,189 @@ Acceptance:
 ---
 
 ## P1
+
+### [P1] [todo] GAP-F00 Finish the listening-surface quality floor
+
+Why:
+
+- The current repo has visible mojibake, weak contrast, remote font dependency, and avoidable a11y debt on primary surfaces.
+- No later signature-surface rebuild should land on top of a visibly broken floor.
+
+Reference:
+
+- `docs/VISUAL_SYSTEM_DIRECTION.md`
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+
+Acceptance:
+
+- [ ] Primary listening surfaces in `ui/src` have no mojibake
+- [ ] `ui/src/app.css` no longer relies on remote font loading
+- [ ] Contrast floor is raised on primary surfaces without reducing calmness
+- [ ] Primary surface a11y suppressions are reduced where controls are currently non-semantic
+- [ ] `npm run build` still passes
+
+### [P1] [todo] GAP-F01 Lock listening-first boundaries, language governance, and object model before larger UI expansion
+
+Why:
+
+- Cassette has the right engine seriousness already. The current risk is surface drift.
+- We need hard rules for navigation, vocabulary, and object identity before rebuilding Collection, Queue, Playlists, and Session.
+
+Reference:
+
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+- `docs/EXPERIENCE_BOUNDARY_MAP.md`
+- `docs/VISUAL_SYSTEM_DIRECTION.md`
+- `docs/OBJECT_MODEL_DECISIONS.md`
+
+Acceptance:
+
+- [ ] Listening surfaces and Workstation are explicitly separated in shell/navigation
+- [ ] Primary surfaces do not use banned internal terms
+- [ ] Playlist, Crate, Session, and Queue Scene have separate definitions and explicit conversion rules
+- [ ] Anti-feature list for this cycle stays enforced in planning and review
+
+### [P1] [done] GAP-F02 Rebuild Collection, Album, and Artist around ownership and edition visibility
+
+Why:
+
+- `ui/src/routes/collection/+page.svelte` is still stats-first.
+- Album lacks a dedicated edition ritual surface.
+- Artist still reads more like browse than rediscovery.
+
+Reference:
+
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+- `docs/OBJECT_MODEL_DECISIONS.md`
+
+Acceptance:
+
+- [x] Collection becomes ownership-first with best-copy, archive-health, provenance, and edition cues
+- [x] Dedicated Album surface exists
+- [x] Artist surface exposes missing-from-artist and related-version rails
+- [x] Charts remain subordinate to shelves and best-copy narratives
+
+Proof (2026-04-08):
+
+- `ui/src/routes/collection/+page.svelte` now leads with ownership shelves, best-copy framing, archive-health, provenance, and edition visibility instead of stats-first dashboarding.
+- `ui/src/routes/albums/[albumId]/+page.svelte` is now the dedicated edition ritual surface with copy comparison, provenance cues, related versions, and family context.
+- `ui/src/routes/artists/+page.svelte` now prioritizes owned albums, missing releases, and rediscovery rails.
+- Shared ownership logic is centralized in `ui/src/lib/ownership.ts`.
+- Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08.
+
+### [P1] [done] GAP-F03 Rebuild Playlists, Crates, and Queue for daily use
+
+Why:
+
+- Current playlists are only CRUD plus track list.
+- Crates do not exist as first-class objects.
+- Queue is functional but not sculptable.
+
+Reference:
+
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+- `docs/OBJECT_MODEL_DECISIONS.md`
+
+Acceptance:
+
+- [x] Playlists support notes, sections, arc labels, and variants
+- [x] Crates exist as saved or temporary collection slices
+- [x] Queue supports play after current, pin, hold, cut after this, and queue scenes
+- [x] Saved queue scenes can be restored without breaking playback continuity
+
+Proof (2026-04-08):
+
+- `ui/src/routes/playlists/+page.svelte` now carries playlist notes, mood line, sectioned arc labels, variants, and direct handoff into Session and Crate flows.
+- `ui/src/routes/crates/+page.svelte` adds first-class saved and temporary collection slices backed by additive authored-state persistence.
+- `ui/src/routes/queue/+page.svelte` adds sculpting actions (`play after current`, `pin`, `hold`, `cut after this`) plus queue scene save/restore and pivot actions.
+- Authored-state persistence for playlists, crates, queue scenes, and queue ritual state lives in `ui/src/lib/stores/rituals.ts`.
+- Queue sculpting helpers live in `ui/src/lib/queue-ritual.ts`, and queue continuity is preserved through `ui/src/lib/stores/queue.ts`.
+- Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08.
+
+### [P1] [done] GAP-F04 Rebuild Session and Now Playing as the emotional center
+
+Why:
+
+- Current Session is still framed as a tool.
+- Current Now Playing is useful but not yet immersive.
+
+Reference:
+
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+- `docs/VISUAL_SYSTEM_DIRECTION.md`
+- `docs/OBJECT_MODEL_DECISIONS.md`
+
+Acceptance:
+
+- [x] Session preserves memory, replay, and branching
+- [x] Session can export/import to playlist cleanly
+- [x] Now Playing gains stronger art emphasis, calmer chrome, provenance awareness, and focus mode
+- [x] Reduced-motion parity is preserved
+
+Proof (2026-04-08):
+
+- `ui/src/lib/components/SessionComposer.svelte` now persists session memory, supports replay and branching, imports from playlists/crates/queue scenes, and exports arcs back into playlists.
+- `ui/src/routes/session/+page.svelte` now frames Session as arc memory instead of tooling.
+- `ui/src/lib/components/NowPlayingShrine.svelte` and `ui/src/routes/now-playing/+page.svelte` create a dedicated art-led shrine with provenance, context, lyrics, up-next, and calmer chrome.
+- `ui/src/lib/components/NowPlaying.svelte`, `ui/src/routes/+layout.svelte`, and `ui/src/lib/components/Sidebar.svelte` now treat the immersion route as a first-class listening surface.
+- Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08.
+
+### [P1] [done] GAP-F05 Refactor automation handoff into calm digest plus Workstation detail
+
+Why:
+
+- Downloads and related control surfaces currently leak too much operator posture into the main product feel.
+- Cassette needs calm automation thresholds, not louder tooling.
+
+Reference:
+
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+- `docs/EXPERIENCE_BOUNDARY_MAP.md`
+
+Acceptance:
+
+- [x] Main app shows digest-level automation summary, not raw operator detail
+- [x] Workstation holds deeper diagnostics, review, replay, import, and history
+- [x] Calm thresholds are defined as silent, digest, soft attention, and explicit intervention
+- [x] Blocked-work visibility remains high
+
+Proof (2026-04-08):
+
+- `ui/src/lib/automation-digest.ts` now defines the calm automation model and threshold ladder (`silent`, `digest`, `soft_attention`, `explicit_intervention`).
+- `ui/src/lib/components/AutomationDigestPanel.svelte` provides the shared digest surface used across listening and workstation boundaries.
+- `ui/src/routes/+page.svelte` now uses digest-level automation summary in Home instead of stats-first pressure framing.
+- `ui/src/lib/components/RightSidebar.svelte` adds a `Room` rail with the calm automation digest while keeping queue/context adjacent.
+- `ui/src/routes/workstation/+page.svelte` now holds the explicit threshold boundary, repair links, and deeper review entry points.
+- `ui/src/routes/downloads/+page.svelte` keeps detailed diagnostics inside Workstation and tucks troubleshooting behind an explicit diagnostics toggle.
+- Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, `.\scripts\check_docs_state.ps1`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08.
+
+### [P1] [done] GAP-F06 Run the full visual system unification pass after the surface rebuild waves
+
+Why:
+
+- The shell currently mixes good components with generic utility styling.
+- The final pass must unify hierarchy, spacing, density, playback-active behavior, and idle beauty after the structural work is done.
+
+Reference:
+
+- `docs/VISUAL_SYSTEM_DIRECTION.md`
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+
+Acceptance:
+
+- [x] Visual hierarchy is consistent across primary surfaces
+- [x] Long-session readability is improved and verified
+- [x] Playback-active shell behavior is calmer and more coherent
+- [x] Keyboard-only and low-motion parity remain intact
+
+Proof (2026-04-08):
+
+- `ui/src/app.css` now carries the unified shell polish pass: stronger text contrast, calmer panel treatments, denser but more readable controls, and more coherent sidebar/topbar/now-playing hierarchy.
+- `ui/src/lib/components/Sidebar.svelte` now separates `Listen` from `Control` explicitly in navigation.
+- `ui/src/routes/settings/+page.svelte` replaces faux-button subnav elements with real buttons and adds clearer route framing.
+- `ui/src/routes/import/+page.svelte`, `ui/src/routes/tools/+page.svelte`, `ui/src/routes/downloads/+page.svelte`, and `ui/src/routes/workstation/+page.svelte` now share the calmer workstation surface rhythm instead of reading like separate admin panels.
+- `ui/src/lib/visualizer/presets.ts`, `ui/src/lib/components/PlaybackVisualizer.svelte`, and `ui/src/routes/settings/+page.svelte` now keep MilkDrop mode on the curated minimal Butterchurn pack and only load preset names when the tools pane actually needs them, which removes the stray client chunk warning without touching the listening surface contract.
+- Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, `.\scripts\check_docs_state.ps1`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08.
 
 ### [P1] [done] Harden async and recovery behavior in acquisition flows
 

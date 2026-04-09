@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { buildAutomationDigest } from '$lib/automation-digest';
+  import AutomationDigestPanel from '$lib/components/AutomationDigestPanel.svelte';
   import {
     backlogStatus, debugStats, downloadJobs, isSearchingMetadata, metadataSearchResults,
     artistDiscography, loadDownloadJobs, searchMetadata, loadDiscography,
@@ -7,6 +9,7 @@
     providerStatuses, slskdRuntimeStatus, loadDownloadConfig,
   } from '$lib/stores/downloads';
   import { api, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DeadLetterSummary, type DownloadAlbumResult, type RequestLineage, type ReviewContract, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
+  import { queue } from '$lib/stores/queue';
   import { debounce } from '$lib/utils';
 
   let searchInput = '';
@@ -14,6 +17,7 @@
   let queueNotice: string | null = null;
   let backlogLimit = 200;
   let showDebug = false;
+  let showDiagnostics = false;
 
   type ProviderDiagnostic = {
     id: string;
@@ -73,6 +77,16 @@
   $: completedRequests = recentRequests.filter((request) =>
     ['finalized', 'already_present'].includes(request.status)
   );
+  $: automationDigest = buildAutomationDigest({
+    requests: recentRequests,
+    missingAlbums,
+    providerHealth: $providerHealth,
+    providerStatuses: $providerStatuses,
+    slskdReady: $slskdRuntimeStatus?.ready ?? false,
+    isScanning: false,
+    backlogRunning: $backlogStatus?.running ?? false,
+    queueCount: $queue.length,
+  });
 
   const requestStatusColor: Record<string, string> = {
     pending: 'badge-muted',
@@ -409,17 +423,33 @@
   }
 </script>
 
-<svelte:head><title>Downloads · Cassette</title></svelte:head>
+<svelte:head><title>Downloads - Cassette</title></svelte:head>
 
 <div class="downloads-page">
   <div class="page-header">
     <div>
       <h2>Downloads</h2>
-      <div class="page-subtitle">Missing music, active work, blocked work, and finished handoffs in one place.</div>
+      <div class="page-subtitle">Inbox, approvals, blocked lanes, and recent handoffs for the work you mean to review on purpose.</div>
     </div>
-    <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 12px;" on:click={toggleDebug}>
-      {showDebug ? 'Hide debug' : 'Debug'}
-    </button>
+    <div class="page-header-actions">
+      <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 12px;" on:click={() => (showDiagnostics = !showDiagnostics)}>
+        {showDiagnostics ? 'Hide diagnostics' : 'Diagnostics'}
+      </button>
+      <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 12px;" on:click={toggleDebug}>
+        {showDebug ? 'Hide debug' : 'Debug'}
+      </button>
+    </div>
+  </div>
+
+  <div class="downloads-hero">
+    <AutomationDigestPanel
+      digest={automationDigest}
+      compact={true}
+      primaryHref="/workstation"
+      primaryLabel="Back to workstation"
+      secondaryHref="/history"
+      secondaryLabel="Open history"
+    />
   </div>
 
   <div class="command-grid">
@@ -491,42 +521,44 @@
       {/each}
     </div>
 
-    <section class="lane-section provider-diagnostics">
-      <div class="lane-header">
-        <div>
-          <div class="panel-kicker">Provider Health</div>
-          <h3>Troubleshooting snapshot</h3>
+    {#if showDiagnostics}
+      <section class="lane-section provider-diagnostics">
+        <div class="lane-header">
+          <div>
+            <div class="panel-kicker">Provider health</div>
+            <h3>Troubleshooting snapshot</h3>
+          </div>
         </div>
-      </div>
 
-      <div class="metric-row">
-        <div class="metric-pill"><span>Down</span><strong>{providerDownCount}</strong></div>
-        <div class="metric-pill"><span>Unknown</span><strong>{providerUnknownCount}</strong></div>
-        <div class="metric-pill"><span>Total providers</span><strong>{providerDiagnostics.length}</strong></div>
-      </div>
+        <div class="metric-row">
+          <div class="metric-pill"><span>Down</span><strong>{providerDownCount}</strong></div>
+          <div class="metric-pill"><span>Unknown</span><strong>{providerUnknownCount}</strong></div>
+          <div class="metric-pill"><span>Total providers</span><strong>{providerDiagnostics.length}</strong></div>
+        </div>
 
-      <div class="provider-diagnostic-grid">
-        {#each providerDiagnostics as provider}
-          <article class="provider-diagnostic-card" class:is-down={provider.status === 'Down'}>
-            <div class="provider-diagnostic-header">
-              <strong>{provider.label}</strong>
-              <span class="badge {provider.status === 'Down' ? 'badge-error' : provider.status === 'Unknown' ? 'badge-muted' : 'badge-success'}">{provider.status}</span>
-            </div>
-            <div class="provider-diagnostic-meta">
-              <span>Config: {provider.configured ? 'configured' : 'missing fields'}</span>
-              <span>Checked: {checkedAtLabel(provider.checkedAt)}</span>
-            </div>
-            {#if provider.message}
-              <div class="provider-diagnostic-message">{provider.message}</div>
-            {/if}
-            <div class="provider-diagnostic-hint">{provider.hint}</div>
-            {#if provider.missingFields.length > 0}
-              <div class="provider-diagnostic-fields">Missing: {provider.missingFields.join(', ')}</div>
-            {/if}
-          </article>
-        {/each}
-      </div>
-    </section>
+        <div class="provider-diagnostic-grid">
+          {#each providerDiagnostics as provider}
+            <article class="provider-diagnostic-card" class:is-down={provider.status === 'Down'}>
+              <div class="provider-diagnostic-header">
+                <strong>{provider.label}</strong>
+                <span class="badge {provider.status === 'Down' ? 'badge-error' : provider.status === 'Unknown' ? 'badge-muted' : 'badge-success'}">{provider.status}</span>
+              </div>
+              <div class="provider-diagnostic-meta">
+                <span>Config: {provider.configured ? 'configured' : 'missing fields'}</span>
+                <span>Checked: {checkedAtLabel(provider.checkedAt)}</span>
+              </div>
+              {#if provider.message}
+                <div class="provider-diagnostic-message">{provider.message}</div>
+              {/if}
+              <div class="provider-diagnostic-hint">{provider.hint}</div>
+              {#if provider.missingFields.length > 0}
+                <div class="provider-diagnostic-fields">Missing: {provider.missingFields.join(', ')}</div>
+              {/if}
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
   {/if}
 
   {#if $metadataSearchResults && searchInput.trim()}
@@ -968,6 +1000,16 @@
   flex-direction: column;
   gap: 16px;
   padding-bottom: 18px;
+}
+
+.downloads-hero {
+  padding: 0 16px;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .page-subtitle {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { browser } from '$app/environment';
+  import { loadMilkdropPresetMap } from '$lib/visualizer/presets';
 
   export let positionSecs = 0;
   export let durationSecs = 0;
@@ -167,13 +168,7 @@
 
     try {
       const butterchurnModule = await import('butterchurn');
-      const presetsModule = await import('butterchurn-presets');
-
-      const presetProvider = (presetsModule.default ?? presetsModule) as {
-        getPresets?: () => Record<string, unknown>;
-      };
-      milkdropPresets =
-        typeof presetProvider.getPresets === 'function' ? presetProvider.getPresets() : {};
+      milkdropPresets = await loadMilkdropPresetMap();
 
       const audioContextCtor = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!audioContextCtor) {

@@ -57,13 +57,13 @@
     });
   }
 
-  async function acquireTrack() {
+  async function findTrack() {
     if (!track) {
       return;
     }
     await withBusy(async () => {
       await api.startDownload(track.artist, track.title, track.album || undefined);
-      setStatus('Submitted track acquisition');
+      setStatus('Track added to the inbox');
     });
   }
 
@@ -100,23 +100,23 @@
     });
   }
 
-  async function acquireAlbum() {
+  async function findAlbum() {
     if (!album) {
       return;
     }
     await withBusy(async () => {
       await api.startAlbumDownloads([{ artist: album.artist, title: album.title }]);
-      setStatus('Submitted album acquisition');
+      setStatus('Album added to the inbox');
     });
   }
 
-  async function acquireArtist() {
+  async function fillArtistGaps() {
     if (!artistName) {
       return;
     }
     await withBusy(async () => {
       await api.startArtistDownloads(artistName);
-      setStatus('Submitted artist acquisition');
+      setStatus('Artist added to the inbox');
     });
   }
 
@@ -148,24 +148,24 @@
 
 {#if hasContext}
   <div class="action-rail" class:compact>
-    <div class="rail-label">Context Actions</div>
+    <div class="rail-label">Quick Actions</div>
 
     <div class="rail-actions">
       {#if track}
         <button class="rail-btn" disabled={busy} on:click={playTrackNow}>Play Track</button>
         <button class="rail-btn" disabled={busy} on:click={queueTrackNext}>Queue Track</button>
         <button class="rail-btn" disabled={busy} on:click={showAddToPlaylist}>+ Playlist</button>
-        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={acquireTrack}>Acquire Track</button>
+        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={findTrack}>Find Track</button>
       {/if}
 
       {#if album}
         <button class="rail-btn" disabled={busy} on:click={playAlbumNow}>Play Album</button>
         <button class="rail-btn" disabled={busy} on:click={queueAlbum}>Queue Album</button>
-        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={acquireAlbum}>Acquire Album</button>
+        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={findAlbum}>Find Album</button>
       {/if}
 
       {#if artistName}
-        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={acquireArtist}>Acquire Artist</button>
+        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={fillArtistGaps}>Fill Artist Gaps</button>
       {/if}
     </div>
 
@@ -174,7 +174,7 @@
         {#if loadingPlaylists}
           <div class="picker-loading">Loading playlists...</div>
         {:else if playlists.length === 0}
-          <div class="picker-empty">No playlists yet - create one in Playlists.</div>
+          <div class="picker-empty">No playlists yet. Create one in Playlists.</div>
         {:else}
           {#each playlists as pl}
             <button class="picker-item" disabled={busy} on:click={() => addToPlaylist(pl.id)}>

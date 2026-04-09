@@ -185,12 +185,24 @@
   }
 </script>
 
-<svelte:head><title>Tools · Cassette</title></svelte:head>
+<svelte:head><title>Tools - Cassette</title></svelte:head>
 
 <div class="tools-page">
   <div class="page-header">
-    <h2 style="flex:1">Library Tools</h2>
+    <div>
+      <h2>Library Tools</h2>
+      <div class="tools-subtitle">Repair, cleanup, and deliberate collection maintenance stay here instead of bleeding into the listening room.</div>
+    </div>
   </div>
+
+  <section class="tools-hero">
+    <div class="tool-card">
+      <div class="tool-card-title">Control ritual</div>
+      <div class="tool-card-desc">
+        Organize when the shelves need reshaping, clean duplicates when the archive drifts, and correct tags when edition truth matters.
+      </div>
+    </div>
+  </section>
 
   <div class="tools-tabs">
     <button class="tool-tab" class:active={activeSection === 'organize'} on:click={() => activeSection = 'organize'}>Organize</button>
@@ -402,6 +414,16 @@
 
 <style>
 .tools-page { display: flex; flex-direction: column; min-height: 100%; }
+
+.tools-subtitle {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.tools-hero {
+  padding: 0 1.5rem;
+}
 
 .tools-tabs {
   display: flex; gap: 0; padding: 0 1.5rem; border-bottom: 1px solid var(--border);

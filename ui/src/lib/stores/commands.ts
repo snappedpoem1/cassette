@@ -4,13 +4,16 @@ import { player } from '$lib/stores/player';
 import { toggleCompactPlayerMode, minimizeAppWindow, restoreAppWindow } from '$lib/stores/shell';
 
 export type CommandId =
-  | 'nav.library'
-  | 'nav.downloads'
-  | 'nav.playlists'
+  | 'nav.home'
+  | 'nav.collection'
+  | 'nav.now_playing'
   | 'nav.artists'
-  | 'nav.import'
-  | 'nav.tools'
-  | 'nav.settings'
+  | 'nav.playlists'
+  | 'nav.crates'
+  | 'nav.queue'
+  | 'nav.session'
+  | 'nav.workstation'
+  | 'nav.library_browser'
   | 'player.toggle'
   | 'player.next'
   | 'player.previous'
@@ -31,60 +34,81 @@ export interface AppCommand {
 
 const commandList: AppCommand[] = [
   {
-    id: 'nav.library',
-    label: 'Go to Library',
+    id: 'nav.home',
+    label: 'Open Home',
     category: 'Navigation',
     shortcut: 'Alt+1',
-    aliases: ['home', 'albums', 'tracks'],
+    aliases: ['return', 'front door'],
     run: () => goto('/'),
   },
   {
-    id: 'nav.downloads',
-    label: 'Go to Downloads',
+    id: 'nav.collection',
+    label: 'Open Collection',
     category: 'Navigation',
     shortcut: 'Alt+2',
-    aliases: ['jobs', 'acquisition'],
-    run: () => goto('/downloads'),
+    aliases: ['ownership', 'shelves'],
+    run: () => goto('/collection'),
   },
   {
-    id: 'nav.playlists',
-    label: 'Go to Playlists',
+    id: 'nav.now_playing',
+    label: 'Open Now Playing',
     category: 'Navigation',
-    shortcut: 'Alt+3',
-    aliases: ['lists'],
-    run: () => goto('/playlists'),
+    aliases: ['shrine', 'immersion', 'focus'],
+    run: () => goto('/now-playing'),
   },
   {
     id: 'nav.artists',
-    label: 'Go to Artists',
+    label: 'Open Artists',
     category: 'Navigation',
-    shortcut: 'Alt+4',
-    aliases: ['performers'],
+    shortcut: 'Alt+3',
+    aliases: ['performers', 'rediscovery'],
     run: () => goto('/artists'),
   },
   {
-    id: 'nav.import',
-    label: 'Go to Import',
+    id: 'nav.playlists',
+    label: 'Open Playlists',
+    category: 'Navigation',
+    shortcut: 'Alt+4',
+    aliases: ['lists', 'authorship'],
+    run: () => goto('/playlists'),
+  },
+  {
+    id: 'nav.crates',
+    label: 'Open Crates',
+    category: 'Navigation',
+    aliases: ['slices', 'shelves', 'saved slice'],
+    run: () => goto('/crates'),
+  },
+  {
+    id: 'nav.queue',
+    label: 'Open Queue',
     category: 'Navigation',
     shortcut: 'Alt+5',
-    aliases: ['spotify', 'ingest'],
-    run: () => goto('/import'),
+    aliases: ['up next', 'scene'],
+    run: () => goto('/queue'),
   },
   {
-    id: 'nav.tools',
-    label: 'Go to Tools',
+    id: 'nav.session',
+    label: 'Open Session',
     category: 'Navigation',
     shortcut: 'Alt+6',
-    aliases: ['maintenance', 'organize'],
-    run: () => goto('/tools'),
+    aliases: ['arc', 'memory'],
+    run: () => goto('/session'),
   },
   {
-    id: 'nav.settings',
-    label: 'Go to Settings',
+    id: 'nav.workstation',
+    label: 'Open Workstation',
     category: 'Navigation',
     shortcut: 'Alt+7',
-    aliases: ['preferences', 'config'],
-    run: () => goto('/settings'),
+    aliases: ['inbox', 'repairs', 'settings', 'downloads'],
+    run: () => goto('/workstation'),
+  },
+  {
+    id: 'nav.library_browser',
+    label: 'Open Library Browser',
+    category: 'Navigation',
+    aliases: ['library', 'albums', 'tracks'],
+    run: () => goto('/library'),
   },
   {
     id: 'player.toggle',
@@ -143,22 +167,17 @@ export const commands = writable<AppCommand[]>(commandList);
 export const isPaletteOpen = derived(paletteOpen, ($open) => $open);
 export const paletteSearchQuery = derived(paletteQuery, ($query) => $query);
 
-export const filteredCommands = derived(
-  [commands, paletteQuery],
-  ([$commands, $query]) => {
-    const query = $query.trim().toLowerCase();
-    if (!query) {
-      return $commands;
-    }
-
-    return $commands.filter((command) => {
-      const haystack = [command.label, command.category, ...(command.aliases ?? [])]
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(query);
-    });
+export const filteredCommands = derived([commands, paletteQuery], ([$commands, $query]) => {
+  const query = $query.trim().toLowerCase();
+  if (!query) {
+    return $commands;
   }
-);
+
+  return $commands.filter((command) => {
+    const haystack = [command.label, command.category, ...(command.aliases ?? [])].join(' ').toLowerCase();
+    return haystack.includes(query);
+  });
+});
 
 export function openPalette(): void {
   paletteOpen.set(true);

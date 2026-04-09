@@ -141,11 +141,14 @@
   $: selectedMissing = selectedMissingCount();
 </script>
 
-<svelte:head><title>Import · Cassette</title></svelte:head>
+<svelte:head><title>Import - Cassette</title></svelte:head>
 
 <div class="import-page">
   <div class="page-header">
-    <h2 style="flex:1">Import</h2>
+    <div>
+      <h2>Import</h2>
+      <div class="import-subtitle">Bring outside listening history into Cassette without turning intake into the whole product.</div>
+    </div>
   </div>
 
   <div class="import-section">
@@ -177,7 +180,7 @@
         <div class="source-desc">
           Persisted rows: <strong>{persistedStatus.album_rows.toLocaleString()}</strong>
           {#if persistedStatus.last_imported_at}
-            · Last import: <strong>{persistedStatus.last_imported_at}</strong>
+            / Last import: <strong>{persistedStatus.last_imported_at}</strong>
           {/if}
         </div>
       {/if}
@@ -256,7 +259,7 @@
           <input type="radio" bind:group={filterMode} value="all" /> All
         </label>
         <label class="filter-item">
-          Min plays: <input type="number" bind:value={minPlays} min={1} max={100} class="input" style="width:60px;padding:4px 6px;" />
+          Min plays: <input type="number" bind:value={minPlays} min={1} max={100} class="input min-plays-input" />
         </label>
       </div>
       <div class="action-row">
@@ -328,6 +331,12 @@
 <style>
 .import-page { display: flex; flex-direction: column; min-height: 100%; }
 
+.import-subtitle {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
 .import-section { padding: 0 1.5rem 1rem; }
 .import-grid {
   display: grid;
@@ -396,6 +405,7 @@
 .import-controls { padding: 0 1.5rem 0.75rem; display: flex; flex-direction: column; gap: 8px; }
 .filter-row { display: flex; align-items: center; gap: 16px; font-size: 0.82rem; color: var(--text-secondary); }
 .filter-item { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.min-plays-input { width: 60px; padding: 4px 6px; }
 .action-row { display: flex; align-items: center; gap: 8px; }
 
 .album-table { padding: 0 1.5rem 2rem; }

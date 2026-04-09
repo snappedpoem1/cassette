@@ -422,8 +422,44 @@ fn home_route_carries_while_you_were_away_and_artist_first_copy() {
 
     assert!(home.contains("While you were away"));
     assert!(home.contains("Artist-first collection"));
-    assert!(home.contains("Collection intelligence"));
+    assert!(home.contains("Calm automation"));
     assert!(layout.contains("SystemStatusStrip"));
+}
+
+#[test]
+fn signature_surfaces_wave_three_and_four_are_present() {
+    let sidebar = include_str!("../../ui/src/lib/components/Sidebar.svelte");
+    let playlists = include_str!("../../ui/src/routes/playlists/+page.svelte");
+    let queue = include_str!("../../ui/src/routes/queue/+page.svelte");
+    let session = include_str!("../../ui/src/lib/components/SessionComposer.svelte");
+    let now_playing = include_str!("../../ui/src/lib/components/NowPlayingShrine.svelte");
+
+    assert!(sidebar.contains("/crates"));
+    assert!(sidebar.contains("/now-playing"));
+    assert!(playlists.contains("Authorship ritual"));
+    assert!(playlists.contains("Variants"));
+    assert!(queue.contains("Queue scenes"));
+    assert!(queue.contains("Pivot to artist"));
+    assert!(session.contains("Branch arc"));
+    assert!(session.contains("Export to playlist"));
+    assert!(now_playing.contains("Immersion ritual"));
+    assert!(now_playing.contains("Provenance"));
+}
+
+#[test]
+fn calm_automation_wave_is_present() {
+    let digest = include_str!("../../ui/src/lib/automation-digest.ts");
+    let digest_panel = include_str!("../../ui/src/lib/components/AutomationDigestPanel.svelte");
+    let right_sidebar = include_str!("../../ui/src/lib/components/RightSidebar.svelte");
+    let workstation = include_str!("../../ui/src/routes/workstation/+page.svelte");
+
+    assert!(digest.contains("silent"));
+    assert!(digest.contains("digest"));
+    assert!(digest.contains("soft_attention"));
+    assert!(digest.contains("explicit_intervention"));
+    assert!(digest_panel.contains("Calm automation"));
+    assert!(right_sidebar.contains("Room"));
+    assert!(workstation.contains("Digest boundary"));
 }
 
 #[test]

@@ -80,8 +80,13 @@
   $: nextItems = queueItems
     .filter((item) => item.position > queuePosition)
     .sort((a, b) => a.position - b.position)
-    .slice(0, 5);
+    .slice(0, 6);
   $: lyricsText = context?.synced_lyrics || context?.lyrics || null;
+  $: qualityChip = track?.quality_tier
+    ? track.quality_tier.replace(/_/g, ' ')
+    : track?.bit_depth && track?.sample_rate
+      ? `${track.bit_depth}-bit / ${(track.sample_rate / 1000).toFixed(1)}kHz`
+      : null;
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -95,32 +100,48 @@
       class="npx-panel"
       role="dialog"
       aria-modal="true"
-      aria-label="Expanded now playing"
+      aria-label="Now playing focus view"
       tabindex="-1"
       on:click|stopPropagation
     >
       <header class="npx-header">
         <div class="npx-heading">Now Playing</div>
-        <button class="npx-close" type="button" on:click={closeOverlay} aria-label="Close expanded now playing">Close</button>
+        <button class="npx-close" type="button" on:click={closeOverlay} aria-label="Close focus view">Close</button>
       </header>
 
       <div class="npx-grid">
         <div class="npx-main">
-          <div class="npx-track">
+          <div class="npx-art-shell">
             <div class="npx-art">
               {#if track?.cover_art_path}
-                <img src={coverSrc(track.cover_art_path)} alt="cover" />
+                <img src={coverSrc(track.cover_art_path)} alt="Album artwork" />
               {:else}
                 <div class="npx-art-ph">No Art</div>
               {/if}
             </div>
-            <div class="npx-meta">
-              <h2>{track?.title ?? 'Nothing playing'}</h2>
-              <p>{track?.artist ?? 'Select a track to start listening'}</p>
-              {#if track?.album}
-                <span>{track.album}</span>
-              {/if}
-            </div>
+          </div>
+
+          <div class="npx-meta">
+            <h2>{track?.title ?? 'Nothing playing'}</h2>
+            <p>{track?.artist ?? 'Choose something to start listening'}</p>
+            {#if track?.album}
+              <span>{track.album}</span>
+            {/if}
+          </div>
+
+          <div class="npx-chip-row">
+            {#if qualityChip}
+              <span class="npx-chip npx-chip-strong">{qualityChip}</span>
+            {/if}
+            {#if track?.format}
+              <span class="npx-chip">{track.format.toUpperCase()}</span>
+            {/if}
+            {#if context?.lyrics_source}
+              <span class="npx-chip">Lyrics ready</span>
+            {/if}
+            {#if context?.listeners}
+              <span class="npx-chip">{context.listeners.toLocaleString()} listeners</span>
+            {/if}
           </div>
 
           <div class="npx-controls">
@@ -151,7 +172,7 @@
                 <div class="npx-note">Source: {context.lyrics_source}</div>
               {/if}
             {:else}
-              <div class="npx-empty">No lyrics available for this track yet.</div>
+              <div class="npx-empty">No lyrics available yet.</div>
             {/if}
           </section>
 
@@ -181,8 +202,8 @@
     position: fixed;
     inset: 0;
     z-index: 1100;
-    background: rgba(6, 9, 15, 0.8);
-    backdrop-filter: blur(6px);
+    background: rgba(6, 9, 15, 0.82);
+    backdrop-filter: blur(10px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -190,12 +211,12 @@
   }
 
   .npx-panel {
-    width: min(1100px, 100%);
-    max-height: min(88vh, 900px);
-    border-radius: 16px;
+    width: min(1180px, 100%);
+    max-height: min(90vh, 940px);
+    border-radius: 22px;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    background: linear-gradient(165deg, rgba(23, 31, 44, 0.97), rgba(14, 18, 28, 0.98));
-    box-shadow: 0 20px 64px rgba(0, 0, 0, 0.45);
+    background: linear-gradient(165deg, rgba(23, 31, 44, 0.98), rgba(10, 14, 22, 0.99));
+    box-shadow: 0 26px 76px rgba(0, 0, 0, 0.48);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -205,8 +226,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 18px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   .npx-heading {
@@ -234,9 +255,9 @@
 
   .npx-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
-    gap: 16px;
-    padding: 16px;
+    grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr);
+    gap: 18px;
+    padding: 18px;
     min-height: 0;
     flex: 1;
   }
@@ -245,25 +266,21 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 16px;
   }
 
-  .npx-track {
+  .npx-art-shell {
     display: flex;
-    gap: 14px;
-    align-items: center;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 12px;
-    padding: 12px;
+    justify-content: center;
   }
 
   .npx-art {
-    width: 140px;
-    height: 140px;
-    flex-shrink: 0;
-    border-radius: 10px;
+    width: min(56vh, 460px);
+    aspect-ratio: 1;
+    border-radius: 18px;
     overflow: hidden;
     background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
   }
 
   .npx-art img {
@@ -279,19 +296,26 @@
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
-    font-size: 0.8rem;
+    font-size: 0.9rem;
+  }
+
+  .npx-meta {
+    text-align: center;
+    display: grid;
+    gap: 4px;
   }
 
   .npx-meta h2 {
     margin: 0;
-    font-size: 1.15rem;
+    font-size: clamp(1.4rem, 3vw, 2.4rem);
     color: var(--text-primary);
-    line-height: 1.35;
+    line-height: 1.1;
   }
 
   .npx-meta p {
-    margin: 4px 0;
+    margin: 0;
     color: var(--text-secondary);
+    font-size: 1rem;
   }
 
   .npx-meta span {
@@ -299,10 +323,35 @@
     font-size: 0.82rem;
   }
 
+  .npx-chip-row {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .npx-chip {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    background: rgba(113, 131, 152, 0.16);
+    border: 1px solid rgba(113, 131, 152, 0.22);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+
+  .npx-chip-strong {
+    color: var(--text-accent);
+    border-color: rgba(139, 180, 212, 0.24);
+    background: rgba(139, 180, 212, 0.12);
+  }
+
   .npx-controls {
     display: flex;
     gap: 10px;
     align-items: center;
+    justify-content: center;
   }
 
   .npx-ctrl {
@@ -310,7 +359,7 @@
     border-radius: 999px;
     background: transparent;
     color: var(--text-secondary);
-    padding: 8px 14px;
+    padding: 9px 16px;
     font-size: 0.82rem;
     cursor: pointer;
   }
@@ -340,7 +389,7 @@
   }
 
   .npx-seek span {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 0.76rem;
     min-width: 36px;
   }
@@ -388,8 +437,8 @@
   .npx-block {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
-    padding: 12px;
+    border-radius: 14px;
+    padding: 14px;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -407,11 +456,11 @@
   .npx-block pre {
     margin: 0;
     white-space: pre-wrap;
-    line-height: 1.7;
+    line-height: 1.8;
     color: var(--text-secondary);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     overflow-y: auto;
-    max-height: 240px;
+    max-height: 300px;
   }
 
   .npx-note {
@@ -421,7 +470,7 @@
 
   .npx-empty {
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: 0.8rem;
   }
 
   .npx-block ul {
@@ -432,19 +481,19 @@
     flex-direction: column;
     gap: 8px;
     overflow-y: auto;
-    max-height: 210px;
+    max-height: 220px;
   }
 
   .npx-block li {
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: 10px;
+    padding: 10px;
     background: rgba(255, 255, 255, 0.02);
   }
 
   .npx-queue-title {
     color: var(--text-primary);
-    font-size: 0.8rem;
+    font-size: 0.82rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -453,7 +502,7 @@
   .npx-queue-meta {
     margin-top: 2px;
     color: var(--text-muted);
-    font-size: 0.72rem;
+    font-size: 0.74rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -474,8 +523,8 @@
     }
 
     .npx-art {
-      width: 96px;
-      height: 96px;
+      width: 100%;
+      max-width: 320px;
     }
   }
 </style>

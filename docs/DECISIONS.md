@@ -2,7 +2,7 @@
 
 This file records why the codebase is shaped the way it is so future agents inherit rationale, not just files.
 
-**Last Updated**: 2026-04-06
+**Last Updated**: 2026-04-08
 
 ---
 
@@ -881,6 +881,110 @@ This file records why the codebase is shaped the way it is so future agents inhe
 **Revisit Condition**:
 
 - If runtime architecture changes enough that shared multipliers no longer provide cross-layer leverage, or if a new core safety model supersedes current deterministic isolation boundaries.
+
+---
+
+## Decision 41: Listening Surfaces Stay Primary; Workstation Is One Click Away But Secondary
+
+**Status**: approved (applied 2026-04-08)
+**Rationale**:
+
+- Cassette's real product value is not the operator console. It is the listening environment.
+- Downloads, import, repair, diagnostics, and replay are necessary, but they should not dominate the shell or define the product voice.
+- The active surface plan therefore separates Tier 1 listening surfaces from a secondary Workstation control area.
+
+**Tradeoffs**:
+
+- Some existing routes and command labels now need regrouping and renaming.
+- Review and diagnostic flows must stay discoverable even as the shell gets calmer.
+
+**Revisit Condition**:
+
+- Only if the listening/runtime boundary changes so materially that Workstation is no longer the right secondary container.
+
+---
+
+## Decision 42: Playlist, Crate, Session, And Queue Scene Are Distinct Product Objects
+
+**Status**: approved (applied 2026-04-08)
+**Rationale**:
+
+- Cassette cannot deliver strong playlist, queue, and session surfaces while those objects remain blurry.
+- Playlist is authored order, Crate is collection slice, Session is arc with memory, and Queue Scene is a saveable queue snapshot.
+- Explicit conversions prevent hidden mutation and reduce future surface drift.
+
+**Tradeoffs**:
+
+- The runtime needs a few additive storage and command surfaces instead of one vague "saved list" abstraction.
+- Implementation must resist the temptation to silently convert one object into another.
+
+**Revisit Condition**:
+
+- Only if a future storage model can preserve the same distinctions without losing explicit conversions.
+
+---
+
+## Decision 43: Primary UI Must Translate Internal Runtime Terms Into Human Language
+
+**Status**: approved (applied 2026-04-08)
+**Rationale**:
+
+- Internal terms such as planner, director, control-plane, candidate set, and dead letter are implementation truths, not surface language.
+- Using them on primary listening surfaces makes Cassette feel like tooling instead of a place.
+- The listening shell now follows explicit language governance, while Workstation may expose deeper detail with calmer translations.
+
+**Tradeoffs**:
+
+- Some current UI strings, route labels, and command palette entries must be renamed together.
+- Documentation and UI reviews now need vocabulary checks in addition to behavior checks.
+
+**Revisit Condition**:
+
+- If the internal runtime language changes materially, update the translation map instead of leaking the new terms into primary surfaces.
+
+---
+
+## Decision 44: Wave 3 And Wave 4 Authored Listening State Lands As Additive Settings-Backed Persistence First
+
+**Status**: approved (applied 2026-04-08)
+**Rationale**:
+
+- Playlists, crates, queue scenes, live queue sculpting state, and session memory all needed durable authored behavior to make the listening surfaces real.
+- Expanding backend schema just to ship authorship and emotional-center surfaces would have violated the current mission constraints and delayed the actual product turn.
+- The existing settings persistence layer was already durable, local-first, and reversible enough for additive UI-side authored state.
+- Wave 3 and Wave 4 therefore persist authored overlays in settings through `ui/src/lib/stores/rituals.ts`, while continuing to rely on the proven runtime playback, queue, and playlist commands underneath.
+
+**Tradeoffs**:
+
+- Authored-state persistence is currently UI-owned rather than normalized into the runtime DB.
+- Cross-object querying is thinner than it would be with a dedicated relational model.
+- Future deeper audit surfaces may need richer persistence if authored state starts driving automation instead of just listening surfaces.
+
+**Revisit Condition**:
+
+- Revisit only when a signature surface needs stronger cross-device history, richer audit playback, or deeper planner/runtime participation than the settings-backed layer can honestly support.
+
+---
+
+## Decision 45: Calm Automation Uses A Four-Threshold Boundary, With Workstation Holding Explicit Intervention
+
+**Status**: approved (applied 2026-04-08)
+**Rationale**:
+
+- Cassette needed a clear answer to when background work should stay invisible, when it should become recap, and when it should ask for a deliberate decision.
+- Without that boundary, listening surfaces drift back toward operator dashboards and Workstation loses its purpose.
+- The UI now follows a four-threshold model: `silent`, `digest`, `soft attention`, and `explicit intervention`.
+- Listening surfaces may show digest and soft-attention summaries. Explicit intervention belongs in Workstation and related control routes.
+
+**Tradeoffs**:
+
+- Some detailed state is now one click deeper than before.
+- Threshold logic must stay plain and stable or the UI will feel inconsistent.
+- New workstation routes need to respect the same boundary instead of smuggling raw internals back into primary listening views.
+
+**Revisit Condition**:
+
+- Revisit only if background-work behavior changes materially enough that the four-threshold model stops matching real daily use, or if a stronger listening-shell digest proves necessary without compromising calmness.
 
 ---
 

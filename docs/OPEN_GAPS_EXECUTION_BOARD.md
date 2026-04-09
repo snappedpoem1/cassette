@@ -1,6 +1,6 @@
 # Open Gaps Execution Board
 
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 Owner: Christian (Capn)
 
 Scope note:
@@ -171,6 +171,46 @@ Verification gates:
 
 - Docs checker passes.
 - No contradictory status lines remain across canonical docs.
+
+---
+
+## Lane F - Signature Surface Rebuild (reopened 2026-04-08)
+
+Purpose:
+
+- move the active mission from backend seriousness to authored listening surfaces without breaking Cassette's trust spine
+
+| Gap ID | Task | Status | Recommended Agent | Acceptance Check |
+|---|---|---|---|---|
+| GAP-F00 | Finish Wave 0 quality floor on primary listening surfaces | todo | SWE + Design Engineer | No mojibake, no remote font dependency, stronger contrast, reduced primary-surface a11y debt |
+| GAP-F01 | Lock listening-first boundaries, language governance, and object model | todo | Product Engineer + IA Lead | Workstation is secondary, banned internal terms are removed from primary surfaces, object model is explicit |
+| GAP-F02 | Rebuild Collection, Album, and Artist around ownership and edition ritual | done | Product Engineer | Collection answers ownership questions first; Album has dedicated edition surface; Artist supports rediscovery rails |
+| GAP-F03 | Rebuild Playlists, Crates, and Queue for daily-use authorship and sculpting | done | Product Engineer | Authored playlists, first-class crates, queue sculpt actions, queue scene save/restore |
+| GAP-F04 | Rebuild Session and Now Playing as the emotional center | done | Product Engineer + Design Engineer | Session memory/replay exists and Now Playing is art-led, provenance-aware, and calmer |
+| GAP-F05 | Move automation detail behind a Workstation digest boundary | done | Product Engineer | Main app uses calm digest thresholds while Workstation holds review, replay, diagnostics, import, and history |
+| GAP-F06 | Run the final visual system unification pass | done | Design Engineer | Hierarchy, density, spacing, and playback-active shell behavior read as one authored system |
+
+Dependencies:
+
+- `GAP-F00` must land before visual or authorship-heavy rebuilds.
+- `GAP-F01` must land before `GAP-F02` through `GAP-F05`.
+- `GAP-F06` lands last.
+
+Primary planning docs:
+
+- `docs/SIGNATURE_SURFACES_PLAN.md`
+- `docs/EXPERIENCE_BOUNDARY_MAP.md`
+- `docs/VISUAL_SYSTEM_DIRECTION.md`
+- `docs/OBJECT_MODEL_DECISIONS.md`
+
+Wave 2-4 evidence (2026-04-08):
+
+- `GAP-F02` ownership surfaces: `ui/src/routes/collection/+page.svelte`, `ui/src/routes/albums/[albumId]/+page.svelte`, `ui/src/routes/artists/+page.svelte`, `ui/src/lib/ownership.ts`
+- `GAP-F03` daily-use authorship surfaces: `ui/src/routes/playlists/+page.svelte`, `ui/src/routes/crates/+page.svelte`, `ui/src/routes/queue/+page.svelte`, `ui/src/lib/stores/rituals.ts`, `ui/src/lib/queue-ritual.ts`, `ui/src/lib/stores/queue.ts`
+- `GAP-F04` emotional surfaces: `ui/src/lib/components/SessionComposer.svelte`, `ui/src/routes/session/+page.svelte`, `ui/src/lib/components/NowPlayingShrine.svelte`, `ui/src/routes/now-playing/+page.svelte`, `ui/src/lib/components/NowPlaying.svelte`
+- `GAP-F05` calm automation boundary: `ui/src/lib/automation-digest.ts`, `ui/src/lib/components/AutomationDigestPanel.svelte`, `ui/src/routes/+page.svelte`, `ui/src/lib/components/RightSidebar.svelte`, `ui/src/routes/workstation/+page.svelte`, `ui/src/routes/downloads/+page.svelte`
+- `GAP-F06` visual system pass: `ui/src/app.css`, `ui/src/lib/components/Sidebar.svelte`, `ui/src/routes/settings/+page.svelte`, `ui/src/routes/import/+page.svelte`, `ui/src/routes/tools/+page.svelte`
+- Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08
 
 ---
 

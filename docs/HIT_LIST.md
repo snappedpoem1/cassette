@@ -1,6 +1,6 @@
 # Cassette Hit List
 
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 This is the short-form execution board for the current mission.
 For full context and acceptance details, see `TODO.md` and `PROJECT_STATE.md`.
@@ -25,6 +25,16 @@ Current audited backlog shape:
 - [x] 0 remaining items on legacy stage board (active remaining work tracked in `docs/WORK_ORDER_REMAINING.md`)
 - [x] Green verification snapshot recorded on 2026-03-30
 - [x] Runtime/control-plane split documented: `cassette.db` + `cassette_librarian.db`
+
+New active mission (2026-04-08):
+
+- [ ] `GAP-F00` - finish primary-surface quality floor
+- [ ] `GAP-F01` - lock listening-first boundaries, language governance, and object model
+- [x] `GAP-F02` - rebuild Collection, Album, and Artist around ownership and edition ritual - completed 2026-04-08, evidence in `ui/src/routes/collection/+page.svelte`, `ui/src/routes/albums/[albumId]/+page.svelte`, `ui/src/routes/artists/+page.svelte`, and `ui/src/lib/ownership.ts`
+- [x] `GAP-F03` - rebuild Playlists, Crates, and Queue around authorship and sculpting - completed 2026-04-08, evidence in `ui/src/routes/playlists/+page.svelte`, `ui/src/routes/crates/+page.svelte`, `ui/src/routes/queue/+page.svelte`, `ui/src/lib/stores/rituals.ts`, and `ui/src/lib/queue-ritual.ts`
+- [x] `GAP-F04` - rebuild Session and Now Playing as the emotional center - completed 2026-04-08, evidence in `ui/src/lib/components/SessionComposer.svelte`, `ui/src/routes/session/+page.svelte`, `ui/src/lib/components/NowPlayingShrine.svelte`, and `ui/src/routes/now-playing/+page.svelte`
+- [x] `GAP-F05` - move automation detail behind Workstation digest boundaries - completed 2026-04-08, evidence in `ui/src/lib/automation-digest.ts`, `ui/src/lib/components/AutomationDigestPanel.svelte`, `ui/src/routes/+page.svelte`, `ui/src/lib/components/RightSidebar.svelte`, `ui/src/routes/workstation/+page.svelte`, and `ui/src/routes/downloads/+page.svelte`
+- [x] `GAP-F06` - run final visual system pass - completed 2026-04-08, evidence in `ui/src/app.css`, `ui/src/lib/components/Sidebar.svelte`, `ui/src/routes/settings/+page.svelte`, `ui/src/routes/import/+page.svelte`, and `ui/src/routes/tools/+page.svelte`
 
 New (2026-04-03):
 
@@ -138,3 +148,5 @@ The mission meaningfully advances when these three boxes are checked:
 - `PROJECT_STATE.md` - current runtime truth and proof snapshots
 - `WORKLIST.md` - longer-arc architecture sequence
 - `DECISIONS.md` - rationale for the current runtime shape
+- `SIGNATURE_SURFACES_PLAN.md` - execution order for the surface rebuild mission
+- `EXPERIENCE_BOUNDARY_MAP.md` - listening versus Workstation boundary and language rules

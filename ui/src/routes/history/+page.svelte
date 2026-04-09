@@ -43,10 +43,9 @@
     }
     await queueTracks(activeList, index);
   }
-
 </script>
 
-<svelte:head><title>History · Cassette</title></svelte:head>
+<svelte:head><title>History - Cassette</title></svelte:head>
 
 <div class="history-page">
   <div class="page-header">
@@ -114,7 +113,7 @@
             <span class="track-art-ph"></span>
           {/if}
           <div class="track-title">{track.title}</div>
-          <div class="track-artist">{track.artist}{track.album ? ` · ${track.album}` : ''}</div>
+          <div class="track-artist">{track.artist}{track.album ? ` / ${track.album}` : ''}</div>
           <span class="track-duration">{formatDuration(track.duration_secs)}</span>
           <span class="track-meta">{activeTab === 'recent' ? track.added_at.slice(0, 10) : `Top ${i + 1}`}</span>
           <span class="track-format">{track.format.toUpperCase()}</span>
@@ -125,50 +124,50 @@
 </div>
 
 <style>
-.history-page {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-}
-
-.tab-count {
-  margin-left: 6px;
-  font-size: 0.68rem;
-  color: var(--text-muted);
-}
-
-.history-list {
-  padding: 8px;
-}
-
-.track-art,
-.track-art-ph {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  flex-shrink: 0;
-}
-
-.track-art {
-  object-fit: cover;
-}
-
-.track-art-ph {
-  background: var(--bg-active);
-  border: 1px solid var(--border);
-}
-
-.track-meta {
-  width: 120px;
-  text-align: right;
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-@media (max-width: 920px) {
-  .track-meta {
-    display: none;
+  .history-page {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
   }
-}
+
+  .tab-count {
+    margin-left: 6px;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+  }
+
+  .history-list {
+    padding: 8px;
+  }
+
+  .track-art,
+  .track-art-ph {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+
+  .track-art {
+    object-fit: cover;
+  }
+
+  .track-art-ph {
+    background: var(--bg-active);
+    border: 1px solid var(--border);
+  }
+
+  .track-meta {
+    width: 120px;
+    text-align: right;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 920px) {
+    .track-meta {
+      display: none;
+    }
+  }
 </style>

@@ -1,0 +1,35 @@
+<h2>What morphs with the music?</h2>
+<p class="subtitle">The app already samples cover art color and shifts mood vars. How far does the morph go?</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="palette" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Full palette shift</h3>
+      <p>Accent color, glow color, border tints, and chip colors all derive from the current track's cover art. The whole UI hue shifts per-album. Already partially in place — we push it to every surface.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="backdrop" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Living backdrop</h3>
+      <p>The app background has a slow-moving ambient gradient — blobs of the track's extracted colors drifting behind frosted glass panels. Like album art dissolved into the room itself.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="player" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Player bar morphs hardest</h3>
+      <p>The player bar is the most reactive surface. Seek bar glow color, play button ring, visualizer colors — all derived from the track. The bar is the "heartbeat" of the current music.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="grain" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>Analog grain layer</h3>
+      <p>A subtle CSS noise/grain overlay on dark surfaces — intensity shifts slightly between tracks. Warm and alive. Doesn't move fast, but it's always there like tape hiss.</p>
+    </div>
+  </div>
+</div>
+
+<p style="font-size:0.78rem;color:#93a3b7;margin-top:16px;">Select all that apply — or just say "all of them" in the terminal.</p>
