@@ -62,8 +62,7 @@
   height: var(--statusstrip-h);
   overflow-x: auto;
   scrollbar-width: none;
-  background: rgba(6, 8, 16, 0.55);
-  backdrop-filter: blur(12px);
+  background: rgba(6, 8, 16, 0.78);
   border-top: 1px solid rgba(var(--mood-accent-rgb), 0.1);
   transition: border-color var(--mood-shift-ms) ease;
 }

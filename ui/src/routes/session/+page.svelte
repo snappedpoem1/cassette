@@ -30,8 +30,7 @@
     display: grid;
     gap: 8px;
     border-radius: var(--radius-lg);
-    background: rgba(6, 8, 16, 0.55);
-    backdrop-filter: blur(12px);
+    background: rgba(6, 8, 16, 0.72);
     border: 1px solid rgba(var(--mood-accent-rgb), 0.12);
     transition: border-color var(--mood-shift-ms) ease;
   }

@@ -471,8 +471,7 @@
     padding: 12px 14px;
     border-radius: var(--radius);
     border: 1px solid rgba(var(--mood-accent-rgb), 0.12);
-    background: rgba(6, 8, 16, 0.55);
-    backdrop-filter: blur(10px);
+    background: rgba(6, 8, 16, 0.72);
     transition: border-color var(--mood-shift-ms) ease;
   }
 

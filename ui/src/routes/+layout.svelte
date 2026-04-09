@@ -266,36 +266,41 @@
   .backdrop-blob {
     position: absolute;
     border-radius: 50%;
-    filter: blur(90px);
-    opacity: 0.14;
+    opacity: 0.12;
+    /* No filter: blur here — each blob uses its own value so we can tune perf individually */
   }
 
   .blob-a {
-    width: 640px;
-    height: 640px;
-    top: -220px;
-    left: -120px;
+    width: 560px;
+    height: 560px;
+    top: -200px;
+    left: -100px;
     background: radial-gradient(circle, rgba(var(--mood-accent-rgb), 1), transparent 70%);
+    filter: blur(48px);
+    will-change: transform;
     animation: blob-drift-a 22s ease-in-out infinite alternate;
     transition: background var(--mood-shift-ms) ease;
   }
 
   .blob-b {
-    width: 520px;
-    height: 520px;
-    bottom: -160px;
-    right: -120px;
+    width: 460px;
+    height: 460px;
+    bottom: -140px;
+    right: -100px;
     background: radial-gradient(circle, rgba(247, 180, 92, 1), transparent 70%);
+    filter: blur(48px);
+    will-change: transform;
     animation: blob-drift-b 17s ease-in-out infinite alternate;
     animation-delay: -8s;
   }
 
   .blob-c {
-    width: 420px;
-    height: 420px;
+    width: 360px;
+    height: 360px;
     top: 35%;
     left: 38%;
     background: radial-gradient(circle, rgba(139, 180, 212, 1), transparent 70%);
+    filter: blur(36px);
     animation: blob-drift-c 26s ease-in-out infinite alternate;
     animation-delay: -14s;
   }
