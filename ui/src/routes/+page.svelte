@@ -251,7 +251,7 @@
 
       <div class="arrivals-grid">
         {#each recentTracks.slice(0, 8) as track}
-          <div class="arrival-card mood-card">
+          <div class="arrival-card">
             {#if track.cover_art_path}
               <img class="arrival-art" src={coverSrc(track.cover_art_path)} alt="" loading="lazy" />
             {:else}
@@ -432,7 +432,6 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    transition: background var(--mood-shift-ms) ease;
   }
 
   .hero-summary {
@@ -580,13 +579,11 @@
     overflow: hidden;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    cursor: pointer;
-    transition: border-color 0.15s, transform 0.15s;
+    transition: border-color 0.15s;
   }
 
   .arrival-card:hover {
     border-color: var(--border-active);
-    transform: translateY(-1px);
   }
 
   .arrival-art {

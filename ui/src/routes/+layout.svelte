@@ -207,7 +207,6 @@
   class:compact-player={$compactPlayerMode}
   class:mood-enabled={dynamicGlassEnabled}
   class:immersive-route={isImmersionRoute}
-  class:low-motion={dynamicGlassLowMotion}
   style={moodStyle}
 >
   <div class="app-backdrop" aria-hidden="true">
@@ -269,7 +268,6 @@
     border-radius: 50%;
     filter: blur(90px);
     opacity: 0.14;
-    will-change: transform;
   }
 
   .blob-a {
@@ -302,9 +300,7 @@
     animation-delay: -14s;
   }
 
-  .low-motion .backdrop-blob {
-    animation: none;
-  }
+  :global(html.low-motion) .backdrop-blob { animation: none; }
 
   .app-sidebar,
   .app-main,

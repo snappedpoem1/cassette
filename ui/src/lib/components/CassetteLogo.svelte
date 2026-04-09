@@ -10,7 +10,7 @@
   $: h = Math.round(40 * scale);
 </script>
 
-<div class="cassette-logo" class:with-wordmark={withWordmark}>
+<div class="cassette-logo" class:with-wordmark={withWordmark} aria-label="Cassette">
   <!-- Cassette housing SVG -->
   <svg
     width={w}
@@ -73,8 +73,8 @@
 
   {#if withWordmark}
     <div class="wordmark">
-      <span class="wm-sub">Cassette</span>
-      <span class="wm-name">Cassette</span>
+      <span class="wm-sub" aria-hidden="true">Listening Room</span>
+      <span class="wm-name" aria-hidden="true">Cassette</span>
     </div>
   {/if}
 </div>
