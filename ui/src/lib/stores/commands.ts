@@ -1,7 +1,15 @@
 import { derived, writable } from 'svelte/store';
 import { goto } from '$app/navigation';
 import { player } from '$lib/stores/player';
-import { toggleCompactPlayerMode, minimizeAppWindow, restoreAppWindow } from '$lib/stores/shell';
+import { activeTab } from '$lib/stores/library';
+import {
+  toggleCompactPlayerMode,
+  minimizeAppWindow,
+  openVisualizerWindow,
+  openWorkstationDeck,
+  restoreAppWindow,
+  revealLibraryRail,
+} from '$lib/stores/shell';
 
 export type CommandId =
   | 'nav.home'
@@ -18,6 +26,7 @@ export type CommandId =
   | 'player.next'
   | 'player.previous'
   | 'shell.toggle_compact_player'
+  | 'window.visualizer'
   | 'window.minimize'
   | 'window.restore';
 
@@ -97,18 +106,21 @@ const commandList: AppCommand[] = [
   },
   {
     id: 'nav.workstation',
-    label: 'Open Workstation',
+    label: 'Open Workstation Deck',
     category: 'Navigation',
     shortcut: 'Alt+7',
     aliases: ['inbox', 'repairs', 'settings', 'downloads'],
-    run: () => goto('/workstation'),
+    run: () => openWorkstationDeck(),
   },
   {
     id: 'nav.library_browser',
-    label: 'Open Library Browser',
+    label: 'Focus Library Rail',
     category: 'Navigation',
     aliases: ['library', 'albums', 'tracks'],
-    run: () => goto('/library'),
+    run: () => {
+      activeTab.set('albums');
+      revealLibraryRail();
+    },
   },
   {
     id: 'player.toggle',
@@ -141,6 +153,13 @@ const commandList: AppCommand[] = [
     shortcut: 'Ctrl+M',
     aliases: ['mini player', 'compact mode'],
     run: () => toggleCompactPlayerMode(),
+  },
+  {
+    id: 'window.visualizer',
+    label: 'Open Visualizer Window',
+    category: 'Window',
+    aliases: ['detached visualizer', 'breakout visualizer', 'visualizer'],
+    run: () => openVisualizerWindow(),
   },
   {
     id: 'window.minimize',

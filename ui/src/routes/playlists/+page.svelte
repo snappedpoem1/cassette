@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import ContextActionRail from '$lib/components/ContextActionRail.svelte';
   import { formatDuration } from '$lib/utils';
-  import type { Playlist, Track } from '$lib/api/tauri';
+  import { isDesktopRuntimeAvailable, type Playlist, type Track } from '$lib/api/tauri';
   import {
     activePlaylistId,
     activePlaylistItems,
@@ -54,6 +54,21 @@
   let variantName = '';
   let variantNote = '';
   let variantSource = 'full';
+  let actionMessage: string | null = null;
+  let actionMessageTone: 'info' | 'error' = 'info';
+
+  function toActionMessage(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : fallback;
+    if (message.toLowerCase().includes('tauri runtime unavailable')) {
+      return 'This action needs the Cassette desktop runtime. Open the desktop app to use it.';
+    }
+    return message;
+  }
+
+  function setActionMessage(message: string, tone: 'info' | 'error' = 'info') {
+    actionMessage = message;
+    actionMessageTone = tone;
+  }
 
   $: activePlaylist = $playlists.find((playlist) => playlist.id === $activePlaylistId) ?? null;
   $: authorship = $activePlaylistId ? authorshipForPlaylist($activePlaylistId) : null;
@@ -80,17 +95,27 @@
     if (!newName.trim()) {
       return;
     }
-    const id = await createPlaylist(newName.trim(), newDesc.trim() || null);
-    newName = '';
-    newDesc = '';
-    creating = false;
-    await loadPlaylistItems(id);
+    try {
+      const id = await createPlaylist(newName.trim(), newDesc.trim() || null);
+      newName = '';
+      newDesc = '';
+      creating = false;
+      await loadPlaylistItems(id);
+      setActionMessage('Playlist created.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to create playlist.'), 'error');
+    }
   }
 
   async function handleDelete(pl: Playlist) {
     if (confirmDeleteId === pl.id) {
-      await deletePlaylist(pl.id);
-      confirmDeleteId = null;
+      try {
+        await deletePlaylist(pl.id);
+        confirmDeleteId = null;
+        setActionMessage('Playlist removed.', 'info');
+      } catch (error) {
+        setActionMessage(toActionMessage(error, 'Failed to delete playlist.'), 'error');
+      }
       return;
     }
 
@@ -106,10 +131,15 @@
     if (!$activePlaylistId) {
       return;
     }
-    await updatePlaylistAuthorship($activePlaylistId, {
-      note: noteDraft.trim(),
-      mood: moodDraft.trim(),
-    });
+    try {
+      await updatePlaylistAuthorship($activePlaylistId, {
+        note: noteDraft.trim(),
+        mood: moodDraft.trim(),
+      });
+      setActionMessage('Authorship notes saved.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save playlist notes.'), 'error');
+    }
   }
 
   function sectionTrackIds(section: PlaylistSection): number[] {
@@ -120,17 +150,22 @@
     if (!$activePlaylistId || playlistTrackCount === 0 || !sectionTitle.trim()) {
       return;
     }
-    const maxIndex = Math.max(1, playlistTrackCount);
-    await savePlaylistSection($activePlaylistId, {
-      title: sectionTitle.trim(),
-      arcLabel: sectionArcLabel.trim(),
-      note: sectionNote.trim(),
-      startIndex: Math.max(0, Math.min(sectionStart - 1, maxIndex - 1)),
-      endIndex: Math.max(0, Math.min(sectionEnd - 1, maxIndex - 1)),
-    });
-    sectionTitle = '';
-    sectionArcLabel = '';
-    sectionNote = '';
+    try {
+      const maxIndex = Math.max(1, playlistTrackCount);
+      await savePlaylistSection($activePlaylistId, {
+        title: sectionTitle.trim(),
+        arcLabel: sectionArcLabel.trim(),
+        note: sectionNote.trim(),
+        startIndex: Math.max(0, Math.min(sectionStart - 1, maxIndex - 1)),
+        endIndex: Math.max(0, Math.min(sectionEnd - 1, maxIndex - 1)),
+      });
+      sectionTitle = '';
+      sectionArcLabel = '';
+      sectionNote = '';
+      setActionMessage('Section saved.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save section.'), 'error');
+    }
   }
 
   async function addVariant() {
@@ -146,61 +181,90 @@
       return;
     }
 
-    await savePlaylistVariant($activePlaylistId, {
-      name: variantName.trim(),
-      note: variantNote.trim(),
-      trackIds,
-    });
-    variantName = '';
-    variantNote = '';
-    variantSource = 'full';
+    try {
+      await savePlaylistVariant($activePlaylistId, {
+        name: variantName.trim(),
+        note: variantNote.trim(),
+        trackIds,
+      });
+      variantName = '';
+      variantNote = '';
+      variantSource = 'full';
+      setActionMessage('Variant saved.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save variant.'), 'error');
+    }
   }
 
   async function playVariant(variant: PlaylistVariant) {
-    await replaceQueueTrackIds(variant.trackIds, 0);
+    try {
+      await replaceQueueTrackIds(variant.trackIds, 0);
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to play variant.'), 'error');
+    }
   }
 
   async function turnVariantIntoSession(variant: PlaylistVariant) {
-    await saveSessionRecord({
-      name: variant.name,
-      note: variant.note,
-      trackIds: variant.trackIds,
-      reasons: [],
-      source: 'playlist',
-      sourceRefId: `${$activePlaylistId}:${variant.id}`,
-      branchOfId: null,
-      modeSnapshot: null,
-    });
+    try {
+      await saveSessionRecord({
+        name: variant.name,
+        note: variant.note,
+        trackIds: variant.trackIds,
+        reasons: [],
+        source: 'playlist',
+        sourceRefId: `${$activePlaylistId}:${variant.id}`,
+        branchOfId: null,
+        modeSnapshot: null,
+      });
+      setActionMessage('Variant sent to sessions.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save session from variant.'), 'error');
+    }
   }
 
   async function turnPlaylistIntoSession() {
     if (!activePlaylist || playlistTrackIds.length === 0) {
       return;
     }
-    await saveSessionRecord({
-      name: activePlaylist.name,
-      note: noteDraft.trim(),
-      trackIds: playlistTrackIds,
-      reasons: [],
-      source: 'playlist',
-      sourceRefId: `${activePlaylist.id}`,
-      branchOfId: null,
-      modeSnapshot: null,
-    });
+    try {
+      await saveSessionRecord({
+        name: activePlaylist.name,
+        note: noteDraft.trim(),
+        trackIds: playlistTrackIds,
+        reasons: [],
+        source: 'playlist',
+        sourceRefId: `${activePlaylist.id}`,
+        branchOfId: null,
+        modeSnapshot: null,
+      });
+      setActionMessage('Playlist sent to sessions.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save playlist as session.'), 'error');
+    }
   }
 
   async function savePlaylistAsCrate() {
     if (!activePlaylist || playlistTrackIds.length === 0) {
       return;
     }
-    await saveCrate({
-      name: `${activePlaylist.name} crate`,
-      note: noteDraft.trim() || 'Saved from playlist authorship.',
-      kind: 'saved',
-      source: 'playlist',
-      filter: { ...emptyCrateFilter(), playlistId: activePlaylist.id },
-      trackIds: playlistTrackIds,
-    });
+    try {
+      await saveCrate({
+        name: `${activePlaylist.name} crate`,
+        note: noteDraft.trim() || 'Saved from playlist authorship.',
+        kind: 'saved',
+        source: 'playlist',
+        filter: { ...emptyCrateFilter(), playlistId: activePlaylist.id },
+        trackIds: playlistTrackIds,
+      });
+      setActionMessage('Playlist saved as crate.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save playlist as crate.'), 'error');
+    }
+  }
+
+  $: if (!isDesktopRuntimeAvailable() && !actionMessage) {
+    actionMessage = 'Preview mode detected. Desktop-only actions are unavailable until you run the Cassette desktop app.';
+    actionMessageTone = 'info';
   }
 
   function variantTracks(variant: PlaylistVariant): Track[] {
@@ -223,6 +287,9 @@
       </div>
       <div class="playlist-hero-actions">
         <button class="btn btn-primary" on:click={() => (creating = !creating)}>New playlist</button>
+        {#if actionMessage}
+          <p class="action-notice" class:error={actionMessageTone === 'error'}>{actionMessage}</p>
+        {/if}
         {#if activePlaylist}
           <button class="btn btn-secondary" on:click={turnPlaylistIntoSession}>Send to session</button>
           <button class="btn btn-ghost" on:click={savePlaylistAsCrate}>Save as crate</button>
@@ -559,6 +626,21 @@
   .playlist-track-meta {
     color: var(--text-secondary);
     line-height: 1.7;
+  }
+
+  .action-notice {
+    border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--bg-card) 86%, var(--primary) 14%);
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    line-height: 1.5;
+  }
+
+  .action-notice.error {
+    border-color: color-mix(in srgb, var(--error) 55%, transparent);
+    background: color-mix(in srgb, var(--bg-card) 82%, var(--error) 18%);
   }
 
   .playlist-hero-actions,

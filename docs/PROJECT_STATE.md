@@ -1,6 +1,6 @@
 # Cassette Project State
 
-Last updated: 2026-04-08
+Last updated: 2026-04-10
 
 ## Architecture
 
@@ -35,7 +35,10 @@ Last updated: 2026-04-08
 - Audio playback via Symphonia decode + `cpal` output
 - Queue management (add, remove, reorder, clear)
 - Queue replacement now auto-starts playback (`queue_tracks` loads and plays the selected start track and marks playback state as playing)
+- Desktop runtime playback state now stays in sync with player events (`Playing`, `Paused`, `Stopped`, `TrackEnded`, `Error`) instead of leaving end-of-track transitions unobserved
+- End-of-track handling now auto-advances to the next queued item or marks playback stopped cleanly when the queue is exhausted
 - Playlist CRUD
+- Playlist playback now refreshes the live queue surface after the Tauri launch command so queue-facing UI stops lagging behind the actual runtime queue
 - Now-playing context from Last.fm plus Last.fm recent-scrobble sync into local artist/song/play-history tables
 - Synced/plain lyrics from LRCLIB
 - Runtime now caches synced/plain lyrics in the app DB by normalized artist/title/album identity, treats rows older than 30 days as stale, and refreshes stale/partial rows on demand during now-playing lookups
@@ -100,6 +103,82 @@ Last updated: 2026-04-08
 - Sidebar navigation now separates `Listen` from `Control` in `ui/src/lib/components/Sidebar.svelte`
 - Settings improves keyboard semantics by replacing faux-button subnav elements with real buttons in `ui/src/routes/settings/+page.svelte`
 - Import and Tools now read as workstation-owned ritual surfaces instead of stray admin panels in `ui/src/routes/import/+page.svelte` and `ui/src/routes/tools/+page.svelte`
+
+### Playback Continuity And Action Copy Hardening (2026-04-09)
+
+- `src-tauri/src/state.rs` now supervises player events in the desktop runtime and emits synchronized playback-state updates back into the shell instead of letting `TrackEnded` disappear inside the player
+- Queue continuity is now explicit at track end: when another queued track exists Cassette advances deterministically, and when the queue is exhausted it transitions to a clean stopped state instead of staying falsely "playing"
+- `ui/src/lib/stores/playlists.ts` now refreshes the queue store after playlist playback starts so queue surfaces stop drifting from the active runtime queue
+- Primary listening controls now use direct button copy across the shell: `Play`, `Pause`, `Queue`, `Collection`, `Commands`, `Workstation`, `Play now`, `Add to queue`, and `Get track` replace descriptive or route-explainer phrasing on key surfaces
+
+### Desktop Shell Reality Check (2026-04-09)
+
+- The active renderer now treats shell-owned persistent surfaces plus a shell-owned Workstation deck as primary, while compatibility routes remain for fallback behavior and deep-link entry
+- Cassette now boots with a shell-owned library rail, a resizable/collapsible utility well, a persistent bottom transport, and a shell-owned Workstation deck layered over the listening shell
+- Shell geometry and shell-surface state now persist through `ui/src/lib/stores/shell.ts` (`libraryRailWidth`, `utilityWellWidth`, `utilityWellCollapsed`, `utilityWellMode`, `workstationDeckOpen`, `activeWorkspacePreset`)
+- Compatibility routes such as `/workstation` still exist, but they are now explicit fallback/focused surfaces rather than the primary product architecture
+- Floating layers, richer preset choreography, and selective true Tauri breakout windows are still follow-on work; see `docs/MODULAR_WORKSPACE_CONTRACT.md`
+
+### Action-Spine Audit Reality (2026-04-09)
+
+- `docs/GAP_I03_ACTION_SPINE_AUDIT_REPORT.md` remains the canonical trust-floor audit for shell/workstation work
+- The action-audit findings directly shaped two runtime fixes:
+  - `GAP-I04`: bounded failures and no more optimistic seek/volume drift
+  - `GAP-I05`: stop treating route jumps as modular behavior and move library/workstation into shell-owned surfaces
+- Queue, library, downloads, and playlist surfaces now expose bounded failure states instead of defaulting to fake emptiness, and the primary shell now has real resident surfaces to justify the modular direction
+
+### Trust-Floor Repair (2026-04-09)
+
+- Primary transport controls in `ui/src/lib/stores/player.ts` now emit bounded user-facing failures instead of silent no-ops when playback commands fail
+- Seek and volume no longer mutate local playback state ahead of runtime confirmation, closing the most direct UI-truth drift in the player bar
+- Shell window controls in `ui/src/lib/stores/shell.ts` now expose bounded minimize/restore failure state that the top shell renders visibly
+- Queue, library, downloads, and playlist loading paths now preserve prior state and expose load-error state instead of always collapsing failures into believable emptiness
+- The primary listening shell now surfaces those conditions directly in `NowPlaying`, `QueuePanel`, `Library`, the right-room rail, and `Downloads`
+
+### Shell Foundation Conversion (2026-04-09)
+
+- `ui/src/routes/+layout.svelte` now hosts the first real workspace cutover: nav rail, resident library rail, resize handles, center route surface, collapsible utility well, bottom transport, and shell-owned Workstation deck
+- `ui/src/lib/components/LibraryRail.svelte` is now the persistent Explorer-like browser/filter surface with tabbed browse modes, compact list density, and classic metadata/art preview behavior
+- `ui/src/lib/components/WorkstationDeck.svelte` and `ui/src/lib/components/WorkstationSurface.svelte` now give Workstation a left sliding deck form while `ui/src/routes/workstation/+page.svelte` remains an explicit compatibility surface
+- `ui/src/lib/components/Sidebar.svelte`, `ui/src/lib/stores/commands.ts`, `ui/src/lib/components/AutomationDigestPanel.svelte`, and `ui/src/routes/+page.svelte` now target shell surfaces first when the user asks for Workstation or library focus
+- The first preset vocabulary is now live enough to persist shell posture (`Listen` and `Acquire`) even though deeper preset choreography is still follow-on work
+
+### Listening-Surface Quality Floor (2026-04-09)
+
+- `ui/src/app.css` now raises the shared contrast floor by brightening `--text-secondary`, `--text-muted`, and `--border-dim` rather than relying on one-off route tweaks
+- The primary shell sources no longer carry visible encoded comment junk: `ui/src/app.css` and `ui/src/routes/+layout.svelte` were normalized back to plain source comments
+- `ui/src/lib/components/CommandPalette.svelte`, `ui/src/lib/components/NowPlayingExpanded.svelte`, and `ui/src/lib/components/QueuePanel.svelte` no longer depend on `svelte-ignore a11y` suppressions for their primary interactive surfaces
+- `ui/src/app.css` continues to use a local Windows/system font stack; no remote font loading was reintroduced during the shell rebuild
+
+### Listening Boundary Lock (2026-04-09)
+
+- `ui/src/lib/components/Sidebar.svelte` now treats Workstation as the single control doorway in the main shell instead of exposing Downloads, Import, History, Tools, and Settings as co-equal sidebar destinations
+- `docs/EXPERIENCE_BOUNDARY_MAP.md` now codifies the same rule: listening surfaces stay primary, Workstation remains one click away, and operator destinations live inside Workstation
+- `docs/OBJECT_MODEL_DECISIONS.md` remains the explicit object boundary contract for Playlist, Crate, Session, and Queue Scene, so later UI work has named conversions instead of fuzzy list metaphors
+- Owner-approved `Acquire` / `Acquisition` language is now treated as preset or posture vocabulary, not as forbidden internal jargon
+
+### First Selective Breakout Window (2026-04-09)
+
+- The first detached-window path is now real in code: `ui/src/lib/stores/shell.ts` creates or focuses a Tauri `visualizer` window instead of duplicating instances, and it reuses persisted geometry stored under `cassette.shell.visualizerWindowGeometry`
+- `ui/src/lib/stores/commands.ts` and `ui/src/lib/components/NowPlaying.svelte` now expose shell doorways for that window (`Open Visualizer Window` in commands and `Visualizer` in the player bar)
+- `ui/src/routes/+layout.svelte` now strips the normal shell chrome for `/visualizer-window`, and `ui/src/routes/visualizer-window/+page.svelte` provides the dedicated detached surface with track metadata, album art, and the existing visualizer component
+- `src-tauri/capabilities/default.json` now includes the `visualizer` label plus the extra window permissions needed for creation/focus and geometry capture
+- The detached visualizer remains honest about scope: it is decorative / preset-driven today, not true audio-reactive signal analysis
+- Verification on 2026-04-09: `cargo check --workspace`, `cargo test -p cassette --test pure_logic -- --nocapture`, `Set-Location ui; npm run build; Set-Location ..`, `.\scripts\smoke_desktop.ps1`, and `.\scripts\check_docs_state.ps1` all passed
+- Remaining review note: the native detached-window path is code- and build-proven in this session, but direct hands-on desktop confirmation of open/reopen geometry behavior still remains the final review step
+
+### Visual Flair System (2026-04-10)
+
+- Home hero now has a living mood backdrop: dual ambient blobs driven by CSS custom properties (`--mood-hue`, `--mood-accent`) shift color with the active track's mood state, giving the shell a breathing identity without touching playback behavior
+- `ui/src/routes/+page.svelte` and `ui/src/routes/+layout.svelte` now derive a `moodClass` from the player store (`playing`, `paused`, `idle`) that gates blob animation and intensity
+- Shell-level `CassetteLogo` wordmark replaces the old text/icon sidebar logo; the wordmark is fully accessible (`role="img"`, `aria-label`), sized correctly across sidebar states, and mood-reactive through CSS variable inheritance
+- Player bar is redesigned: mood strip under the seek bar, seek glow ring on hover, play button pulse ring on active playback, and album art cross-fade on track change in `ui/src/lib/components/NowPlaying.svelte`
+- Global mood-card hover pass applied across all route pages: `collection`, `artists`, `library`, `crates`, `playlists`, `queue`, `import`, `downloads`, `settings`, `workstation` — all use a shared `--mood-hue` lift on hover instead of static color jumps
+- Sidebar active nav states are now mood-reactive: the active route indicator inherits `--mood-accent` rather than a fixed highlight color
+- Grain texture overlay is scoped under `@media (prefers-reduced-motion: no-preference)` so low-motion users get no animated grain
+- `ui/src/lib/components/PlaybackVisualizer.svelte` now sets `will-change: transform, opacity` on animated elements and reduced blob blur radius for GPU compositing efficiency
+- Persistent surfaces (`NowPlaying`, `QueuePanel`, `RightSidebar`) no longer apply `backdrop-filter` — that was the primary compositor pressure source; surfaces now use opaque/semi-opaque backgrounds that match the design intent without forcing off-screen compositing layers
+- Verification on 2026-04-10: `cargo check --workspace` (Finished dev profile, 0.75s), `cargo test --workspace` (176 passed, 0 failed), `npm run build` (✓ built in 2.92s, static site written) all passed
 
 ### Acquisition Pipeline (Director Engine)
 - Two-pass waterfall orchestration with per-provider semaphores
@@ -597,14 +676,14 @@ Summary: 25 tracks probed | Discogs hits: 25/25 | Last.fm hits: 0/25
 
 ## Verification Snapshot
 
-Verified on 2026-04-08:
+Verified on 2026-04-09:
 
 - `cargo check --workspace` passes
-- `cargo test -p cassette-core` passes
 - `cargo test --workspace` passes
 - `npm run build` passes in `ui/`
 - `.\scripts\smoke_desktop.ps1` passes
-- `cargo test -p cassette --test pure_logic -- --nocapture` passes with the music-first home, dedicated library route, status strip, and artist-first copy assertions
+- `cargo test -p cassette --test pure_logic -- --nocapture` passes with the player runtime continuity and direct-action label assertions
+- `.\scripts\check_docs_state.ps1` passes
 - Runtime metadata hardening now has regression coverage for normalized lyrics-cache lookups, bounded canonical-ID backfill, cleaned filename-title fallback, broader cover-art filename detection, and deterministic Cover Art Archive fallback selection
 - `.\scripts\verify_trust_spine.ps1` exists for the request-contract, audit-trace, core-test, UI-build, and smoke verification pass
 - `src-tauri/tests/pure_logic.rs` now carries the Windows-safe `src-tauri` pure-logic assertions (Spotify import parsing, now-playing parsing, pending recovery planning, and sidecar bootstrap) so the test suite no longer depends on the Tauri lib harness startup path

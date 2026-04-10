@@ -1,17 +1,33 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type AcquisitionRequestListItem, type SpotifyAlbumHistory } from '$lib/api/tauri';
+  import {
+    api,
+    toDesktopRuntimeMessage,
+    type AcquisitionRequestListItem,
+    type SpotifyAlbumHistory,
+  } from '$lib/api/tauri';
   import { buildAutomationDigest } from '$lib/automation-digest';
   import AutomationDigestPanel from './AutomationDigestPanel.svelte';
   import { nowPlayingContext, currentTrack } from '$lib/stores/player';
-  import { backlogStatus, providerHealth, providerStatuses, slskdRuntimeStatus } from '$lib/stores/downloads';
+  import {
+    backlogStatus,
+    downloadsSurfaceError,
+    providerHealth,
+    providerStatuses,
+    slskdRuntimeStatus,
+  } from '$lib/stores/downloads';
   import { isScanning } from '$lib/stores/library';
   import { queue } from '$lib/stores/queue';
+  import {
+    closeUtilityWell,
+    setUtilityWellMode,
+    utilityWellMode,
+  } from '$lib/stores/shell';
   import QueuePanel from './QueuePanel.svelte';
 
-  let activeTab: 'queue' | 'room' | 'context' = 'queue';
   let requests: AcquisitionRequestListItem[] = [];
   let missingAlbums: SpotifyAlbumHistory[] = [];
+  let roomLoadError: string | null = null;
   $: ctx = $nowPlayingContext;
   $: track = $currentTrack;
   $: digest = buildAutomationDigest({
@@ -37,9 +53,9 @@
       ]);
       requests = nextRequests;
       missingAlbums = missing;
-    } catch {
-      requests = [];
-      missingAlbums = [];
+      roomLoadError = null;
+    } catch (error) {
+      roomLoadError = toDesktopRuntimeMessage(error, 'Failed to load room status.');
     }
   }
 </script>
@@ -48,24 +64,24 @@
   <div class="rs-tabs" role="tablist" aria-label="Right sidebar panels">
     <button
       class="rs-tab"
-      class:active={activeTab === 'queue'}
+      class:active={$utilityWellMode === 'queue'}
       role="tab"
-      aria-selected={activeTab === 'queue'}
+      aria-selected={$utilityWellMode === 'queue'}
       aria-controls="rs-panel-queue"
       id="rs-tab-queue"
-      on:click={() => (activeTab = 'queue')}
+      on:click={() => setUtilityWellMode('queue')}
     >
       Up Next
     </button>
     <button
       class="rs-tab"
-      class:active={activeTab === 'room'}
+      class:active={$utilityWellMode === 'room'}
       role="tab"
-      aria-selected={activeTab === 'room'}
+      aria-selected={$utilityWellMode === 'room'}
       aria-controls="rs-panel-room"
       id="rs-tab-room"
       on:click={() => {
-        activeTab = 'room';
+        setUtilityWellMode('room');
         void loadDigest();
       }}
     >
@@ -73,27 +89,33 @@
     </button>
     <button
       class="rs-tab"
-      class:active={activeTab === 'context'}
+      class:active={$utilityWellMode === 'context'}
       role="tab"
-      aria-selected={activeTab === 'context'}
+      aria-selected={$utilityWellMode === 'context'}
       aria-controls="rs-panel-context"
       id="rs-tab-context"
-      on:click={() => (activeTab = 'context')}
+      on:click={() => setUtilityWellMode('context')}
     >
       Context
     </button>
+    <button class="rs-close" type="button" aria-label="Collapse utility well" on:click={closeUtilityWell}>
+      Hide
+    </button>
   </div>
 
-  <div class="rs-content" role="tabpanel" id={`rs-panel-${activeTab}`} aria-labelledby={`rs-tab-${activeTab}`}>
-    {#if activeTab === 'queue'}
+  <div class="rs-content" role="tabpanel" id={`rs-panel-${$utilityWellMode}`} aria-labelledby={`rs-tab-${$utilityWellMode}`}>
+    {#if $utilityWellMode === 'queue'}
       <QueuePanel />
-    {:else if activeTab === 'room'}
+    {:else if $utilityWellMode === 'room'}
       <div class="room-panel">
+        {#if roomLoadError || $downloadsSurfaceError}
+          <div class="room-error">{roomLoadError ?? $downloadsSurfaceError}</div>
+        {/if}
         <AutomationDigestPanel
           digest={digest}
           compact={true}
           primaryHref="/workstation"
-          primaryLabel="Open workstation"
+          primaryLabel="Workstation"
           secondaryHref="/downloads"
           secondaryLabel="Downloads"
         />
@@ -162,6 +184,7 @@
     display: flex;
     border-bottom: 1px solid var(--border-dim);
     flex-shrink: 0;
+    align-items: center;
   }
 
   .rs-tab {
@@ -189,6 +212,19 @@
     border-bottom-color: var(--primary);
   }
 
+  .rs-close {
+    margin-left: auto;
+    padding: 0 10px;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .rs-close:hover {
+    color: var(--text-primary);
+  }
+
   .rs-content {
     flex: 1;
     overflow-y: auto;
@@ -198,6 +234,16 @@
 
   .room-panel {
     padding: 12px;
+  }
+
+  .room-error {
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 143, 143, 0.25);
+    background: rgba(120, 24, 24, 0.12);
+    color: var(--status-error, #ffb4b4);
+    font-size: 0.74rem;
   }
 
   .info-panel {

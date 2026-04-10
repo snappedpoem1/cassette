@@ -1,3 +1,4 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { Track } from '$lib/api/tauri';
 
 /** Format seconds into M:SS or H:MM:SS */
@@ -46,11 +47,19 @@ export function debounce<T extends (...args: never[]) => unknown>(fn: T, ms: num
   }) as T;
 }
 
-/** Build a cover art src (tauri asset protocol) */
+/**
+ * Build a cover art src using Tauri's asset protocol.
+ * Uses convertFileSrc so the URL format stays in sync with the Tauri runtime
+ * on all platforms (Windows drive letters, UNC paths, etc.).
+ */
 export function coverSrc(path: string | null | undefined): string | null {
   if (!path) return null;
-  const normalized = path.replace(/\\/g, '/');
-  return `asset://localhost/${normalized}`;
+  // convertFileSrc is only available inside the Tauri runtime. Outside (e.g.
+  // browser preview), fall back to a bare path so the page still renders.
+  if (typeof window !== 'undefined' && typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined') {
+    return convertFileSrc(path);
+  }
+  return null;
 }
 
 /** Format audio spec label e.g. "FLAC · 24bit · 96kHz" */

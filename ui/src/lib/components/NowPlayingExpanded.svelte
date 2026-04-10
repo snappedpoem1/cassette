@@ -38,6 +38,13 @@
     }
   }
 
+  function handleBackdropKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      closeOverlay();
+    }
+  }
+
   function getSeekPct(event: MouseEvent): number {
     const rect = seekBarEl.getBoundingClientRect();
     return clamp((event.clientX - rect.left) / rect.width, 0, 1);
@@ -58,6 +65,27 @@
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+  }
+
+  async function onSeekKeyDown(event: KeyboardEvent): Promise<void> {
+    if (!durationSecs || durationSecs <= 0) {
+      return;
+    }
+    const step = event.shiftKey ? 0.1 : 0.03;
+    let nextPct = seekPct;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+      nextPct = clamp(seekPct + step, 0, 1);
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+      nextPct = clamp(seekPct - step, 0, 1);
+    } else if (event.key === 'Home') {
+      nextPct = 0;
+    } else if (event.key === 'End') {
+      nextPct = 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    await player.seek(nextPct);
   }
 
   async function handleNext() {
@@ -92,17 +120,20 @@
 <svelte:window on:keydown={handleKeydown} />
 
 {#if open}
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div class="npx-backdrop" on:click={handleBackdropClick}>
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="npx-backdrop"
+    role="button"
+    tabindex="0"
+    aria-label="Close now playing focus view"
+    on:click={handleBackdropClick}
+    on:keydown={handleBackdropKeydown}
+  >
     <div
       class="npx-panel"
       role="dialog"
       aria-modal="true"
       aria-label="Now playing focus view"
       tabindex="-1"
-      on:click|stopPropagation
     >
       <header class="npx-header">
         <div class="npx-heading">Now Playing</div>
@@ -154,8 +185,19 @@
 
           <div class="npx-seek">
             <span>{formatDuration(positionSecs)}</span>
-            <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div class="npx-seek-bar" bind:this={seekBarEl} on:mousedown={onSeekMouseDown}>
+            <div
+              class="npx-seek-bar"
+              bind:this={seekBarEl}
+              role="slider"
+              tabindex="0"
+              aria-label="Seek playback position"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={Math.round(seekPct * 100)}
+              aria-valuetext={`${formatDuration(positionSecs)} of ${formatDuration(durationSecs)}`}
+              on:mousedown={onSeekMouseDown}
+              on:keydown={onSeekKeyDown}
+            >
               <div class="npx-seek-fill" style="width:{seekPct * 100}%"></div>
               <div class="npx-seek-thumb" style="left:{seekPct * 100}%"></div>
             </div>

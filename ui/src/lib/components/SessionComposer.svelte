@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type PlaylistItem, type Track } from '$lib/api/tauri';
+  import { api, isDesktopRuntimeAvailable, type PlaylistItem, type Track } from '$lib/api/tauri';
   import { createPlaylist, loadPlaylists, playlists } from '$lib/stores/playlists';
   import { currentTrack } from '$lib/stores/player';
   import { loadLibrary, tracks } from '$lib/stores/library';
@@ -15,6 +15,7 @@
     queueScenes,
     saveSessionRecord,
     sessionLibrary,
+    type SessionRecord,
     type SessionModeSnapshot,
     type SessionTransitionReason,
   } from '$lib/stores/rituals';
@@ -47,9 +48,24 @@
   let feedbackMap: Record<string, number> = {};
   let importedPlaylistItems: PlaylistItem[] = [];
   let selectedSessionId: string | null = null;
+  let composerMessage: string | null = null;
+  let composerMessageTone: 'info' | 'error' = 'info';
 
   const SETTINGS_MODES = 'ui_session_composer_modes_json';
   const SETTINGS_FEEDBACK = 'ui_session_composer_feedback_json';
+
+  function toComposerMessage(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : fallback;
+    if (message.toLowerCase().includes('tauri runtime unavailable')) {
+      return 'This action needs the Cassette desktop runtime. Open the desktop app to use it.';
+    }
+    return message;
+  }
+
+  function setComposerMessage(message: string, tone: 'info' | 'error' = 'info') {
+    composerMessage = message;
+    composerMessageTone = tone;
+  }
 
   function clamp(v: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, v));
@@ -146,11 +162,19 @@
   }
 
   async function persistModes() {
-    await api.setSetting(SETTINGS_MODES, JSON.stringify(savedModes));
+    try {
+      await api.setSetting(SETTINGS_MODES, JSON.stringify(savedModes));
+    } catch {
+      // no-op outside Tauri runtime
+    }
   }
 
   async function persistFeedback() {
-    await api.setSetting(SETTINGS_FEEDBACK, JSON.stringify(feedbackMap));
+    try {
+      await api.setSetting(SETTINGS_FEEDBACK, JSON.stringify(feedbackMap));
+    } catch {
+      // no-op outside Tauri runtime
+    }
   }
 
   function applyMode(modeId: string) {
@@ -265,9 +289,13 @@
     if (generated.length === 0) {
       return;
     }
-    await replaceQueueTrackIds(generated.map((track) => track.id), 0);
-    if (selectedSessionId) {
-      await bumpSessionPlayCount(selectedSessionId);
+    try {
+      await replaceQueueTrackIds(generated.map((track) => track.id), 0);
+      if (selectedSessionId) {
+        await bumpSessionPlayCount(selectedSessionId);
+      }
+    } catch (error) {
+      setComposerMessage(toComposerMessage(error, 'Failed to replay session arc.'), 'error');
     }
   }
 
@@ -275,17 +303,22 @@
     if (generated.length === 0) {
       return;
     }
-    selectedSessionId = await saveSessionRecord({
-      id: selectedSessionId ?? undefined,
-      name: composerName.trim() || 'Untitled session',
-      note: noteDraft.trim(),
-      trackIds: generated.map((track) => track.id),
-      reasons,
-      source: importLane === 'generated' ? 'generated' : importLane,
-      sourceRefId: importRefId || null,
-      branchOfId: null,
-      modeSnapshot: modeSnapshot(),
-    });
+    try {
+      selectedSessionId = await saveSessionRecord({
+        id: selectedSessionId ?? undefined,
+        name: composerName.trim() || 'Untitled session',
+        note: noteDraft.trim(),
+        trackIds: generated.map((track) => track.id),
+        reasons,
+        source: importLane === 'generated' ? 'generated' : importLane,
+        sourceRefId: importRefId || null,
+        branchOfId: null,
+        modeSnapshot: modeSnapshot(),
+      });
+      setComposerMessage('Session memory saved.', 'info');
+    } catch (error) {
+      setComposerMessage(toComposerMessage(error, 'Failed to save session memory.'), 'error');
+    }
   }
 
   async function branchCurrentSession() {
@@ -294,36 +327,51 @@
     }
 
     if (selectedSessionId) {
-      const branchedId = await branchSessionRecord(selectedSessionId, {
-        name: `${composerName.trim() || 'Session'} / branch`,
-        note: noteDraft.trim(),
-        trackIds: generated.map((track) => track.id),
-        reasons,
-        modeSnapshot: modeSnapshot(),
-      });
-      if (branchedId) {
-        selectedSessionId = branchedId;
+      try {
+        const branchedId = await branchSessionRecord(selectedSessionId, {
+          name: `${composerName.trim() || 'Session'} / branch`,
+          note: noteDraft.trim(),
+          trackIds: generated.map((track) => track.id),
+          reasons,
+          modeSnapshot: modeSnapshot(),
+        });
+        if (branchedId) {
+          selectedSessionId = branchedId;
+        }
+        setComposerMessage('Session branch saved.', 'info');
+      } catch (error) {
+        setComposerMessage(toComposerMessage(error, 'Failed to branch session.'), 'error');
       }
       return;
     }
 
-    selectedSessionId = await saveSessionRecord({
-      name: `${composerName.trim() || 'Session'} / branch`,
-      note: noteDraft.trim(),
-      trackIds: generated.map((track) => track.id),
-      reasons,
-      source: 'branch',
-      sourceRefId: null,
-      branchOfId: null,
-      modeSnapshot: modeSnapshot(),
-    });
+    try {
+      selectedSessionId = await saveSessionRecord({
+        name: `${composerName.trim() || 'Session'} / branch`,
+        note: noteDraft.trim(),
+        trackIds: generated.map((track) => track.id),
+        reasons,
+        source: 'branch',
+        sourceRefId: null,
+        branchOfId: null,
+        modeSnapshot: modeSnapshot(),
+      });
+      setComposerMessage('Session branch saved.', 'info');
+    } catch (error) {
+      setComposerMessage(toComposerMessage(error, 'Failed to branch session.'), 'error');
+    }
   }
 
   async function exportToPlaylist() {
     if (generated.length === 0) {
       return;
     }
-    await createPlaylist(composerName.trim() || 'Session export', noteDraft.trim() || null, generated.map((track) => track.id));
+    try {
+      await createPlaylist(composerName.trim() || 'Session export', noteDraft.trim() || null, generated.map((track) => track.id));
+      setComposerMessage('Session exported to playlist.', 'info');
+    } catch (error) {
+      setComposerMessage(toComposerMessage(error, 'Failed to export session to playlist.'), 'error');
+    }
   }
 
   async function rateTransition(index: number, value: number) {
@@ -360,6 +408,11 @@
   $: if (importLane === 'playlist') {
     void refreshImportLane();
   }
+
+  $: if (!isDesktopRuntimeAvailable() && !composerMessage) {
+    composerMessage = 'Preview mode detected. Desktop-only actions are unavailable until you run the Cassette desktop app.';
+    composerMessageTone = 'info';
+  }
 </script>
 
 <section class="session-composer card">
@@ -376,6 +429,10 @@
       <button class="btn btn-ghost" on:click={queueSession} disabled={generated.length === 0}>Replay arc</button>
     </div>
   </div>
+
+  {#if composerMessage}
+    <div class="composer-notice" class:error={composerMessageTone === 'error'}>{composerMessage}</div>
+  {/if}
 
   <div class="composer-layout">
     <aside class="session-memory">
@@ -710,6 +767,21 @@
     padding: 14px;
     border: 1px dashed var(--border);
     border-radius: var(--radius-sm);
+  }
+
+  .composer-notice {
+    border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--bg-card) 86%, var(--primary) 14%);
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    line-height: 1.5;
+  }
+
+  .composer-notice.error {
+    border-color: color-mix(in srgb, var(--error) 55%, transparent);
+    background: color-mix(in srgb, var(--bg-card) 82%, var(--error) 18%);
   }
 
   @media (max-width: 1120px) {

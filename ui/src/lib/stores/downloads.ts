@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   api,
+  toDesktopRuntimeMessage,
   type DirectorEvent,
   type DirectorTaskResult,
   type DownloadJob,
@@ -25,12 +26,14 @@ export const artistDiscography = writable<DownloadArtistDiscography | null>(null
 export const isSearchingMetadata = writable(false);
 export const backlogStatus = writable<BacklogRunStatus | null>(null);
 export const debugStats = writable<DirectorDebugStats | null>(null);
+export const downloadsSurfaceError = writable<string | null>(null);
 
 export async function loadDownloadJobs() {
   try {
     downloadJobs.set(await api.getDownloadJobs());
-  } catch {
-    downloadJobs.set([]);
+    downloadsSurfaceError.set(null);
+  } catch (error) {
+    downloadsSurfaceError.set(toDesktopRuntimeMessage(error, 'Failed to load download jobs.'));
   }
 }
 
@@ -39,10 +42,9 @@ export async function loadDownloadConfig() {
     downloadConfig.set(await api.getConfig());
     providerStatuses.set(await api.getProviderStatuses());
     slskdRuntimeStatus.set(await api.getSlskdRuntimeStatus());
-  } catch {
-    downloadConfig.set(null);
-    providerStatuses.set([]);
-    slskdRuntimeStatus.set(null);
+    downloadsSurfaceError.set(null);
+  } catch (error) {
+    downloadsSurfaceError.set(toDesktopRuntimeMessage(error, 'Failed to load download configuration.'));
   }
 }
 
@@ -59,8 +61,9 @@ export async function persistEffectiveDownloadConfig() {
 export async function refreshSlskdRuntimeStatus() {
   try {
     slskdRuntimeStatus.set(await api.getSlskdRuntimeStatus());
-  } catch {
-    slskdRuntimeStatus.set(null);
+    downloadsSurfaceError.set(null);
+  } catch (error) {
+    downloadsSurfaceError.set(toDesktopRuntimeMessage(error, 'Failed to load managed runtime status.'));
   }
 }
 
@@ -85,6 +88,13 @@ export async function loadDiscography(artist: string, mbid?: string) {
 
 let unlisteners: UnlistenFn[] = [];
 let visibilityHandler: (() => void) | null = null;
+
+function tauriRuntimeAvailable(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined'
+  );
+}
 
 function upsertJob(taskId: string, mutate: (job: DownloadJob) => DownloadJob) {
   downloadJobs.update((jobs) => {
@@ -143,7 +153,7 @@ function applyDirectorResult(result: DirectorTaskResult) {
 }
 
 export async function startDownloadSupervision() {
-  if (unlisteners.length > 0) {
+  if (!tauriRuntimeAvailable() || unlisteners.length > 0) {
     return;
   }
 
@@ -182,8 +192,9 @@ export function stopDownloadSupervision() {
 export async function refreshBacklogStatus() {
   try {
     backlogStatus.set(await api.getBacklogStatus());
-  } catch {
-    // ignore
+    downloadsSurfaceError.set(null);
+  } catch (error) {
+    downloadsSurfaceError.set(toDesktopRuntimeMessage(error, 'Failed to load backlog status.'));
   }
 }
 
@@ -209,7 +220,8 @@ export async function stopBacklogRun() {
 export async function refreshDebugStats() {
   try {
     debugStats.set(await api.getDirectorDebugStats(100));
-  } catch {
-    debugStats.set(null);
+    downloadsSurfaceError.set(null);
+  } catch (error) {
+    downloadsSurfaceError.set(toDesktopRuntimeMessage(error, 'Failed to load director diagnostics.'));
   }
 }

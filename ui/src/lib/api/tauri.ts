@@ -1,4 +1,33 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+
+export const DESKTOP_RUNTIME_REQUIRED_MESSAGE =
+  'This action needs the Cassette desktop runtime. Open the desktop app to use it.';
+
+export function isDesktopRuntimeAvailable(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined'
+  );
+}
+
+export function isRuntimeUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.toLowerCase().includes('tauri runtime unavailable');
+}
+
+export function toDesktopRuntimeMessage(error: unknown, fallback: string): string {
+  if (isRuntimeUnavailableError(error)) {
+    return DESKTOP_RUNTIME_REQUIRED_MESSAGE;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
+function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isDesktopRuntimeAvailable()) {
+    return Promise.reject(new Error(`Tauri runtime unavailable for command: ${command}`));
+  }
+  return tauriInvoke<T>(command, args);
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -659,12 +688,12 @@ export const api = {
     positionSecs?: number,
   ) =>
     invoke<boolean>('submit_lastfm_scrobble', {
-      trackId,
+      track_id: trackId,
       artist,
       title,
       album,
-      durationSecs,
-      positionSecs,
+      duration_secs: durationSecs,
+      position_secs: positionSecs ?? 0,
     }),
 
   // Queue
@@ -766,23 +795,23 @@ export const api = {
   planAcquisition: (request: AcquisitionRequest) =>
     invoke<PlannedAcquisitionResult>('plan_acquisition', { request }),
   getReviewContract: (requestId: number) =>
-    invoke<ReviewContract>('get_review_contract', { requestId }),
+    invoke<ReviewContract>('get_review_contract', { request_id: requestId }),
   approvePlannedRequest: (requestId: number, note?: string, excludedProviderIds?: string[]) =>
-    invoke('approve_planned_request', { requestId, note, excludedProviderIds }),
+    invoke('approve_planned_request', { request_id: requestId, note, excluded_provider_ids: excludedProviderIds }),
   rejectPlannedRequest: (requestId: number, reason?: string, excludedProviderIds?: string[]) =>
-    invoke('reject_planned_request', { requestId, reason, excludedProviderIds }),
+    invoke('reject_planned_request', { request_id: requestId, reason, excluded_provider_ids: excludedProviderIds }),
   listAcquisitionRequests: (status?: string, limit?: number) =>
     invoke<AcquisitionRequestListItem[]>('list_acquisition_requests', { status, limit }),
   getAcquisitionRequestTimeline: (requestId: number) =>
-    invoke<AcquisitionRequestEvent[]>('get_acquisition_request_timeline', { requestId }),
+    invoke<AcquisitionRequestEvent[]>('get_acquisition_request_timeline', { request_id: requestId }),
   getRequestCandidateReview: (requestId: number) =>
-    invoke<CandidateReviewItem[]>('get_request_candidate_review', { requestId }),
+    invoke<CandidateReviewItem[]>('get_request_candidate_review', { request_id: requestId }),
   getRequestLineage: (requestId: number) =>
-    invoke<RequestLineage>('get_request_lineage', { requestId }),
+    invoke<RequestLineage>('get_request_lineage', { request_id: requestId }),
   getTrustReasonDistribution: (limit?: number) =>
     invoke<TrustReasonDistributionEntry[]>('get_trust_reason_distribution', { limit }),
   getDeadLetterSummary: (recentLimit?: number) =>
-    invoke<DeadLetterSummary>('get_dead_letter_summary', { recentLimit: recentLimit ?? 5 }),
+    invoke<DeadLetterSummary>('get_dead_letter_summary', { recent_limit: recentLimit ?? 5 }),
   replayDeadLetter: (taskId: string) => invoke<number>('replay_dead_letter', { taskId }),
 
   // Import

@@ -1,8 +1,8 @@
 # Cassette Project Index
 
-**Status**: Active - Stage A through D complete; WO-01 through WO-05 closed with current evidence
-**Next**: local clean-room packaging confidence maintenance and broader follow-on hardening
-**Last Updated**: 2026-04-07
+**Status**: Active - Stage A through D complete; modular desktop direction reset, action-spine audit, shell-foundation conversion, and the first selective breakout-window code path now canon
+**Next**: native click-through review of the first visualizer breakout window, then shell-quality follow-through after the first workspace cutover
+**Last Updated**: 2026-04-09
 **Owner**: Christian (Capn)
 
 Scope framing:
@@ -119,7 +119,7 @@ Spotify history/import helpers, settings, provider status, and library organizat
 | Area | Location | Status | What Is True Now | Main Gaps |
 |---|---|---|---|---|
 | Desktop shell | `src-tauri` | Active | Tauri app boots, commands wired, shortcuts registered | Maintain repeatable local clean-room packaging evidence on this machine |
-| UI | `ui` | Active | Music-first Home route, dedicated `/library`, artist-first `/artists`, downloads command center, settings, playlists, tools routes, Stage C visualizer/mood/composer, and Stage D extension surface exist | Long-session UX polish and follow-on planner vocabulary refinement |
+| UI | `ui` | Active | Music-first listening surfaces, calm shell language, persistent library rail, resizable utility well, bottom transport, a shell-owned Workstation deck, the listening-surface quality floor, and the first detached visualizer-window path now exist; compatibility routes still remain where useful | Floating layers, richer preset behavior, deeper detached-window proof, and broader breakout modules remain follow-on work |
 | Librarian | `crates/cassette-core/src/librarian` | Implemented | Scanning, normalization, import helpers, matching paths exist | Edge-case coverage should keep improving |
 | Custodian | `crates/cassette-core/src/custodian` | Implemented | Sorting, staging, quarantine, validation, custody log modules exist | Keep audit coverage regression-proof over time |
 | Orchestrator | `crates/cassette-core/src/orchestrator` | Implemented | Reconciliation, sequencing, delta generation are present | Determinism and traceability checks ongoing |
@@ -153,7 +153,9 @@ The Tauri command layer exposes commands across these areas:
 
 - [x] Audit/event coverage has bounded proof coverage across organization and admission paths.
   Continue treating validation/logging checks as fail-loud regression guards.
-- [ ] Packaging confidence should be maintained via repeatable local clean-room verification on this machine.
+- [ ] Packaging confidence baseline exists via `scripts/verify_cleanroom_local.ps1`
+  (DisposableProfile mode, 2026-04-07). Continue verifying installer bundle generation
+  and runtime DB formation as personal readiness gates.
 
 ### P1 - Important Hardening
 
@@ -257,6 +259,11 @@ Full rationale in [DECISIONS.md](DECISIONS.md).
 
 - [AGENT_CODEX.md](AGENT_CODEX.md)
 - [AGENT_BRIEFING.md](AGENT_BRIEFING.md)
+- [MODULAR_DESKTOP_DIRECTION_RESET.md](MODULAR_DESKTOP_DIRECTION_RESET.md)
+- [MODULAR_WORKSPACE_CONTRACT.md](MODULAR_WORKSPACE_CONTRACT.md)
+- [MODULAR_WORKSPACE_EXECUTION_PLAN.md](MODULAR_WORKSPACE_EXECUTION_PLAN.md)
+- [GAP_I03_ACTION_SPINE_AUDIT_BRIEF.md](GAP_I03_ACTION_SPINE_AUDIT_BRIEF.md)
+- [GAP_I03_ACTION_SPINE_AUDIT_REPORT.md](GAP_I03_ACTION_SPINE_AUDIT_REPORT.md)
 - [HIT_LIST.md](HIT_LIST.md)
 - [TODO.md](TODO.md)
 - [DECISIONS.md](DECISIONS.md)

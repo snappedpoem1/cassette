@@ -8,7 +8,7 @@
     refreshBacklogStatus, refreshDebugStats, startBacklogRun, stopBacklogRun, providerHealth,
     providerStatuses, slskdRuntimeStatus, loadDownloadConfig,
   } from '$lib/stores/downloads';
-  import { api, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DeadLetterSummary, type DownloadAlbumResult, type RequestLineage, type ReviewContract, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
+  import { api, toDesktopRuntimeMessage, type AcquisitionRequestEvent, type AcquisitionRequestListItem, type CandidateReviewItem, type DeadLetterSummary, type DownloadAlbumResult, type RequestLineage, type ReviewContract, type SpotifyAlbumHistory, type TaskResultSummary } from '$lib/api/tauri';
   import { queue } from '$lib/stores/queue';
   import { debounce } from '$lib/utils';
 
@@ -34,6 +34,7 @@
   let recentResults: TaskResultSummary[] = [];
   let recentRequests: AcquisitionRequestListItem[] = [];
   let loadingRequests = false;
+  let surfaceLoadError: string | null = null;
 
   let expandedJob: string | null = null;
   let candidateReview: CandidateReviewItem[] = [];
@@ -119,6 +120,7 @@
   };
 
   onMount(async () => {
+    surfaceLoadError = null;
     await Promise.all([
       loadDownloadJobs(),
       refreshBacklogStatus(),
@@ -205,19 +207,23 @@
     return value.replace('T', ' ').replace('Z', '');
   }
 
+  function setSurfaceLoadError(error: unknown, fallback: string) {
+    surfaceLoadError = toDesktopRuntimeMessage(error, fallback);
+  }
+
   async function loadMissingAlbums() {
     try {
       missingAlbums = await api.getMissingSpotifyAlbums(16);
-    } catch {
-      missingAlbums = [];
+    } catch (error) {
+      setSurfaceLoadError(error, 'Failed to load missing-album pressure.');
     }
   }
 
   async function loadRecentResults() {
     try {
       recentResults = await api.getRecentTaskResults(16);
-    } catch {
-      recentResults = [];
+    } catch (error) {
+      setSurfaceLoadError(error, 'Failed to load recent acquisition results.');
     }
   }
 
@@ -225,8 +231,8 @@
     loadingRequests = true;
     try {
       recentRequests = await api.listAcquisitionRequests(undefined, 40);
-    } catch {
-      recentRequests = [];
+    } catch (error) {
+      setSurfaceLoadError(error, 'Failed to load recent requests.');
     } finally {
       loadingRequests = false;
     }
@@ -236,8 +242,8 @@
     deadLetterLoading = true;
     try {
       deadLetterSummary = await api.getDeadLetterSummary(5);
-    } catch {
-      deadLetterSummary = null;
+    } catch (error) {
+      setSurfaceLoadError(error, 'Failed to load dead-letter summary.');
     } finally {
       deadLetterLoading = false;
     }
@@ -509,6 +515,10 @@
       {/if}
     </section>
   </div>
+
+  {#if surfaceLoadError}
+    <div class="panel-note panel-note-error">{surfaceLoadError}</div>
+  {/if}
 
   {#if Object.keys($providerHealth).length > 0}
     <div class="provider-strip">
@@ -1090,6 +1100,10 @@
   margin-top: 10px;
   color: var(--text-secondary);
   font-size: 0.78rem;
+}
+
+.panel-note-error {
+  color: var(--status-error, #ffb4b4);
 }
 
 .metric-row {

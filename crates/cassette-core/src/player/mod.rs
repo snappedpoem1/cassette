@@ -4,6 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rb::{RbConsumer, RbProducer, SpscRb, RB};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -131,6 +132,11 @@ impl Player {
         }
         events
     }
+
+    pub fn recv_event_timeout(&self, timeout: std::time::Duration) -> Option<PlayerEvent> {
+        let rx = self.event_rx.lock().ok()?;
+        rx.recv_timeout(timeout).ok()
+    }
 }
 
 impl Default for Player {
@@ -177,10 +183,13 @@ fn player_thread(
     let vol_cb = Arc::clone(&volume);
     let play_cb = Arc::clone(&is_playing);
     let cons_cb = Arc::clone(&rb_cons);
+    let callback_count = Arc::new(AtomicU64::new(0));
+    let callback_count_cb = Arc::clone(&callback_count);
 
     let stream = match device.build_output_stream(
         &config.config(),
         move |data: &mut [f32], _| {
+            callback_count_cb.fetch_add(1, Ordering::Relaxed);
             let playing = play_cb.load(Ordering::Relaxed);
             let vol = *vol_cb.lock().unwrap();
             if playing {
@@ -209,22 +218,70 @@ fn player_thread(
         }
     };
 
-    let _ = stream.play();
+    if let Err(error) = stream.play() {
+        let _ = evt_tx.try_send(PlayerEvent::Error(format!("Stream start error: {error}")));
+        return;
+    }
 
     let mut current_path: Option<String> = None;
     let mut decode_thread: Option<std::thread::JoinHandle<()>> = None;
     let decode_stop = Arc::new(AtomicBool::new(false));
+    let mut playhead_secs = 0.0f64;
+    let mut last_position_tick = Instant::now();
+    let mut last_callback_tick = Instant::now();
+    let mut last_callback_count = callback_count.load(Ordering::Relaxed);
+    let mut reported_callback_stall = false;
 
     loop {
-        // Collect all pending commands (blocking wait when idle, non-blocking when playing)
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(last_position_tick);
+        last_position_tick = now;
+
+        let observed_callback_count = callback_count.load(Ordering::Relaxed);
+        if observed_callback_count != last_callback_count {
+            last_callback_count = observed_callback_count;
+            last_callback_tick = now;
+            reported_callback_stall = false;
+        }
+
+        if is_playing.load(Ordering::Relaxed) && current_path.is_some() {
+            playhead_secs += elapsed.as_secs_f64();
+            let duration = f64::from_bits(duration_bits.load(Ordering::Relaxed));
+            if duration.is_finite() && duration > 0.0 {
+                playhead_secs = playhead_secs.min(duration);
+            }
+            position_bits.store(playhead_secs.to_bits(), Ordering::Relaxed);
+
+            if !reported_callback_stall
+                && now.saturating_duration_since(last_callback_tick) > Duration::from_secs(2)
+            {
+                is_playing.store(false, Ordering::Relaxed);
+                let _ = evt_tx.try_send(PlayerEvent::Error(
+                    "Audio output callback stalled while playback was active".into(),
+                ));
+                reported_callback_stall = true;
+            }
+        }
+
+        // Collect all pending commands.
+        // While actively playing we poll without blocking so the thread can keep the playhead
+        // moving even when there is no fresh command waiting.
         let cmd = if is_playing.load(Ordering::Relaxed) {
-            cmd_rx.try_recv().ok()
+            match cmd_rx.try_recv() {
+                Ok(cmd) => Some(cmd),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
         } else {
-            cmd_rx.recv().ok()
+            match cmd_rx.recv() {
+                Ok(cmd) => Some(cmd),
+                Err(_) => break,
+            }
         };
 
         match cmd {
-            Some(PlayerCommand::Quit) | None => break,
+            Some(PlayerCommand::Quit) => break,
+            None => {}
 
             Some(PlayerCommand::Load(path)) => {
                 // Stop existing decode thread
@@ -235,6 +292,7 @@ fn player_thread(
                 decode_stop.store(false, Ordering::Relaxed);
                 is_playing.store(false, Ordering::Relaxed);
                 position_bits.store(0f64.to_bits(), Ordering::Relaxed);
+                playhead_secs = 0.0;
 
                 current_path = Some(path.clone());
                 // Probe duration
@@ -258,18 +316,21 @@ fn player_thread(
                 );
 
                 is_playing.store(true, Ordering::Relaxed);
+                last_position_tick = Instant::now();
                 let _ = evt_tx.try_send(PlayerEvent::Playing);
             }
 
             Some(PlayerCommand::Play) => {
                 if current_path.is_some() {
                     is_playing.store(true, Ordering::Relaxed);
+                    last_position_tick = Instant::now();
                     let _ = evt_tx.try_send(PlayerEvent::Playing);
                 }
             }
 
             Some(PlayerCommand::Pause) => {
                 is_playing.store(false, Ordering::Relaxed);
+                last_position_tick = Instant::now();
                 let _ = evt_tx.try_send(PlayerEvent::Paused);
             }
 
@@ -281,6 +342,8 @@ fn player_thread(
                 decode_stop.store(false, Ordering::Relaxed);
                 is_playing.store(false, Ordering::Relaxed);
                 position_bits.store(0f64.to_bits(), Ordering::Relaxed);
+                playhead_secs = 0.0;
+                last_position_tick = Instant::now();
                 current_path = None;
                 let _ = evt_tx.try_send(PlayerEvent::Stopped);
             }
@@ -306,6 +369,7 @@ fn player_thread(
                     }
 
                     // Update position immediately
+                    playhead_secs = secs.max(0.0);
                     position_bits.store(secs.to_bits(), Ordering::Relaxed);
 
                     // Restart decode from the target position
@@ -342,7 +406,7 @@ fn decode_loop(
     path: String,
     prod: Arc<Mutex<rb::Producer<f32>>>,
     stop: Arc<AtomicBool>,
-    position_bits: Arc<AtomicU64>,
+    _position_bits: Arc<AtomicU64>,
     is_playing: Arc<AtomicBool>,
     evt_tx: std::sync::mpsc::SyncSender<PlayerEvent>,
     seek_to: Option<f64>,
@@ -394,8 +458,6 @@ fn decode_loop(
     };
 
     let track_id = track.id;
-    let time_base = track.codec_params.time_base;
-
     let mut decoder = match symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
     {
@@ -446,12 +508,6 @@ fn decode_loop(
 
         if packet.track_id() != track_id {
             continue;
-        }
-
-        if let Some(tb) = time_base {
-            let ts = packet.ts();
-            let secs = tb.calc_time(ts).seconds as f64 + tb.calc_time(ts).frac;
-            position_bits.store(secs.to_bits(), Ordering::Relaxed);
         }
 
         let decoded = match decoder.decode(&packet) {

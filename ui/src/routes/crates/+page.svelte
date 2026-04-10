@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type Track } from '$lib/api/tauri';
+  import { api, isDesktopRuntimeAvailable, type Track } from '$lib/api/tauri';
   import { buildTrackMap, filterTracksForCrate, hydrateTrackIds, totalDurationSecs } from '$lib/ritual-helpers';
   import { formatDuration } from '$lib/utils';
   import { loadLibrary, tracks } from '$lib/stores/library';
@@ -28,6 +28,21 @@
   let filterDraft: CrateFilter = emptyCrateFilter();
   let playlistFilterTrackIds = new Set<number>();
   let playlistFilterGuard: number | null = null;
+  let actionMessage: string | null = null;
+  let actionMessageTone: 'info' | 'error' = 'info';
+
+  function toActionMessage(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : fallback;
+    if (message.toLowerCase().includes('tauri runtime unavailable')) {
+      return 'This action needs the Cassette desktop runtime. Open the desktop app to use it.';
+    }
+    return message;
+  }
+
+  function setActionMessage(message: string, tone: 'info' | 'error' = 'info') {
+    actionMessage = message;
+    actionMessageTone = tone;
+  }
 
   $: trackMap = buildTrackMap($tracks);
   $: selectedCrate = $crates.find((crate) => crate.id === selectedCrateId) ?? null;
@@ -73,6 +88,7 @@
     if (!crateName.trim() || previewTrackIds.length === 0) {
       return;
     }
+    const isUpdate = Boolean(selectedCrateId);
     const source = filterDraft.playlistId
       ? 'playlist'
       : filterDraft.albumQuery
@@ -85,37 +101,86 @@
               ? 'quality'
               : 'manual';
 
-    const id = await saveCrate({
-      id: selectedCrateId ?? undefined,
-      name: crateName.trim(),
-      note: crateNote.trim(),
-      kind: crateKind,
-      source,
-      filter: { ...filterDraft },
-      trackIds: previewTrackIds,
-    });
-    selectedCrateId = id;
+    try {
+      const id = await saveCrate({
+        id: selectedCrateId ?? undefined,
+        name: crateName.trim(),
+        note: crateNote.trim(),
+        kind: crateKind,
+        source,
+        filter: { ...filterDraft },
+        trackIds: previewTrackIds,
+      });
+      selectedCrateId = id;
+      setActionMessage(isUpdate ? 'Crate updated.' : 'Crate saved.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save crate.'), 'error');
+    }
   }
 
   async function playCrate(crate: CrateRecord) {
-    await replaceQueueTrackIds(crate.trackIds, 0);
+    try {
+      await replaceQueueTrackIds(crate.trackIds, 0);
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to play crate.'), 'error');
+    }
   }
 
   async function turnCrateIntoSession(crate: CrateRecord) {
-    await saveSessionRecord({
-      name: crate.name,
-      note: crate.note,
-      trackIds: crate.trackIds,
-      reasons: [],
-      source: 'crate',
-      sourceRefId: crate.id,
-      branchOfId: null,
-      modeSnapshot: null,
-    });
+    try {
+      await saveSessionRecord({
+        name: crate.name,
+        note: crate.note,
+        trackIds: crate.trackIds,
+        reasons: [],
+        source: 'crate',
+        sourceRefId: crate.id,
+        branchOfId: null,
+        modeSnapshot: null,
+      });
+      setActionMessage('Crate sent to sessions.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save crate as session.'), 'error');
+    }
   }
 
   async function turnCrateIntoPlaylist(crate: CrateRecord) {
-    await createPlaylist(crate.name, crate.note || null, crate.trackIds);
+    try {
+      await createPlaylist(crate.name, crate.note || null, crate.trackIds);
+      setActionMessage('Crate exported to playlist.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to export crate to playlist.'), 'error');
+    }
+  }
+
+  async function queuePreviewSession() {
+    if (previewTrackIds.length === 0) {
+      return;
+    }
+    try {
+      await saveSessionRecord({
+        name: crateName.trim() || 'Untitled crate session',
+        note: crateNote.trim(),
+        trackIds: previewTrackIds,
+        reasons: [],
+        source: 'crate',
+        sourceRefId: selectedCrateId,
+        branchOfId: null,
+        modeSnapshot: null,
+      });
+      setActionMessage('Preview sent to sessions.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to save preview as session.'), 'error');
+    }
+  }
+
+  async function handleDeleteCrate(crateId: string) {
+    try {
+      await deleteCrate(crateId);
+      setActionMessage('Crate deleted.', 'info');
+    } catch (error) {
+      setActionMessage(toActionMessage(error, 'Failed to delete crate.'), 'error');
+    }
   }
 
   function crateTracks(crate: CrateRecord): Track[] {
@@ -128,6 +193,11 @@
     }
     const playlist = $playlists.find((item) => item.id === playlistId);
     return playlist?.name ?? 'Playlist slice';
+  }
+
+  $: if (!isDesktopRuntimeAvailable() && !actionMessage) {
+    actionMessage = 'Preview mode detected. Desktop-only actions are unavailable until you run the Cassette desktop app.';
+    actionMessageTone = 'info';
   }
 </script>
 
@@ -143,6 +213,9 @@
           A crate is a saved or temporary slice of the collection. Pull one by artist, format,
           quality, or playlist, then send it into the queue or session when you need a faster start.
         </p>
+        {#if actionMessage}
+          <p class="action-notice" class:error={actionMessageTone === 'error'}>{actionMessage}</p>
+        {/if}
       </div>
       <div class="crates-hero-actions">
         <button class="btn btn-secondary" on:click={resetDraft}>New slice</button>
@@ -191,7 +264,7 @@
               <span class="crate-source">{playlistLabel(crate.filter.playlistId)}</span>
               <span class="crate-actions">
                 <button class="crate-action-link" on:click|stopPropagation={() => playCrate(crate)}>Play</button>
-                <button class="crate-action-link danger" on:click|stopPropagation={() => deleteCrate(crate.id)}>Delete</button>
+                <button class="crate-action-link danger" on:click|stopPropagation={() => handleDeleteCrate(crate.id)}>Delete</button>
               </span>
             </div>
           {/each}
@@ -284,16 +357,7 @@
             <button class="btn btn-primary" on:click={() => replaceQueueTrackIds(previewTrackIds, 0)} disabled={previewTrackIds.length === 0}>Play preview</button>
             <button
               class="btn btn-secondary"
-              on:click={() => saveSessionRecord({
-                name: crateName.trim() || 'Untitled crate session',
-                note: crateNote.trim(),
-                trackIds: previewTrackIds,
-                reasons: [],
-                source: 'crate',
-                sourceRefId: selectedCrateId,
-                branchOfId: null,
-                modeSnapshot: null,
-              })}
+              on:click={queuePreviewSession}
               disabled={previewTrackIds.length === 0}
             >
               Send to session
@@ -393,6 +457,21 @@
   .crate-preview-meta {
     color: var(--text-secondary);
     line-height: 1.7;
+  }
+
+  .action-notice {
+    border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--bg-card) 86%, var(--primary) 14%);
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    line-height: 1.5;
+  }
+
+  .action-notice.error {
+    border-color: color-mix(in srgb, var(--error) 55%, transparent);
+    background: color-mix(in srgb, var(--bg-card) 82%, var(--error) 18%);
   }
 
   .crates-layout {

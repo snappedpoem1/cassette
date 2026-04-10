@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { type CrateRecord } from '$lib/stores/rituals';
   import { formatDuration } from '$lib/utils';
-  import { api } from '$lib/api/tauri';
+  import { api, isDesktopRuntimeAvailable, toDesktopRuntimeMessage } from '$lib/api/tauri';
   import { queueDuration } from '$lib/queue-ritual';
   import { loadLibrary, tracks } from '$lib/stores/library';
   import {
@@ -30,9 +30,21 @@
   } from '$lib/stores/rituals';
   import { queue } from '$lib/stores/queue';
 
+  const runtimeAvailable = isDesktopRuntimeAvailable();
+  let actionError: string | null = null;
+
   onMount(async () => {
     await Promise.all([loadQueue(), loadLibrary(), loadRituals()]);
   });
+
+  async function runQueueAction(action: () => Promise<void>, fallback: string): Promise<void> {
+    actionError = null;
+    try {
+      await action();
+    } catch (error) {
+      actionError = toDesktopRuntimeMessage(error, fallback);
+    }
+  }
 
   let sceneName = '';
   let sceneNote = '';
@@ -50,8 +62,10 @@
     if (queueItems.length === 0) {
       return;
     }
-    await api.reorderQueue(queueItems.map((item) => item.track_id), position);
-    await loadQueue();
+    await runQueueAction(async () => {
+      await api.reorderQueue(queueItems.map((item) => item.track_id), position);
+      await loadQueue();
+    }, 'Failed to play from this queue position.');
   }
 
   async function removeAt(position: number) {
@@ -60,7 +74,9 @@
 
   async function resumeQueue() {
     if ($playbackState.current_track) {
-      await player.toggle();
+      await runQueueAction(async () => {
+        await player.toggle();
+      }, 'Failed to toggle playback.');
       return;
     }
     await playFrom(0);
@@ -70,16 +86,18 @@
     if (!sceneName.trim() || queueItems.length === 0) {
       return;
     }
-    await saveQueueScene({
-      name: sceneName.trim(),
-      note: sceneNote.trim(),
-      trackIds: queueItems.map((item) => item.track_id),
-      startIndex: currentPosition,
-      pinnedPositions: $liveQueueRitual.pinnedPositions,
-      heldPositions: $liveQueueRitual.heldPositions,
-    });
-    sceneName = '';
-    sceneNote = '';
+    await runQueueAction(async () => {
+      await saveQueueScene({
+        name: sceneName.trim(),
+        note: sceneNote.trim(),
+        trackIds: queueItems.map((item) => item.track_id),
+        startIndex: currentPosition,
+        pinnedPositions: $liveQueueRitual.pinnedPositions,
+        heldPositions: $liveQueueRitual.heldPositions,
+      });
+      sceneName = '';
+      sceneNote = '';
+    }, 'Failed to save queue scene.');
   }
 
   async function restoreScene(sceneId: string) {
@@ -87,43 +105,49 @@
     if (!scene) {
       return;
     }
-    await api.queueTracks(scene.trackIds, scene.startIndex);
-    await updateLiveQueueRitual({
-      pinnedPositions: scene.pinnedPositions,
-      heldPositions: scene.heldPositions,
-      lastPivotLabel: scene.name,
-    });
-    await loadQueue();
+    await runQueueAction(async () => {
+      await api.queueTracks(scene.trackIds, scene.startIndex);
+      await updateLiveQueueRitual({
+        pinnedPositions: scene.pinnedPositions,
+        heldPositions: scene.heldPositions,
+        lastPivotLabel: scene.name,
+      });
+      await loadQueue();
+    }, 'Failed to restore queue scene.');
   }
 
   async function saveQueueAsCrate() {
     if (queueItems.length === 0) {
       return;
     }
-    await saveCrate({
-      name: sceneName.trim() || 'Queue slice',
-      note: sceneNote.trim() || 'Saved from queue sculpting.',
-      kind: 'temporary',
-      source: 'manual',
-      filter: emptyCrateFilter(),
-      trackIds: queueItems.map((item) => item.track_id),
-    });
+    await runQueueAction(async () => {
+      await saveCrate({
+        name: sceneName.trim() || 'Queue slice',
+        note: sceneNote.trim() || 'Saved from queue sculpting.',
+        kind: 'temporary',
+        source: 'manual',
+        filter: emptyCrateFilter(),
+        trackIds: queueItems.map((item) => item.track_id),
+      });
+    }, 'Failed to save queue as crate.');
   }
 
   async function saveQueueAsSession() {
     if (queueItems.length === 0) {
       return;
     }
-    await saveSessionRecord({
-      name: sceneName.trim() || 'Queue memory',
-      note: sceneNote.trim(),
-      trackIds: queueItems.map((item) => item.track_id),
-      reasons: [],
-      source: 'queue_scene',
-      sourceRefId: null,
-      branchOfId: null,
-      modeSnapshot: null,
-    });
+    await runQueueAction(async () => {
+      await saveSessionRecord({
+        name: sceneName.trim() || 'Queue memory',
+        note: sceneNote.trim(),
+        trackIds: queueItems.map((item) => item.track_id),
+        reasons: [],
+        source: 'queue_scene',
+        sourceRefId: null,
+        branchOfId: null,
+        modeSnapshot: null,
+      });
+    }, 'Failed to save queue as session.');
   }
 
   async function pivotTail(trackIds: number[], label: string) {
@@ -133,13 +157,15 @@
     const prefix = queueItems.slice(0, currentPosition + 1).map((item) => item.track_id);
     const tail = trackIds.filter((trackId) => !prefix.includes(trackId));
     const nextTrackIds = [...prefix, ...tail];
-    await api.queueTracks(nextTrackIds, currentPosition);
-    await updateLiveQueueRitual({
-      pinnedPositions: [],
-      heldPositions: [],
-      lastPivotLabel: label,
-    });
-    await loadQueue();
+    await runQueueAction(async () => {
+      await api.queueTracks(nextTrackIds, currentPosition);
+      await updateLiveQueueRitual({
+        pinnedPositions: [],
+        heldPositions: [],
+        lastPivotLabel: label,
+      });
+      await loadQueue();
+    }, 'Failed to pivot queue.');
   }
 
   async function pivotToArtist() {
@@ -192,13 +218,20 @@
         </p>
       </div>
       <div class="queue-hero-actions">
-        <button class="btn btn-primary" on:click={resumeQueue}>
-          {$playbackState.current_track ? ($playbackState.is_playing ? 'Pause' : 'Resume') : 'Play from top'}
+            <button class="btn btn-primary" on:click={resumeQueue} disabled={!runtimeAvailable}>
+          {$playbackState.current_track ? ($playbackState.is_playing ? 'Pause' : 'Play') : 'Play queue'}
         </button>
         <button class="btn btn-secondary" on:click={() => goto('/playlists')}>Open playlists</button>
-        <button class="btn btn-ghost" on:click={clearQueue} disabled={queueItems.length === 0}>Clear queue</button>
+            <button class="btn btn-ghost" on:click={clearQueue} disabled={queueItems.length === 0 || !runtimeAvailable}>Clear queue</button>
       </div>
     </div>
+
+        {#if !runtimeAvailable}
+          <div class="queue-runtime-hint">Queue sculpting actions need the Cassette desktop runtime.</div>
+        {/if}
+        {#if actionError}
+          <div class="queue-runtime-error">{actionError}</div>
+        {/if}
 
     <div class="queue-stats">
       <div class="queue-stat">
@@ -228,7 +261,7 @@
         the order needs hands-on shaping.
       </div>
       <div class="queue-empty-actions">
-        <button class="btn btn-primary" on:click={() => goto('/collection')}>Open collection</button>
+        <button class="btn btn-primary" on:click={() => goto('/collection')}>Collection</button>
         <button class="btn btn-secondary" on:click={() => goto('/crates')}>Open crates</button>
       </div>
     </section>
@@ -249,7 +282,7 @@
             {@const isPinned = $liveQueueRitual.pinnedPositions.includes(index)}
             {@const isHeld = $liveQueueRitual.heldPositions.includes(index)}
             <div class="queue-row" class:is-current={isCurrent}>
-              <button class="queue-main" on:click={() => playFrom(index)}>
+                <button class="queue-main" on:click={() => playFrom(index)} disabled={!runtimeAvailable}>
                 <span class="queue-position">{isCurrent ? 'Now' : index + 1}</span>
                 <span class="queue-copy">
                   <span class="queue-title">
@@ -268,11 +301,11 @@
               </button>
 
               <div class="queue-actions">
-                <button class="btn btn-ghost queue-row-btn" on:click={() => playItemAfterCurrent(index)}>After current</button>
-                <button class="btn btn-ghost queue-row-btn" on:click={() => pinQueuePosition(index)}>Pin</button>
-                <button class="btn btn-ghost queue-row-btn" on:click={() => holdQueuePosition(index)}>Hold</button>
-                <button class="btn btn-ghost queue-row-btn" on:click={() => cutQueueAfterPosition(index)}>Cut after this</button>
-                <button class="btn btn-ghost queue-row-btn" on:click={() => removeAt(index)}>Cut</button>
+                  <button class="btn btn-ghost queue-row-btn" on:click={() => playItemAfterCurrent(index)} disabled={!runtimeAvailable}>After current</button>
+                  <button class="btn btn-ghost queue-row-btn" on:click={() => pinQueuePosition(index)} disabled={!runtimeAvailable}>Pin</button>
+                  <button class="btn btn-ghost queue-row-btn" on:click={() => holdQueuePosition(index)} disabled={!runtimeAvailable}>Hold</button>
+                  <button class="btn btn-ghost queue-row-btn" on:click={() => cutQueueAfterPosition(index)} disabled={!runtimeAvailable}>Cut after this</button>
+                  <button class="btn btn-ghost queue-row-btn" on:click={() => removeAt(index)} disabled={!runtimeAvailable}>Cut</button>
               </div>
             </div>
           {/each}
@@ -294,9 +327,9 @@
             </label>
           </div>
           <div class="queue-scenes-actions">
-            <button class="btn btn-primary" on:click={saveCurrentScene}>Save scene</button>
-            <button class="btn btn-secondary" on:click={saveQueueAsSession}>Save as session</button>
-            <button class="btn btn-ghost" on:click={saveQueueAsCrate}>Save as crate</button>
+            <button class="btn btn-primary" on:click={saveCurrentScene} disabled={!runtimeAvailable}>Save scene</button>
+            <button class="btn btn-secondary" on:click={saveQueueAsSession} disabled={!runtimeAvailable}>Save as session</button>
+            <button class="btn btn-ghost" on:click={saveQueueAsCrate} disabled={!runtimeAvailable}>Save as crate</button>
           </div>
 
           {#if $queueScenes.length === 0}
@@ -314,8 +347,8 @@
                       <div class="scene-item-meta">{scene.trackIds.length} tracks / start at {scene.startIndex + 1}</div>
                     </div>
                     <div class="scene-item-actions">
-                      <button class="btn btn-ghost btn-small" on:click={() => restoreScene(scene.id)}>Restore</button>
-                      <button class="btn btn-ghost btn-small" on:click={() => deleteQueueScene(scene.id)}>Delete</button>
+                      <button class="btn btn-ghost btn-small" on:click={() => restoreScene(scene.id)} disabled={!runtimeAvailable}>Restore</button>
+                      <button class="btn btn-ghost btn-small" on:click={() => deleteQueueScene(scene.id)} disabled={!runtimeAvailable}>Delete</button>
                     </div>
                   </div>
                   {#if scene.note}
@@ -331,8 +364,8 @@
           <div class="section-kicker subtle">Pivots</div>
           <h3>Replace the tail with a new lane</h3>
           <div class="queue-scenes-actions">
-            <button class="btn btn-primary" on:click={pivotToArtist} disabled={!currentTrack}>Pivot to artist</button>
-            <button class="btn btn-secondary" on:click={pivotToAlbum} disabled={!currentTrack}>Pivot to album</button>
+            <button class="btn btn-primary" on:click={pivotToArtist} disabled={!currentTrack || !runtimeAvailable}>Pivot to artist</button>
+            <button class="btn btn-secondary" on:click={pivotToAlbum} disabled={!currentTrack || !runtimeAvailable}>Pivot to album</button>
           </div>
           <label>
             Pivot to crate
@@ -343,7 +376,7 @@
               {/each}
             </select>
           </label>
-          <button class="btn btn-ghost" on:click={() => pivotToCrate(currentCratePivot)} disabled={!currentCratePivot}>
+          <button class="btn btn-ghost" on:click={() => pivotToCrate(currentCratePivot)} disabled={!currentCratePivot || !runtimeAvailable}>
             Pivot to saved crate
           </button>
         </section>
@@ -416,6 +449,26 @@
     flex-wrap: wrap;
   }
 
+  .queue-runtime-hint,
+  .queue-runtime-error {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+  }
+
+  .queue-runtime-hint {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-base));
+  }
+
+  .queue-runtime-error {
+    color: var(--status-danger);
+    background: color-mix(in srgb, var(--status-danger) 10%, var(--bg-base));
+    border-color: color-mix(in srgb, var(--status-danger) 35%, var(--border));
+  }
+
   .queue-stats {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -486,6 +539,11 @@
     gap: 12px;
     align-items: center;
     text-align: left;
+  }
+
+  .queue-main:disabled {
+    opacity: 0.72;
+    cursor: not-allowed;
   }
 
   .queue-position,

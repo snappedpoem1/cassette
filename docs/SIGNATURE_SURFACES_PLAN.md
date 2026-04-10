@@ -4,6 +4,12 @@ Last updated: 2026-04-08
 Status: active execution plan
 Owner: Christian (Capn)
 
+Supersession note:
+
+- This document remains valid for listening rituals, object model priorities, and surface content direction.
+- It is no longer the top-level shell architecture contract by itself.
+- For workspace, docking, layering, break-apart modules, and anti-route-first interpretation, read `docs/MODULAR_DESKTOP_DIRECTION_RESET.md` first.
+
 ## Mission
 
 Turn Cassette from a credible system into a desirable place to listen, collect, and return to.
@@ -27,7 +33,10 @@ These are fixed for this cycle:
 5. Workstation is secondary. It cannot become the real app.
 6. Backend changes must unlock a named surface. If they do not, they do not land in this wave.
 
-## Current Surface Failures
+## Pre-Wave-Rebuild Surface State
+
+These were the identified problems before Signature Surfaces Waves 2-6 executed
+(2026-04-08). They remain here as the design problem statement that drove rebuild order.
 
 These are not abstract taste notes. They are the current repo problems.
 
@@ -36,7 +45,7 @@ These are not abstract taste notes. They are the current repo problems.
 3. `ui/src/routes/playlists/+page.svelte` is CRUD plus track list. It has no authorship spine.
 4. `ui/src/lib/components/QueuePanel.svelte` is only reorder/remove. It is not sculptable.
 5. `ui/src/lib/components/NowPlaying.svelte` and `ui/src/lib/components/NowPlayingExpanded.svelte` are informative but not immersive.
-6. `ui/src/lib/components/Sidebar.svelte` puts operator surfaces too close to the primary listening loop.
+6. `ui/src/lib/components/Sidebar.svelte` historically put operator surfaces too close to the primary listening loop; the contract now requires a single Workstation doorway instead.
 7. `ui/src/routes/downloads/+page.svelte` still leaks "command center", "debug", raw request language, and provider-heavy posture into the main product voice.
 8. `ui/src/app.css` sets a generic dark shell, weak contrast values, a network-loaded font import, and visible mojibake.
 
@@ -154,6 +163,7 @@ Must not change:
 Acceptance:
 
 - sidebar top section contains only listening surfaces
+- sidebar exposes only listening surfaces plus Workstation as the control doorway
 - Workstation is reachable in one click but not presented as the main product
 - Home, Collection, Artists, Playlists, Queue, Session, and Now Playing do not display banned internal terms
 
@@ -369,4 +379,3 @@ This is the smallest real order that can be handed to an implementation agent:
 - keyboard-only flow on primary listening surfaces
 - low-motion parity
 - clear blocked-work visibility
-

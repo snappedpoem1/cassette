@@ -14,6 +14,15 @@
   const BAR_COUNT = 16;
   const TRANSITION_SECONDS = 2.2;
 
+  // NOTE: The 'spectrum' and 'waveform' modes are NOT audio-reactive. They are
+  // decorative CSS/SVG animations driven purely by playback position and
+  // duration math (sine waves keyed to phase = positionSecs / durationSecs).
+  // No Web Audio API analysis is performed. The 'milkdrop' mode uses the
+  // butterchurn WebGL renderer but also has no audio source node connected —
+  // it runs its preset animation loop independently of the audio signal.
+  // True audio-reactive visualisation requires a MediaElementSource or
+  // MediaStream connection to an AnalyserNode, which is not yet wired up.
+
   let canvasEl: HTMLCanvasElement | null = null;
   let isMilkdropReady = false;
   let milkdropError: string | null = null;

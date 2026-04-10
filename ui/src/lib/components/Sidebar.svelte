@@ -3,6 +3,7 @@
   import { trackCount, albums, isScanning, scanProgress } from '$lib/stores/library';
   import CassetteLogo from '$lib/components/CassetteLogo.svelte';
   import { isPlaying } from '$lib/stores/player';
+  import { openWorkstationDeck, workstationDeckOpen } from '$lib/stores/shell';
 
   const listeningLinks = [
     {
@@ -52,6 +53,7 @@
       href: '/workstation',
       label: 'Workstation',
       icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/><path d="M12 18v2"/></svg>`,
+      shellSurface: true,
     },
   ];
 
@@ -82,14 +84,27 @@
   <div class="nav-divider"></div>
 
   <ul class="nav-list">
-    <li class="nav-heading">Control</li>
+    <li class="nav-heading">Workstation</li>
     {#each utilityLinks as link}
-      {@const active = isActive(link.href, $page.url.pathname)}
+      {@const active = link.shellSurface ? $workstationDeckOpen : isActive(link.href, $page.url.pathname)}
       <li>
-        <a href={link.href} class="nav-item" class:active aria-current={active ? 'page' : undefined}>
-          <span class="nav-icon">{@html link.icon}</span>
-          <span class="nav-label">{link.label}</span>
-        </a>
+        {#if link.shellSurface}
+          <button
+            type="button"
+            class="nav-item nav-button"
+            class:active
+            aria-pressed={active}
+            on:click={openWorkstationDeck}
+          >
+            <span class="nav-icon">{@html link.icon}</span>
+            <span class="nav-label">{link.label}</span>
+          </button>
+        {:else}
+          <a href={link.href} class="nav-item" class:active aria-current={active ? 'page' : undefined}>
+            <span class="nav-icon">{@html link.icon}</span>
+            <span class="nav-label">{link.label}</span>
+          </a>
+        {/if}
       </li>
     {/each}
   </ul>
@@ -175,6 +190,10 @@
     text-decoration: none;
     margin-right: -8px;
     padding-right: 16px;
+  }
+
+  .nav-button {
+    width: 100%;
   }
 
   .nav-item:hover {

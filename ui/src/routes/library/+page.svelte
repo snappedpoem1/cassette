@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
     tracks, albums, artists,
     activeTab, searchResults, isSearching,
-    search,
+    search, loadLibrary, libraryLoadError,
   } from '$lib/stores/library';
   import { queueTracks } from '$lib/stores/queue';
   import ContextActionRail from '$lib/components/ContextActionRail.svelte';
@@ -10,6 +11,15 @@
   import { formatDuration, coverSrc, debounce, tintFromHex } from '$lib/utils';
   import type { Album, Track, TrackIdentityContext } from '$lib/api/tauri';
   import { api } from '$lib/api/tauri';
+
+  let libraryLoading = true;
+
+  onMount(async () => {
+    if ($albums.length === 0 && $tracks.length === 0) {
+      await loadLibrary();
+    }
+    libraryLoading = false;
+  });
 
   let selectedAlbum: Album | null = null;
   let albumTracks: Track[] = [];
@@ -115,6 +125,10 @@
       {/if}
     </div>
   </div>
+
+  {#if $libraryLoadError}
+    <div class="library-notice" role="status">{$libraryLoadError}</div>
+  {/if}
 
   {#if searchInput.trim() && $searchResults.length > 0}
     <div class="search-results">
@@ -257,10 +271,16 @@
             </div>
           {/if}
         </div>
+      {:else if libraryLoading}
+        <div class="empty-state"><div class="spinner"></div></div>
       {:else if $albums.length === 0}
         <div class="empty-state">
-          <div class="empty-title">No albums yet</div>
-          <div class="empty-body">Add a library root in Settings and scan to import your music.</div>
+          <div class="empty-title">{$libraryLoadError ? 'Library unavailable' : 'No albums yet'}</div>
+          <div class="empty-body">
+            {$libraryLoadError
+              ? 'Cassette could not confirm the library contents right now. Retry once the desktop runtime and library database are responding again.'
+              : 'Add a library root in Settings and scan to import your music.'}
+          </div>
         </div>
       {:else}
         <div class="album-grid">
@@ -294,10 +314,16 @@
         </div>
       {/if}
     {:else if $activeTab === 'tracks'}
-      {#if $tracks.length === 0}
+      {#if libraryLoading}
+        <div class="empty-state"><div class="spinner"></div></div>
+      {:else if $tracks.length === 0}
         <div class="empty-state">
-          <div class="empty-title">No tracks yet</div>
-          <div class="empty-body">Scan your library from Settings.</div>
+          <div class="empty-title">{$libraryLoadError ? 'Track view unavailable' : 'No tracks yet'}</div>
+          <div class="empty-body">
+            {$libraryLoadError
+              ? 'Cassette could not load the track list, so this is not a trustworthy empty state yet.'
+              : 'Scan your library from Settings.'}
+          </div>
         </div>
       {:else}
         <div class="track-list">
@@ -371,9 +397,14 @@
           </div>
         {/if}
       {/if}
+    {:else if libraryLoading}
+      <div class="empty-state"><div class="spinner"></div></div>
     {:else if $artists.length === 0}
       <div class="empty-state">
-        <div class="empty-title">No artists yet</div>
+        <div class="empty-title">{$libraryLoadError ? 'Artist view unavailable' : 'No artists yet'}</div>
+        {#if $libraryLoadError}
+          <div class="empty-body">Cassette could not load the artist clusters right now.</div>
+        {/if}
       </div>
     {:else}
       <div class="artist-list">
@@ -406,6 +437,16 @@
 .library-page { display: flex; flex-direction: column; min-height: 100%; }
 
 .page-header { background: linear-gradient(to bottom, var(--bg-base) 70%, transparent); }
+
+.library-notice {
+  margin: 0 1rem 0.75rem;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 143, 143, 0.24);
+  background: rgba(120, 24, 24, 0.12);
+  color: var(--status-error, #ffb4b4);
+  font-size: 0.78rem;
+}
 
 .search-wrap {
   position: relative;

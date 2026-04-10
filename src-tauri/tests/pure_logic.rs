@@ -451,7 +451,7 @@ fn calm_automation_wave_is_present() {
     let digest = include_str!("../../ui/src/lib/automation-digest.ts");
     let digest_panel = include_str!("../../ui/src/lib/components/AutomationDigestPanel.svelte");
     let right_sidebar = include_str!("../../ui/src/lib/components/RightSidebar.svelte");
-    let workstation = include_str!("../../ui/src/routes/workstation/+page.svelte");
+    let workstation = include_str!("../../ui/src/lib/components/WorkstationSurface.svelte");
 
     assert!(digest.contains("silent"));
     assert!(digest.contains("digest"));
@@ -460,6 +460,151 @@ fn calm_automation_wave_is_present() {
     assert!(digest_panel.contains("Calm automation"));
     assert!(right_sidebar.contains("Room"));
     assert!(workstation.contains("Digest boundary"));
+}
+
+#[test]
+fn shell_foundation_uses_persistent_library_rail_and_workstation_deck() {
+    let layout = include_str!("../../ui/src/routes/+layout.svelte");
+    let shell_store = include_str!("../../ui/src/lib/stores/shell.ts");
+    let library_rail = include_str!("../../ui/src/lib/components/LibraryRail.svelte");
+    let workstation_deck = include_str!("../../ui/src/lib/components/WorkstationDeck.svelte");
+    let workstation_route = include_str!("../../ui/src/routes/workstation/+page.svelte");
+    let commands = include_str!("../../ui/src/lib/stores/commands.ts");
+    let sidebar = include_str!("../../ui/src/lib/components/Sidebar.svelte");
+    let app_css = include_str!("../../ui/src/app.css");
+
+    assert!(shell_store.contains("libraryRailWidth"));
+    assert!(shell_store.contains("utilityWellWidth"));
+    assert!(shell_store.contains("utilityWellMode"));
+    assert!(shell_store.contains("workstationDeckOpen"));
+    assert!(shell_store.contains("applyWorkspacePreset"));
+    assert!(layout.contains("LibraryRail"));
+    assert!(layout.contains("WorkstationDeck"));
+    assert!(layout.contains("Resize library rail"));
+    assert!(layout.contains("Resize utility well"));
+    assert!(library_rail.contains("Browser rail"));
+    assert!(library_rail.contains("Preview"));
+    assert!(workstation_deck.contains("Workstation deck"));
+    assert!(workstation_route.contains("Compatibility surface"));
+    assert!(commands.contains("Open Workstation Deck"));
+    assert!(commands.contains("Focus Library Rail"));
+    assert!(sidebar.contains("shellSurface: true"));
+    assert!(app_css.contains("--library-rail-w"));
+    assert!(app_css.contains(".app-library"));
+    assert!(app_css.contains(".app-shell.utility-collapsed"));
+}
+
+#[test]
+fn first_selective_breakout_uses_a_persisted_visualizer_window() {
+    let capabilities = include_str!("../capabilities/default.json");
+    let shell_store = include_str!("../../ui/src/lib/stores/shell.ts");
+    let commands = include_str!("../../ui/src/lib/stores/commands.ts");
+    let now_playing = include_str!("../../ui/src/lib/components/NowPlaying.svelte");
+    let layout = include_str!("../../ui/src/routes/+layout.svelte");
+    let visualizer_route = include_str!("../../ui/src/routes/visualizer-window/+page.svelte");
+
+    assert!(capabilities.contains("\"visualizer\""));
+    assert!(capabilities.contains("core:window:allow-create"));
+    assert!(capabilities.contains("core:window:allow-get-all-windows"));
+    assert!(shell_store.contains("VISUALIZER_WINDOW_LABEL"));
+    assert!(shell_store.contains("openVisualizerWindow"));
+    assert!(shell_store.contains("cassette.shell.visualizerWindowGeometry"));
+    assert!(commands.contains("Open Visualizer Window"));
+    assert!(now_playing.contains(">Visualizer</button>"));
+    assert!(layout.contains("isVisualizerWindowRoute"));
+    assert!(visualizer_route.contains("Visualizer breakout proof"));
+    assert!(visualizer_route.contains("persistWindowGeometry"));
+    assert!(visualizer_route.contains("decorative or preset-driven"));
+}
+
+#[test]
+fn listening_shell_keeps_workstation_as_the_single_control_doorway() {
+    let sidebar = include_str!("../../ui/src/lib/components/Sidebar.svelte");
+    let boundary_map = include_str!("../../docs/EXPERIENCE_BOUNDARY_MAP.md");
+    let object_model = include_str!("../../docs/OBJECT_MODEL_DECISIONS.md");
+
+    assert!(sidebar.contains("nav-heading\">Workstation"));
+    assert!(sidebar.contains("label: 'Workstation'"));
+    assert!(!sidebar.contains("label: 'Downloads'"));
+    assert!(!sidebar.contains("label: 'Import'"));
+    assert!(!sidebar.contains("label: 'History'"));
+    assert!(!sidebar.contains("label: 'Tools'"));
+    assert!(!sidebar.contains("label: 'Settings'"));
+    assert!(boundary_map.contains("single Workstation doorway"));
+    assert!(boundary_map.contains("Acquire"));
+    assert!(object_model.contains("Playlist is not Crate."));
+    assert!(object_model.contains("Session is not Queue Scene."));
+}
+
+#[test]
+fn player_runtime_listener_advances_or_stops_cleanly_on_track_end() {
+    let state = include_str!("../src/state.rs");
+    let core_player = include_str!("../../crates/cassette-core/src/player/mod.rs");
+
+    assert!(state.contains("spawn_player_event_listener("));
+    assert!(state.contains("PlayerEvent::TrackEnded"));
+    assert!(state.contains("handle_track_end("));
+    assert!(state.contains("player.load(track.path.clone())"));
+    assert!(state.contains("player.pause();"));
+    assert!(core_player.contains("recv_event_timeout"));
+}
+
+#[test]
+fn primary_actions_use_direct_button_labels() {
+    let home = include_str!("../../ui/src/routes/+page.svelte");
+    let layout = include_str!("../../ui/src/routes/+layout.svelte");
+    let queue = include_str!("../../ui/src/routes/queue/+page.svelte");
+    let action_rail = include_str!("../../ui/src/lib/components/ContextActionRail.svelte");
+
+    assert!(!home.contains("Open collection"));
+    assert!(!home.contains("Open queue"));
+    assert!(!home.contains("Open workstation"));
+    assert!(home.contains(">Collection</button>"));
+    assert!(home.contains(">Queue</button>"));
+    assert!(home.contains(">Workstation</button>"));
+    assert!(layout.contains("Commands"));
+    assert!(queue.contains("'Play queue'"));
+    assert!(action_rail.contains("Play now"));
+    assert!(action_rail.contains("Add to queue"));
+    assert!(action_rail.contains("Get track"));
+    assert!(action_rail.contains("Get album"));
+    assert!(action_rail.contains("Get releases"));
+}
+
+#[test]
+fn primary_transport_stops_optimistic_seek_and_volume_mutation() {
+    let player_store = include_str!("../../ui/src/lib/stores/player.ts");
+    let now_playing = include_str!("../../ui/src/lib/components/NowPlaying.svelte");
+
+    assert!(player_store.contains("export const playerActionError = writable<string | null>(null);"));
+    assert!(player_store.contains("Failed to seek playback."));
+    assert!(player_store.contains("Failed to change volume."));
+    assert!(!player_store.contains("playbackState.update((s) => ({ ...s, position_secs: secs }))"));
+    assert!(!player_store.contains("playbackState.update((s) => ({ ...s, volume: v }))"));
+    assert!(now_playing.contains("playerActionError"));
+    assert!(now_playing.contains("np-runtime-hint-error"));
+}
+
+#[test]
+fn shell_and_primary_surfaces_show_bounded_load_or_action_failures() {
+    let shell_store = include_str!("../../ui/src/lib/stores/shell.ts");
+    let layout = include_str!("../../ui/src/routes/+layout.svelte");
+    let queue_store = include_str!("../../ui/src/lib/stores/queue.ts");
+    let queue_panel = include_str!("../../ui/src/lib/components/QueuePanel.svelte");
+    let library_store = include_str!("../../ui/src/lib/stores/library.ts");
+    let library_route = include_str!("../../ui/src/routes/library/+page.svelte");
+    let downloads_store = include_str!("../../ui/src/lib/stores/downloads.ts");
+    let downloads_route = include_str!("../../ui/src/routes/downloads/+page.svelte");
+
+    assert!(shell_store.contains("export const shellActionError = writable<string | null>(null);"));
+    assert!(layout.contains("shell-action-banner"));
+    assert!(queue_store.contains("export const queueLoadError = writable<string | null>(null);"));
+    assert!(queue_panel.contains("Queue unavailable"));
+    assert!(library_store.contains("export const libraryLoadError = writable<string | null>(null);"));
+    assert!(library_route.contains("Library unavailable"));
+    assert!(downloads_store.contains("export const downloadsSurfaceError = writable<string | null>(null);"));
+    assert!(downloads_route.contains("surfaceLoadError"));
+    assert!(downloads_route.contains("panel-note-error"));
 }
 
 #[test]

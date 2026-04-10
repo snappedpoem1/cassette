@@ -32,6 +32,11 @@
       missingAlbums = nextMissing;
       requestHistory = nextRequests;
       recentTracks = nextRecentTracks;
+    } catch {
+      stats = null;
+      missingAlbums = [];
+      requestHistory = [];
+      recentTracks = [];
     } finally {
       loading = false;
     }
@@ -164,7 +169,7 @@
       </div>
       <div class="hero-actions">
         <button class="btn btn-primary" on:click={() => goto('/artists')}>Open artists</button>
-        <button class="btn btn-secondary" on:click={() => goto('/queue')}>Open queue</button>
+        <button class="btn btn-secondary" on:click={() => goto('/queue')}>Queue</button>
       </div>
     </div>
 

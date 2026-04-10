@@ -3,6 +3,12 @@
 Last updated: 2026-04-08
 Status: active contract
 
+Supersession note:
+
+- This document still governs listening versus Workstation boundaries and language rules.
+- It does not by itself define the shell/workspace/windowing contract.
+- For the architecture reset away from route-first drift, read `docs/MODULAR_DESKTOP_DIRECTION_RESET.md` first.
+
 ## Purpose
 
 Cassette needs a hard experience boundary between listening surfaces and operator surfaces.
@@ -35,6 +41,7 @@ Rules:
 
 This is the control surface. It is allowed to be denser, but it still cannot be hostile.
 
+- Workstation deck or focused Workstation route
 - Downloads
 - Import
 - History
@@ -49,6 +56,7 @@ Rules:
 - raw request and provider detail lives here
 - replay, review, and repair live here
 - this surface must be one click away, never the default emotional center
+- the main shell should expose Workstation as the doorway, not the whole operator sitemap at once
 
 ## Route Boundary Map
 
@@ -66,7 +74,7 @@ Rules:
 
 ## Navigation Contract
 
-Primary shell navigation belongs to listening surfaces only:
+Primary shell navigation belongs to listening surfaces plus the single Workstation doorway:
 
 - Home
 - Collection
@@ -86,9 +94,10 @@ Secondary navigation belongs inside Workstation:
 
 Rules:
 
-- `ui/src/lib/components/Sidebar.svelte` top section must only contain listening surfaces plus Workstation.
+- `ui/src/lib/components/Sidebar.svelte` must expose listening surfaces plus Workstation, not the whole operator sitemap.
 - `ui/src/lib/stores/commands.ts` must mirror the same hierarchy.
 - `ui/src/routes/+layout.svelte` top bar must stop naming the app as a utility console.
+- Shell-owned surfaces such as the library rail and Workstation deck are part of the listening shell contract, not route clutter.
 
 ## Language Governance
 
@@ -117,6 +126,8 @@ Use these words on primary surfaces:
 - Inbox
 - History
 - Workstation
+- Acquire
+- Acquisition
 
 ### Banned Internal Terms On Primary Surfaces
 
@@ -136,8 +147,6 @@ These terms are banned from Tier 1 surfaces:
 - provider memory
 - debug
 - command center
-- acquire
-
 ### Translation Rules
 
 When internal terms are needed, translate them before they touch the listening shell.
@@ -155,6 +164,11 @@ When internal terms are needed, translate them before they touch the listening s
 | provider health | service status | provider health |
 | backlog | inbox | backlog |
 | planner approval | review decision | approval |
+
+`Acquire` / `Acquisition` rule:
+
+- allowed when naming the owner-approved preset or the Workstation-facing collection-recovery posture
+- not allowed as a leak of deeper runtime jargon on listening copy
 
 ## Primary Surface Content Limits
 
@@ -196,7 +210,7 @@ Still banned in Workstation:
 This boundary is only real when all of the following are true:
 
 - listening surfaces do not use banned internal terms
+- shell navigation exposes listening surfaces plus Workstation, not the full operator sitemap
 - Workstation is present and one click away
 - Downloads, Import, Tools, History, and Settings are framed as control surfaces, not as the main app
 - command palette labels follow the same vocabulary rules as the visible shell
-

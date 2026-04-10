@@ -81,11 +81,16 @@ pub fn player_pause(app: AppHandle, state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub fn player_stop(state: State<'_, AppState>) {
+pub fn player_stop(app: AppHandle, state: State<'_, AppState>) {
     state.player.stop();
-    let mut ps = state.playback_state.lock().unwrap();
-    ps.current_track = None;
-    ps.queue_position = 0;
+    {
+        let mut ps = state.playback_state.lock().unwrap();
+        ps.current_track = None;
+        ps.queue_position = 0;
+        ps.is_playing = false;
+        ps.position_secs = 0.0;
+    }
+    emit_playback_state(&app, &state);
 }
 
 #[tauri::command]

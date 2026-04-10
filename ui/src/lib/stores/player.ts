@@ -1,6 +1,11 @@
 import { writable, derived, get } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { api, type PlaybackState, type NowPlayingContext } from '$lib/api/tauri';
+import {
+  api,
+  toDesktopRuntimeMessage,
+  type PlaybackState,
+  type NowPlayingContext,
+} from '$lib/api/tauri';
 import { browser } from '$app/environment';
 import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
 
@@ -19,6 +24,7 @@ export const playbackState = writable<PlaybackState>(defaultState);
 export const nowPlayingContext = writable<NowPlayingContext | null>(null);
 export const isSeeking = writable(false);
 export const seekPreview = writable(0);
+export const playerActionError = writable<string | null>(null);
 
 // ── Derived ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +49,13 @@ let lastTrackId: number | null = null;
 let lastTaskbarSignature: string | null = null;
 const scrobbledTrackIds = new Set<number>();
 const failedScrobbleTrackIds = new Set<number>();
+
+function tauriRuntimeAvailable(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined'
+  );
+}
 
 async function syncStateSideEffects(state: PlaybackState): Promise<void> {
   void syncTaskbarPlaybackProgress(state);
@@ -159,7 +172,7 @@ export function stopPlayerPoll() {
 }
 
 export async function startPlayerEventListener() {
-  if (!browser || unlistenPlayerEvent) {
+  if (!browser || !tauriRuntimeAvailable() || unlistenPlayerEvent) {
     return;
   }
 
@@ -185,22 +198,72 @@ export function stopPlayerEventListener() {
 // ── Actions ───────────────────────────────────────────────────────────────────
 
 export const player = {
-  toggle: () => api.playerToggle(),
-  play: () => api.playerPlay(),
-  pause: () => api.playerPause(),
-  stop: () => api.playerStop(),
-  next: () => api.playerNext(),
-  prev: () => api.playerPrev(),
+  toggle: async () => {
+    try {
+      await api.playerToggle();
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to toggle playback.'));
+    }
+  },
+  play: async () => {
+    try {
+      await api.playerPlay();
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to start playback.'));
+    }
+  },
+  pause: async () => {
+    try {
+      await api.playerPause();
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to pause playback.'));
+    }
+  },
+  stop: async () => {
+    try {
+      await api.playerStop();
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to stop playback.'));
+    }
+  },
+  next: async () => {
+    try {
+      await api.playerNext();
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to skip to the next track.'));
+    }
+  },
+  prev: async () => {
+    try {
+      await api.playerPrev();
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to return to the previous track.'));
+    }
+  },
 
   seek: async (pct: number) => {
     const state = get(playbackState);
     const secs = pct * state.duration_secs;
-    await api.playerSeek(secs);
-    playbackState.update((s) => ({ ...s, position_secs: secs }));
+    try {
+      await api.playerSeek(secs);
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to seek playback.'));
+    }
   },
 
   setVolume: async (v: number) => {
-    await api.playerSetVolume(v);
-    playbackState.update((s) => ({ ...s, volume: v }));
+    try {
+      await api.playerSetVolume(v);
+      playerActionError.set(null);
+    } catch (error) {
+      playerActionError.set(toDesktopRuntimeMessage(error, 'Failed to change volume.'));
+    }
   },
 };

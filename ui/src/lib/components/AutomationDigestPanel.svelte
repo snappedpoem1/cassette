@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { openWorkstationDeck } from '$lib/stores/shell';
   import {
     AUTOMATION_THRESHOLD_LABELS,
     type AutomationDigestSummary,
@@ -9,11 +10,20 @@
   export let compact = false;
   export let showThresholdLegend = false;
   export let primaryHref = '/workstation';
-  export let primaryLabel = 'Open workstation';
+  export let primaryLabel = 'Workstation';
   export let secondaryHref: string | null = null;
   export let secondaryLabel: string | null = null;
 
   const legendOrder = ['silent', 'digest', 'soft_attention', 'explicit_intervention'] as const;
+
+  function openSurface(href: string): void {
+    if (href === '/workstation') {
+      openWorkstationDeck();
+      return;
+    }
+
+    void goto(href);
+  }
 </script>
 
 <section class="digest-panel" class:compact class:tone-watch={digest.tone === 'watch'} class:tone-action={digest.tone === 'action'}>
@@ -26,9 +36,9 @@
     </div>
 
     <div class="digest-actions">
-      <button class="btn btn-secondary" on:click={() => goto(primaryHref)}>{primaryLabel}</button>
+      <button class="btn btn-secondary" on:click={() => openSurface(primaryHref)}>{primaryLabel}</button>
       {#if secondaryHref && secondaryLabel}
-        <button class="btn btn-ghost" on:click={() => goto(secondaryHref)}>{secondaryLabel}</button>
+        <button class="btn btn-ghost" on:click={() => openSurface(secondaryHref)}>{secondaryLabel}</button>
       {/if}
     </div>
   </div>

@@ -1,24 +1,41 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { queue, loadQueue, clearQueue, removeQueueItem } from '$lib/stores/queue';
+  import {
+    queue,
+    queueLoadError,
+    loadQueue,
+    clearQueue,
+    removeQueueItem,
+  } from '$lib/stores/queue';
   import { playbackState } from '$lib/stores/player';
-  import { api } from '$lib/api/tauri';
+  import { api, isDesktopRuntimeAvailable } from '$lib/api/tauri';
   import { formatDuration } from '$lib/utils';
 
   onMount(() => loadQueue());
 
   let dragIndex: number | null = null;
   let dragOverIndex: number | null = null;
+  const runtimeAvailable = isDesktopRuntimeAvailable();
 
   async function jumpTo(index: number) {
+    if (!runtimeAvailable) {
+      return;
+    }
     const items = $queue;
     if (!items[index]) return;
-    const trackIds = items.map((item) => item.track_id);
-    await api.queueTracks(trackIds, index);
-    await loadQueue();
+    try {
+      const trackIds = items.map((item) => item.track_id);
+      await api.queueTracks(trackIds, index);
+      await loadQueue();
+    } catch {
+      await loadQueue();
+    }
   }
 
   async function handleRemove(position: number) {
+    if (!runtimeAvailable) {
+      return;
+    }
     const items = $queue;
     const currentPos = $playbackState.queue_position;
     const remainingLength = Math.max(0, items.length - 1);
@@ -34,7 +51,11 @@
       nextStartIndex = Math.min(position, remainingLength - 1);
     }
 
-    await removeQueueItem(position, Math.max(0, nextStartIndex));
+    try {
+      await removeQueueItem(position, Math.max(0, nextStartIndex));
+    } catch {
+      await loadQueue();
+    }
   }
 
   function onDragStart(index: number) {
@@ -48,6 +69,11 @@
 
   async function onDrop(event: DragEvent, dropIndex: number) {
     event.preventDefault();
+    if (!runtimeAvailable) {
+      dragIndex = null;
+      dragOverIndex = null;
+      return;
+    }
     if (dragIndex === null || dragIndex === dropIndex) {
       dragIndex = null;
       dragOverIndex = null;
@@ -70,8 +96,12 @@
       nextStartIndex = currentPos + 1;
     }
 
-    await api.reorderQueue(trackIds, Math.max(0, Math.min(nextStartIndex, trackIds.length - 1)));
-    await loadQueue();
+    try {
+      await api.reorderQueue(trackIds, Math.max(0, Math.min(nextStartIndex, trackIds.length - 1)));
+      await loadQueue();
+    } catch {
+      await loadQueue();
+    }
     dragIndex = null;
     dragOverIndex = null;
   }
@@ -80,6 +110,7 @@
     dragIndex = null;
     dragOverIndex = null;
   }
+
 </script>
 
 <div class="queue-panel">
@@ -89,50 +120,69 @@
       <div class="queue-subtitle">Drag to reshape the run.</div>
     </div>
     {#if $queue.length > 0}
-      <button class="clear-btn" on:click={clearQueue}>Clear</button>
+      <button class="clear-btn" on:click={clearQueue} disabled={!runtimeAvailable}>Clear</button>
     {/if}
   </div>
 
+  {#if !runtimeAvailable}
+    <div class="queue-preview-note">Preview mode: queue actions require the Cassette desktop runtime.</div>
+  {/if}
+  {#if $queueLoadError}
+    <div class="queue-preview-note queue-preview-note-error">{$queueLoadError}</div>
+  {/if}
+
   {#if $queue.length === 0}
     <div class="empty-state" style="padding:2rem 1rem;">
-      <div class="empty-title">Queue is empty</div>
-      <div class="empty-body">Start a track, album, playlist, or session to build your next stretch.</div>
+      <div class="empty-title">{$queueLoadError ? 'Queue unavailable' : 'Queue is empty'}</div>
+      <div class="empty-body">
+        {$queueLoadError
+          ? 'Cassette could not confirm the live queue right now. Keep the current run in place and retry once the runtime settles.'
+          : 'Start a track, album, playlist, or session to build your next stretch.'}
+      </div>
     </div>
   {:else}
     <ul class="queue-list">
       {#each $queue as item, i}
         {@const track = item.track}
         {@const isCurrent = i === $playbackState.queue_position}
-        <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
         <li
           class="queue-item"
           class:current={isCurrent}
           class:drag-over={dragOverIndex === i}
-          draggable="true"
+          draggable={runtimeAvailable}
           on:dragstart={() => onDragStart(i)}
           on:dragover={(event) => onDragOver(event, i)}
           on:drop={(event) => onDrop(event, i)}
           on:dragend={onDragEnd}
-          on:dblclick={() => jumpTo(i)}
         >
-          <span class="q-drag" aria-hidden="true">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" opacity="0.45">
-              <circle cx="9" cy="5" r="1.5" /><circle cx="15" cy="5" r="1.5" />
-              <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
-              <circle cx="9" cy="19" r="1.5" /><circle cx="15" cy="19" r="1.5" />
-            </svg>
-          </span>
-          <span class="q-num" class:active={isCurrent}>{isCurrent ? 'Now' : i + 1}</span>
-          <div class="q-info">
-            <div class="q-title">{track?.title ?? 'Unknown track'}</div>
-            <div class="q-artist">{track?.artist ?? 'Unknown artist'}</div>
-          </div>
-          <span class="q-dur">{formatDuration(track?.duration_secs ?? 0)}</span>
+          <button
+            class="queue-main"
+            type="button"
+            aria-label={`Jump to ${track?.title ?? 'Unknown track'}`}
+            aria-current={isCurrent ? 'true' : undefined}
+            on:click={() => jumpTo(i)}
+            disabled={!runtimeAvailable}
+          >
+            <span class="q-drag" aria-hidden="true">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" opacity="0.45">
+                <circle cx="9" cy="5" r="1.5" /><circle cx="15" cy="5" r="1.5" />
+                <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
+                <circle cx="9" cy="19" r="1.5" /><circle cx="15" cy="19" r="1.5" />
+              </svg>
+            </span>
+            <span class="q-num" class:active={isCurrent}>{isCurrent ? 'Now' : i + 1}</span>
+            <div class="q-info">
+              <div class="q-title">{track?.title ?? 'Unknown track'}</div>
+              <div class="q-artist">{track?.artist ?? 'Unknown artist'}</div>
+            </div>
+            <span class="q-dur">{formatDuration(track?.duration_secs ?? 0)}</span>
+          </button>
           <button
             class="q-remove"
             on:click|stopPropagation={() => handleRemove(i)}
             title="Remove"
             aria-label="Remove from queue"
+            disabled={!runtimeAvailable}
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -190,6 +240,27 @@
     color: var(--text-primary);
   }
 
+  .clear-btn:disabled,
+  .q-remove:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .queue-preview-note {
+    margin: 0 12px 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
+
+  .queue-preview-note-error {
+    color: var(--status-error, #ffb4b4);
+    border-color: rgba(255, 143, 143, 0.25);
+    background: rgba(120, 24, 24, 0.12);
+  }
+
   .queue-list {
     list-style: none;
     margin: 0;
@@ -202,7 +273,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 8px;
+    padding: 6px 8px;
     border-radius: var(--radius-sm);
     cursor: default;
     transition: background 0.1s, border-color 0.1s;
@@ -247,6 +318,20 @@
   .q-info {
     flex: 1;
     overflow: hidden;
+  }
+
+  .queue-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    text-align: left;
+  }
+
+  .queue-main:disabled {
+    cursor: not-allowed;
   }
 
   .q-title {

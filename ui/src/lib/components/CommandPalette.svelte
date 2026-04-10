@@ -85,6 +85,13 @@
     closePalette();
   }
 
+  function handleOverlayKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      closePalette();
+    }
+  }
+
   onMount(() => {
     const onKeyDown = async (event: KeyboardEvent) => {
       const usesCommandKey = event.ctrlKey || event.metaKey;
@@ -148,17 +155,20 @@
 </script>
 
 {#if $isPaletteOpen}
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
-  <div class="command-overlay" on:click={closePalette}>
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="command-overlay"
+    role="button"
+    tabindex="0"
+    aria-label="Close command palette"
+    on:click={closePalette}
+    on:keydown={handleOverlayKeydown}
+  >
     <div
       class="command-panel"
       role="dialog"
       aria-modal="true"
       aria-label="Go to palette"
       tabindex="-1"
-      on:click|stopPropagation
     >
       <input
         class="command-input"

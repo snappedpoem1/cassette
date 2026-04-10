@@ -1,6 +1,6 @@
 # Open Gaps Execution Board
 
-Last updated: 2026-04-08
+Last updated: 2026-04-09
 Owner: Christian (Capn)
 
 Scope note:
@@ -182,8 +182,8 @@ Purpose:
 
 | Gap ID | Task | Status | Recommended Agent | Acceptance Check |
 |---|---|---|---|---|
-| GAP-F00 | Finish Wave 0 quality floor on primary listening surfaces | todo | SWE + Design Engineer | No mojibake, no remote font dependency, stronger contrast, reduced primary-surface a11y debt |
-| GAP-F01 | Lock listening-first boundaries, language governance, and object model | todo | Product Engineer + IA Lead | Workstation is secondary, banned internal terms are removed from primary surfaces, object model is explicit |
+| GAP-F00 | Finish Wave 0 quality floor on primary listening surfaces | done | SWE + Design Engineer | No mojibake, no remote font dependency, stronger contrast, reduced primary-surface a11y debt |
+| GAP-F01 | Lock listening-first boundaries, language governance, and object model | done | Product Engineer + IA Lead | Workstation is secondary, banned internal terms are removed from primary surfaces, object model is explicit |
 | GAP-F02 | Rebuild Collection, Album, and Artist around ownership and edition ritual | done | Product Engineer | Collection answers ownership questions first; Album has dedicated edition surface; Artist supports rediscovery rails |
 | GAP-F03 | Rebuild Playlists, Crates, and Queue for daily-use authorship and sculpting | done | Product Engineer | Authored playlists, first-class crates, queue sculpt actions, queue scene save/restore |
 | GAP-F04 | Rebuild Session and Now Playing as the emotional center | done | Product Engineer + Design Engineer | Session memory/replay exists and Now Playing is art-led, provenance-aware, and calmer |
@@ -211,6 +211,101 @@ Wave 2-4 evidence (2026-04-08):
 - `GAP-F05` calm automation boundary: `ui/src/lib/automation-digest.ts`, `ui/src/lib/components/AutomationDigestPanel.svelte`, `ui/src/routes/+page.svelte`, `ui/src/lib/components/RightSidebar.svelte`, `ui/src/routes/workstation/+page.svelte`, `ui/src/routes/downloads/+page.svelte`
 - `GAP-F06` visual system pass: `ui/src/app.css`, `ui/src/lib/components/Sidebar.svelte`, `ui/src/routes/settings/+page.svelte`, `ui/src/routes/import/+page.svelte`, `ui/src/routes/tools/+page.svelte`
 - Verification: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-08
+
+Wave 0 quality-floor evidence (2026-04-09):
+
+- `GAP-F00`: `ui/src/app.css` now lifts the shared text/border contrast floor and carries no remote font loading.
+- `GAP-F00`: encoded comment junk was removed from `ui/src/app.css` and `ui/src/routes/+layout.svelte`.
+- `GAP-F00`: `ui/src/lib/components/CommandPalette.svelte`, `ui/src/lib/components/NowPlayingExpanded.svelte`, and `ui/src/lib/components/QueuePanel.svelte` now use real interactive semantics instead of primary-surface `svelte-ignore a11y` suppressions.
+- Verification: `cargo test -p cassette --test pure_logic -- --nocapture`, `cargo check --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-09.
+
+Wave 1 boundary evidence (2026-04-09):
+
+- `GAP-F01`: `docs/EXPERIENCE_BOUNDARY_MAP.md`, `docs/SIGNATURE_SURFACES_PLAN.md`, and `docs/OBJECT_MODEL_DECISIONS.md` now read as one explicit contract: listening shell first, Workstation second, object boundaries strict.
+- `GAP-F01`: `ui/src/lib/components/Sidebar.svelte` now exposes listening surfaces plus a single Workstation doorway instead of the whole operator sitemap.
+- `GAP-F01`: owner-approved `Acquire` / `Acquisition` language is now codified as preset/posture vocabulary instead of being treated as accidental jargon leakage.
+- Verification: `cargo test -p cassette --test pure_logic -- --nocapture`, `cargo check --workspace`, `npm run build`, `.\scripts\smoke_desktop.ps1`, and `.\scripts\check_docs_state.ps1` all passed on 2026-04-09.
+
+---
+
+## Lane G - Playback Continuity And Shell Action Copy (2026-04-09)
+
+Purpose:
+
+- close the trust-breaking gap where playback state, queue continuity, and shell language drift away from the real listening action
+
+| Gap ID | Task | Status | Recommended Agent | Acceptance Check |
+|---|---|---|---|---|
+| GAP-G01 | (Integration) Restore playback continuity between player runtime, queue state, and playlist launch | done | SWE | `TrackEnded` is consumed in the desktop runtime, playback state stays synchronized, queue end-of-track behavior auto-advances or stops cleanly, and playlist launch refreshes the queue surface |
+| GAP-G02 | (UX Contract) Tighten primary listening-surface action copy into direct button labels | done | Product Engineer | Primary listening buttons read like actions (`Play`, `Pause`, `Queue`, `Collection`, `Workstation`) instead of descriptive helper phrases |
+
+Evidence (2026-04-09):
+
+- `GAP-G01`: `crates/cassette-core/src/player/mod.rs` now exposes a bounded player-event receive path, `src-tauri/src/state.rs` now supervises runtime player events and handles end-of-track advance/stop behavior, and `ui/src/lib/stores/playlists.ts` refreshes the live queue store after playlist playback starts.
+- `GAP-G02`: direct-action copy was tightened in `ui/src/routes/+page.svelte`, `ui/src/routes/+layout.svelte`, `ui/src/routes/queue/+page.svelte`, `ui/src/routes/collection/+page.svelte`, `ui/src/lib/components/ContextActionRail.svelte`, `ui/src/lib/components/AutomationDigestPanel.svelte`, and `ui/src/lib/components/RightSidebar.svelte`.
+- Regression coverage now lives in `src-tauri/tests/pure_logic.rs` via `player_runtime_listener_advances_or_stops_cleanly_on_track_end` and `primary_actions_use_direct_button_labels`.
+- Verification: `cargo check --workspace`, `cargo test -p cassette --test pure_logic -- --nocapture`, `cargo test --workspace`, `npm run build`, `.\scripts\check_docs_state.ps1`, and `.\scripts\smoke_desktop.ps1` all passed on 2026-04-09.
+
+---
+
+## Lane H - Capability Parity and Preview-Mode UX Hardening (2026-04-09)
+
+Purpose:
+
+- make CLI versus app boundaries explicit and prevent preview-mode action failures from surfacing as raw runtime errors
+
+| Gap ID | Task | Status | Recommended Agent | Acceptance Check |
+|---|---|---|---|---|
+| GAP-H01 | (Integration) Publish a canonical CLI-vs-app parity backlog with app-candidate lanes and explicit operator-only boundaries | done | SE: Tech Writer + SWE | `docs/CLI_APP_PARITY_BACKLOG.md` exists with status classes, capability map, candidate backlog, and non-goals |
+| GAP-H02 | (UX Contract) Gracefully handle desktop-runtime-unavailable actions on primary authored surfaces | done | SWE | Playlists, Crates, Session Composer, and Settings show friendly bounded notices instead of uncaught runtime-unavailable failures |
+
+Evidence (2026-04-09):
+
+- `GAP-H01`: parity artifact added at `docs/CLI_APP_PARITY_BACKLOG.md`.
+- `GAP-H02`: runtime-unavailable handling and user-facing notices added in `ui/src/routes/playlists/+page.svelte`, `ui/src/routes/crates/+page.svelte`, `ui/src/lib/components/SessionComposer.svelte`, `ui/src/routes/settings/+page.svelte`, and runtime helper surfaced from `ui/src/lib/api/tauri.ts`.
+
+---
+
+## Lane I - Modular Desktop Direction Reset (2026-04-09)
+
+Purpose:
+
+- stop Cassette from drifting back into route-first web-app interpretation and define the actual modular desktop target before more shell work lands
+
+| Gap ID | Task | Status | Recommended Agent | Acceptance Check |
+|---|---|---|---|---|
+| GAP-I01 | (UX Contract) Audit and correct canonical docs that still permit route-first or generic web-shell interpretation | done | SE: Tech Writer + Product Architect | Canonical docs point to one active shell direction and annotate older route-first planning assumptions |
+| GAP-I02 | (UX Contract) Publish a modular desktop workspace contract covering surfaces, layers, docking, floating, presets, and pop-out eligibility | done | Product Architect | One canonical shell contract exists and is implementation-ready without guessing |
+| GAP-I03 | (Proof) Audit the interaction spine before shell expansion so visible actions are proven truthful end to end | done | SWE + QA | Primary shell actions are classified as truthful, drifting, fake, or untested, with evidence and follow-up tasks recorded |
+| GAP-I04 | (Trust Floor) Remove silent no-op and optimistic state drift from primary listening controls | done | SWE | Primary transport and shell controls stop swallowing failures, and seek/volume no longer outrun confirmed runtime state |
+| GAP-I05 | (Shell Foundation) Replace route-implied workstation and library surfaces with shell-owned workspace regions | done | Product Engineer + SWE | Library and workstation entry stop masquerading as modular behavior and become real shell-owned surfaces |
+| GAP-I06 | (Integration) Prove the first selective true-window breakout with a persisted visualizer window | review | Product Engineer + SWE | A real Tauri visualizer window can be opened/focused from the shell, restores its last geometry, and stays honest about decorative versus audio-reactive behavior |
+
+Primary planning docs:
+
+- `docs/MODULAR_DESKTOP_DIRECTION_RESET.md`
+- `docs/MODULAR_WORKSPACE_CONTRACT.md`
+- `docs/MODULAR_WORKSPACE_EXECUTION_PLAN.md`
+- `docs/GAP_I03_ACTION_SPINE_AUDIT_BRIEF.md`
+- `docs/GAP_I03_ACTION_SPINE_AUDIT_REPORT.md`
+- `docs/TODO.md`
+- `docs/DECISIONS.md`
+- `docs/PROJECT_STATE.md`
+
+Dependencies:
+
+- `GAP-I01` should complete before `GAP-I02` is marked `in_progress`.
+- `GAP-I03` can begin once the canonical direction is locked, and should inform shell implementation order.
+
+Evidence (2026-04-09):
+
+- `GAP-I01`: canonical direction reset added at `docs/MODULAR_DESKTOP_DIRECTION_RESET.md`, with supersession notes added to narrower route-first planning docs and state/index/todo/board language corrected to stop overstating modular-desktop progress.
+- `GAP-I02`: canonical workspace contract added at `docs/MODULAR_WORKSPACE_CONTRACT.md`, defining surface taxonomy, region contract, persistence needs, workstation-lid behavior, phased breakout strategy, and owner decision questions.
+- `GAP-I03`: action-spine audit captured at `docs/GAP_I03_ACTION_SPINE_AUDIT_REPORT.md`; key findings were silent control failure, optimistic seek/volume drift, empty-on-error data surfaces, and route-swapped shell behavior masquerading as modularity.
+- `GAP-I04`: trust-floor repair landed across `ui/src/lib/stores/player.ts`, `ui/src/lib/stores/shell.ts`, `ui/src/lib/stores/queue.ts`, `ui/src/lib/stores/library.ts`, `ui/src/lib/stores/playlists.ts`, `ui/src/lib/stores/downloads.ts`, and the primary listening surfaces that render those states. Seek/volume no longer mutate local playback state optimistically, and primary controls/surfaces now emit bounded failures instead of silent no-ops or fake emptiness.
+- `GAP-I05`: shell foundation conversion landed in `ui/src/routes/+layout.svelte`, `ui/src/lib/stores/shell.ts`, `ui/src/lib/components/LibraryRail.svelte`, `ui/src/lib/components/WorkstationDeck.svelte`, `ui/src/lib/components/WorkstationSurface.svelte`, `ui/src/lib/components/Sidebar.svelte`, `ui/src/lib/stores/commands.ts`, and `ui/src/lib/components/AutomationDigestPanel.svelte`. Cassette now boots with a persistent library rail, persisted shell geometry, a collapsible utility well, and a shell-owned Workstation deck while keeping `/workstation` as an explicit compatibility surface.
+- `GAP-I06`: first selective breakout code path is code-complete and build-verified in review. `ui/src/lib/stores/shell.ts`, `ui/src/lib/stores/commands.ts`, `ui/src/lib/components/NowPlaying.svelte`, `ui/src/routes/+layout.svelte`, `ui/src/routes/visualizer-window/+page.svelte`, and `src-tauri/capabilities/default.json` now establish a real detached `visualizer` window path with stored geometry, command/shell doorway behavior, and stripped-window rendering.
+- `GAP-I06`: verification currently covers `cargo check --workspace`, `cargo test -p cassette --test pure_logic -- --nocapture`, `npm run build`, `.\scripts\smoke_desktop.ps1`, and `.\scripts\check_docs_state.ps1` on 2026-04-09. Remaining review proof is native desktop click-through of open/focus/reopen and geometry persistence behavior for the detached visualizer window.
 
 ---
 

@@ -77,7 +77,7 @@ cargo tauri dev
 .\scripts\smoke_desktop.ps1
 ```
 
-- Verified on 2026-03-30: `cargo check --workspace`, `cargo test --workspace`, `npm run build`, and `.\scripts\smoke_desktop.ps1` all pass.
+- Verified on 2026-04-10: `cargo check --workspace` (0.75s, clean), `cargo test --workspace` (176 passed, 0 failed), `npm run build` (✓ built in 2.92s) all pass.
 - `npm run build` still emits the existing Svelte accessibility warning in `ui/src/routes/downloads/+page.svelte`, but the build succeeds.
 - Repo-root `*.db` files are local artifacts, not the live runtime database.
 

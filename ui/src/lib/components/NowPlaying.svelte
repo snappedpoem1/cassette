@@ -1,13 +1,24 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
-  import { api } from '$lib/api/tauri';
-  import { playbackState, isPlaying, progressPct, isSeeking, seekPreview, player, nowPlayingContext } from '$lib/stores/player';
+  import { api, isDesktopRuntimeAvailable } from '$lib/api/tauri';
+  import {
+    playbackState,
+    isPlaying,
+    progressPct,
+    isSeeking,
+    seekPreview,
+    player,
+    nowPlayingContext,
+    playerActionError,
+  } from '$lib/stores/player';
   import { loadQueue } from '$lib/stores/queue';
+  import { openVisualizerWindow } from '$lib/stores/shell';
   import { formatDuration, coverSrc, clamp } from '$lib/utils';
 
   let seekBarEl: HTMLDivElement;
   let volBarEl: HTMLDivElement;
+  const runtimeAvailable = isDesktopRuntimeAvailable();
   let visualizerEnabled = true;
   let visualizerLowMotion = false;
   let appreciationLaneEnabled = true;
@@ -49,6 +60,9 @@
   }
 
   function onSeekMouseDown(event: MouseEvent) {
+    if (!runtimeAvailable) {
+      return;
+    }
     isSeeking.set(true);
     seekPreview.set(getSeekPct(event));
     const onMove = (moveEvent: MouseEvent) => seekPreview.set(getSeekPct(moveEvent));
@@ -64,6 +78,9 @@
   }
 
   function onVolMouseDown(event: MouseEvent) {
+    if (!runtimeAvailable) {
+      return;
+    }
     const update = (moveEvent: MouseEvent) => {
       const rect = volBarEl.getBoundingClientRect();
       player.setVolume(clamp((moveEvent.clientX - rect.left) / rect.width, 0, 1));
@@ -78,6 +95,9 @@
   }
 
   async function onSeekKeyDown(event: KeyboardEvent) {
+    if (!runtimeAvailable) {
+      return;
+    }
     if (!dur || dur <= 0) {
       return;
     }
@@ -99,6 +119,9 @@
   }
 
   function onVolumeKeyDown(event: KeyboardEvent) {
+    if (!runtimeAvailable) {
+      return;
+    }
     const step = event.shiftKey ? 0.12 : 0.05;
     let nextVolume = vol;
     if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
@@ -134,11 +157,17 @@
   $: lyricsLabel = ctx?.lyrics_source ? `Lyrics ready` : null;
 
   async function handleNext() {
+    if (!runtimeAvailable) {
+      return;
+    }
     await player.next();
     await loadQueue();
   }
 
   async function handlePrev() {
+    if (!runtimeAvailable) {
+      return;
+    }
     await player.prev();
     await loadQueue();
   }
@@ -193,12 +222,12 @@
 
   <div class="np-center">
     <div class="np-controls">
-      <button class="ctrl-btn" on:click={handlePrev} title="Previous">
+      <button class="ctrl-btn" on:click={handlePrev} title="Previous" disabled={!runtimeAvailable}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
           <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2" fill="none"/>
         </svg>
       </button>
-      <button class="ctrl-btn play-btn" on:click={() => player.toggle()} title="Play or pause">
+      <button class="ctrl-btn play-btn" on:click={() => player.toggle()} title="Play or pause" disabled={!runtimeAvailable}>
         {#if $isPlaying}
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
@@ -209,7 +238,7 @@
           </svg>
         {/if}
       </button>
-      <button class="ctrl-btn" on:click={handleNext} title="Next">
+      <button class="ctrl-btn" on:click={handleNext} title="Next" disabled={!runtimeAvailable}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
           <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2" fill="none"/>
         </svg>
@@ -239,6 +268,7 @@
         aria-valuemax="100"
         aria-valuenow={Math.round(pct * 100)}
         aria-valuetext={`${formatDuration(pos)} of ${formatDuration(dur)}`}
+        aria-disabled={!runtimeAvailable}
         on:mousedown={onSeekMouseDown}
         on:keydown={onSeekKeyDown}
       >
@@ -250,6 +280,7 @@
   </div>
 
   <div class="np-right">
+    <button class="focus-btn" type="button" on:click={openVisualizerWindow}>Visualizer</button>
     <button class="focus-btn" type="button" on:click={openNowPlayingShrine}>Shrine</button>
     <span class="vol-icon">
       {#if vol === 0}
@@ -276,12 +307,20 @@
       aria-valuemax="100"
       aria-valuenow={Math.round(vol * 100)}
       aria-valuetext={`${Math.round(vol * 100)} percent`}
+      aria-disabled={!runtimeAvailable}
       on:mousedown={onVolMouseDown}
       on:keydown={onVolumeKeyDown}
     >
       <div class="volume-fill" style="width:{vol * 100}%"></div>
     </div>
   </div>
+
+  {#if !runtimeAvailable}
+    <div class="np-runtime-hint">Preview mode: playback controls require the Cassette desktop runtime.</div>
+  {/if}
+  {#if $playerActionError}
+    <div class="np-runtime-hint np-runtime-hint-error">{$playerActionError}</div>
+  {/if}
 </div>
 </div>
 
@@ -560,6 +599,21 @@
     align-items: center;
     gap: 8px;
     justify-content: flex-end;
+  }
+
+  .np-runtime-hint {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding: 2px 14px 6px;
+  }
+
+  .np-runtime-hint-error {
+    color: var(--status-error, #ff8f8f);
+  }
+
+  .ctrl-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .focus-btn {

@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { api } from '$lib/api/tauri';
+  import {
+    api,
+    DESKTOP_RUNTIME_REQUIRED_MESSAGE,
+    isDesktopRuntimeAvailable,
+    toDesktopRuntimeMessage,
+  } from '$lib/api/tauri';
   import type { SpotifyAlbumSummary, SpotifyImportResult, SpotifyImportStatus } from '$lib/api/tauri';
   import { formatDuration } from '$lib/utils';
   import { open } from '@tauri-apps/plugin-dialog';
@@ -16,6 +21,7 @@
   let minPlays = 3;
   let persistedStatus: SpotifyImportStatus | null = null;
   let selectedMissing = 0;
+  const runtimeAvailable = isDesktopRuntimeAvailable();
 
   onMount(async () => {
     try {
@@ -26,6 +32,10 @@
   });
 
   async function pickFolder() {
+    if (!runtimeAvailable) {
+      error = DESKTOP_RUNTIME_REQUIRED_MESSAGE;
+      return;
+    }
     const selected = await open({ directory: true, title: 'Select Spotify History Folder' });
     if (selected) {
       await loadHistory(selected as string);
@@ -33,6 +43,10 @@
   }
 
   async function pickTrackJson() {
+    if (!runtimeAvailable) {
+      error = DESKTOP_RUNTIME_REQUIRED_MESSAGE;
+      return;
+    }
     const selected = await open({
       directory: false,
       multiple: false,
@@ -55,7 +69,7 @@
       importResult = await api.parseSpotifyHistory(path);
       persistedStatus = await api.getSpotifyImportStatus();
     } catch (e) {
-      error = String(e);
+      error = toDesktopRuntimeMessage(e, 'Failed to parse Spotify history.');
     } finally {
       isLoading = false;
     }
@@ -69,7 +83,7 @@
     try {
       importedTrackCount = await api.importSpotifyDesiredTracks(path);
     } catch (e) {
-      error = String(e);
+      error = toDesktopRuntimeMessage(e, 'Failed to import Spotify track JSON.');
     } finally {
       isLoading = false;
     }
@@ -109,7 +123,7 @@
       queuedTrackEstimate = toQueue.reduce((sum, album) => sum + Math.max(1, album.play_count), 0);
       selectedAlbums = new Set();
     } catch (e) {
-      error = String(e);
+      error = toDesktopRuntimeMessage(e, 'Failed to queue selected albums.');
     }
   }
 
@@ -160,6 +174,9 @@
         when you already have exact Spotify track payloads.
       </div>
     </div>
+    {#if !runtimeAvailable}
+      <div class="import-error">{DESKTOP_RUNTIME_REQUIRED_MESSAGE}</div>
+    {/if}
   </div>
 
   <div class="import-section import-grid">
@@ -184,7 +201,7 @@
           {/if}
         </div>
       {/if}
-      <button class="btn btn-primary" on:click={pickFolder} disabled={isLoading}>
+      <button class="btn btn-primary" on:click={pickFolder} disabled={isLoading || !runtimeAvailable}>
         {isLoading ? 'Parsing...' : 'Select Folder'}
       </button>
     </div>
@@ -203,7 +220,7 @@
           <li>3. Let reconciliation and planner flows pick them up with richer identity evidence.</li>
         </ul>
       </div>
-      <button class="btn btn-primary" on:click={pickTrackJson} disabled={isLoading}>
+      <button class="btn btn-primary" on:click={pickTrackJson} disabled={isLoading || !runtimeAvailable}>
         {isLoading ? 'Importing...' : 'Select JSON'}
       </button>
     </div>
@@ -266,7 +283,7 @@
         <button class="btn btn-ghost" on:click={selectAllVisible}>Select All ({filtered.filter(a => !a.in_library).length})</button>
         <button class="btn btn-ghost" on:click={deselectAll}>Deselect</button>
         {#if selectedMissing > 0}
-          <button class="btn btn-primary" on:click={queueSelected}>
+          <button class="btn btn-primary" on:click={queueSelected} disabled={!runtimeAvailable}>
             Queue {selectedMissing} Album{selectedMissing === 1 ? '' : 's'}
           </button>
         {/if}

@@ -16,7 +16,7 @@
     saveDownloadConfig,
     persistEffectiveDownloadConfig,
   } from '$lib/stores/downloads';
-  import { api } from '$lib/api/tauri';
+  import { api, isDesktopRuntimeAvailable } from '$lib/api/tauri';
   import { browser } from '$app/environment';
   import { getMilkdropPresetNames } from '$lib/visualizer/presets';
   import {
@@ -90,6 +90,21 @@
   let extensionEnabled: Record<string, boolean> = {};
   let extensionHealth: Record<string, ExtensionHealthReport> = {};
   let extensionHealthBusy = false;
+  let settingsMessage: string | null = null;
+  let settingsMessageTone: 'info' | 'error' = 'info';
+
+  function toSettingsMessage(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : fallback;
+    if (message.toLowerCase().includes('tauri runtime unavailable')) {
+      return 'This action needs the Cassette desktop runtime. Open the desktop app to use it.';
+    }
+    return message;
+  }
+
+  function setSettingsMessage(message: string, tone: 'info' | 'error' = 'info') {
+    settingsMessage = message;
+    settingsMessageTone = tone;
+  }
 
   $: if (milkdropPresetNames.length > 0 && !milkdropPresetNames.includes(visualizerPreset)) {
     visualizerPreset = milkdropPresetNames[0];
@@ -129,13 +144,18 @@
   }
 
   async function handleSave() {
-    await saveVisualizerPrefs();
-    await saveDownloadConfig(cfg);
-    await loadSlskdRuntimeStatus();
-    saved = true;
-    setTimeout(() => {
-      saved = false;
-    }, 2000);
+    try {
+      await saveVisualizerPrefs();
+      await saveDownloadConfig(cfg);
+      await loadSlskdRuntimeStatus();
+      saved = true;
+      setSettingsMessage('Settings saved.', 'info');
+      setTimeout(() => {
+        saved = false;
+      }, 2000);
+    } catch (error) {
+      setSettingsMessage(toSettingsMessage(error, 'Failed to save settings.'), 'error');
+    }
   }
 
   async function persistEffectiveSecrets() {
@@ -144,9 +164,12 @@
       await persistEffectiveDownloadConfig();
       await loadSlskdRuntimeStatus();
       saved = true;
+      setSettingsMessage('Effective configuration persisted.', 'info');
       setTimeout(() => {
         saved = false;
       }, 2000);
+    } catch (error) {
+      setSettingsMessage(toSettingsMessage(error, 'Failed to persist effective configuration.'), 'error');
     } finally {
       persistingEffective = false;
     }
@@ -167,6 +190,10 @@
   }
 
   async function pickFolder() {
+    if (!isDesktopRuntimeAvailable()) {
+      setSettingsMessage('This action needs the Cassette desktop runtime. Open the desktop app to use it.', 'info');
+      return;
+    }
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === 'string') {
       await addLibraryRoot(selected);
@@ -181,6 +208,9 @@
     slskdRuntimeBusy = true;
     try {
       slskdRuntime = await api.restartSlskdRuntime();
+      setSettingsMessage('slskd runtime restarted.', 'info');
+    } catch (error) {
+      setSettingsMessage(toSettingsMessage(error, 'Failed to restart slskd runtime.'), 'error');
     } finally {
       slskdRuntimeBusy = false;
     }
@@ -190,6 +220,9 @@
     slskdRuntimeBusy = true;
     try {
       slskdRuntime = await api.stopSlskdRuntime();
+      setSettingsMessage('slskd runtime stopped.', 'info');
+    } catch (error) {
+      setSettingsMessage(toSettingsMessage(error, 'Failed to stop slskd runtime.'), 'error');
     } finally {
       slskdRuntimeBusy = false;
     }
@@ -200,7 +233,7 @@
       policyProfile = await api.getPolicyProfile();
       policyProfileMessage = null;
     } catch (error) {
-      policyProfileMessage = error instanceof Error ? error.message : 'Policy profile unavailable';
+      policyProfileMessage = toSettingsMessage(error, 'Policy profile unavailable');
     }
   }
 
@@ -210,7 +243,7 @@
       policyProfile = await api.setPolicyProfile(policyProfile);
       policyProfileMessage = 'Policy profile applied to runtime director behavior.';
     } catch (error) {
-      policyProfileMessage = error instanceof Error ? error.message : 'Failed to apply policy profile';
+      policyProfileMessage = toSettingsMessage(error, 'Failed to apply policy profile');
     } finally {
       policyProfileSaving = false;
     }
@@ -289,23 +322,39 @@
 
   async function loadExtensionSurface() {
     const enabledMap: Record<string, boolean> = {};
-    for (const extension of SAFE_EXTENSIONS) {
-      const raw = await api.getSetting(extensionEnabledKey(extension.id));
-      enabledMap[extension.id] = raw !== 'false';
+    try {
+      for (const extension of SAFE_EXTENSIONS) {
+        const raw = await api.getSetting(extensionEnabledKey(extension.id));
+        enabledMap[extension.id] = raw !== 'false';
+      }
+      extensionHealth = parseTelemetry(await api.getSetting(extensionTelemetryKey()));
+    } catch {
+      for (const extension of SAFE_EXTENSIONS) {
+        enabledMap[extension.id] = true;
+      }
+      extensionHealth = {};
     }
+
     extensionEnabled = enabledMap;
-    extensionHealth = parseTelemetry(await api.getSetting(extensionTelemetryKey()));
     await refreshExtensionHealth();
   }
 
   async function persistExtensionHealth() {
-    await api.setSetting(extensionTelemetryKey(), JSON.stringify(extensionHealth));
+    try {
+      await api.setSetting(extensionTelemetryKey(), JSON.stringify(extensionHealth));
+    } catch {
+      // no-op outside Tauri runtime
+    }
   }
 
   async function setExtensionEnabled(id: string, enabled: boolean) {
-    extensionEnabled = { ...extensionEnabled, [id]: enabled };
-    await api.setSetting(extensionEnabledKey(id), enabled ? 'true' : 'false');
-    await refreshExtensionHealth();
+    try {
+      extensionEnabled = { ...extensionEnabled, [id]: enabled };
+      await api.setSetting(extensionEnabledKey(id), enabled ? 'true' : 'false');
+      await refreshExtensionHealth();
+    } catch (error) {
+      setSettingsMessage(toSettingsMessage(error, 'Failed to update extension toggle.'), 'error');
+    }
   }
 
   function fallbackHealth(id: string, status: ExtensionHealthReport['status'], message: string): ExtensionHealthReport {
@@ -382,6 +431,11 @@
       extensionHealthBusy = false;
     }
   }
+
+  $: if (!isDesktopRuntimeAvailable() && !settingsMessage) {
+    settingsMessage = 'Preview mode detected. Desktop-only actions are unavailable until you run the Cassette desktop app.';
+    settingsMessageTone = 'info';
+  }
 </script>
 
 <svelte:head><title>Settings - Cassette</title></svelte:head>
@@ -423,7 +477,7 @@
             {/if}
           </div>
           <div class="root-actions">
-            <button class="action-btn" on:click={pickFolder}>+ Add Folder</button>
+            <button class="action-btn" on:click={pickFolder} disabled={!isDesktopRuntimeAvailable()}>+ Add Folder</button>
             <button class="action-btn" on:click={handleScan} disabled={$isScanning || $libraryRoots.length === 0}>
               {$isScanning ? 'Scanning…' : 'Scan Library'}
             </button>
@@ -786,6 +840,9 @@
         </button>
         {#if saved}<span class="saved-badge">✓</span>{/if}
       </div>
+      {#if settingsMessage}
+        <div class="settings-message" class:error={settingsMessageTone === 'error'}>{settingsMessage}</div>
+      {/if}
     </div>
   </div>
 </div>
@@ -1015,6 +1072,19 @@
 .btn-persist:hover { background: var(--bg-hover); color: var(--text-primary); }
 .btn-persist:disabled { opacity: 0.5; cursor: not-allowed; }
 .saved-badge { font-size: 0.72rem; color: var(--status-ok); }
+.settings-message {
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-card) 86%, var(--primary) 14%);
+  color: var(--text-primary);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+.settings-message.error {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 82%, var(--error) 18%);
+}
 
 /* lastfm sync */
 .sync-row { display: flex; gap: 8px; align-items: center; }

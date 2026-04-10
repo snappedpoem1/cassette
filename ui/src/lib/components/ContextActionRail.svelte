@@ -1,7 +1,13 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { addToQueue, loadQueue, queueTracks } from '$lib/stores/queue';
-  import { api, type Playlist, type Track } from '$lib/api/tauri';
+  import {
+    api,
+    isDesktopRuntimeAvailable,
+    toDesktopRuntimeMessage,
+    type Playlist,
+    type Track,
+  } from '$lib/api/tauri';
 
   export let track: Track | null = null;
   export let album: { artist: string; title: string } | null = null;
@@ -15,6 +21,7 @@
   let showPlaylistPicker = false;
   let playlists: Playlist[] = [];
   let loadingPlaylists = false;
+  const runtimeAvailable = isDesktopRuntimeAvailable();
 
   function setStatus(text: string) {
     message = text;
@@ -32,6 +39,8 @@
     busy = true;
     try {
       await action();
+    } catch (error) {
+      setStatus(toDesktopRuntimeMessage(error, 'Action failed.'));
     } finally {
       busy = false;
     }
@@ -148,26 +157,30 @@
 
 {#if hasContext}
   <div class="action-rail" class:compact>
-    <div class="rail-label">Quick Actions</div>
+    <div class="rail-label">Quick actions</div>
 
     <div class="rail-actions">
       {#if track}
-        <button class="rail-btn" disabled={busy} on:click={playTrackNow}>Play Track</button>
-        <button class="rail-btn" disabled={busy} on:click={queueTrackNext}>Queue Track</button>
-        <button class="rail-btn" disabled={busy} on:click={showAddToPlaylist}>+ Playlist</button>
-        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={findTrack}>Find Track</button>
+        <button class="rail-btn" disabled={busy || !runtimeAvailable} on:click={playTrackNow}>Play now</button>
+        <button class="rail-btn" disabled={busy || !runtimeAvailable} on:click={queueTrackNext}>Add to queue</button>
+        <button class="rail-btn" disabled={busy || !runtimeAvailable} on:click={showAddToPlaylist}>+ Playlist</button>
+        <button class="rail-btn rail-btn-acquire" disabled={busy || !runtimeAvailable} on:click={findTrack}>Get track</button>
       {/if}
 
       {#if album}
-        <button class="rail-btn" disabled={busy} on:click={playAlbumNow}>Play Album</button>
-        <button class="rail-btn" disabled={busy} on:click={queueAlbum}>Queue Album</button>
-        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={findAlbum}>Find Album</button>
+        <button class="rail-btn" disabled={busy || !runtimeAvailable} on:click={playAlbumNow}>Play album</button>
+        <button class="rail-btn" disabled={busy || !runtimeAvailable} on:click={queueAlbum}>Queue album</button>
+        <button class="rail-btn rail-btn-acquire" disabled={busy || !runtimeAvailable} on:click={findAlbum}>Get album</button>
       {/if}
 
       {#if artistName}
-        <button class="rail-btn rail-btn-acquire" disabled={busy} on:click={fillArtistGaps}>Fill Artist Gaps</button>
+        <button class="rail-btn rail-btn-acquire" disabled={busy || !runtimeAvailable} on:click={fillArtistGaps}>Get releases</button>
       {/if}
     </div>
+
+    {#if !runtimeAvailable}
+      <div class="rail-status">This panel is in preview mode. Open the desktop app to run these actions.</div>
+    {/if}
 
     {#if showPlaylistPicker && track}
       <div class="playlist-picker">

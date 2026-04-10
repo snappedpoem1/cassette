@@ -988,6 +988,71 @@ This file records why the codebase is shaped the way it is so future agents inhe
 
 ---
 
+## Decision 46: Cassette's UI Direction Is A Modular Desktop Listening Environment, Not Route-First Web-Shell Expansion
+
+**Status**: approved (applied 2026-04-09)
+**Rationale**:
+
+- The repo already improved listening language, visual warmth, and calm automation posture, but those improvements still left too much room for a generic route-first desktop-web-app interpretation.
+- The actual product target is a modular desktop listening environment with persistent surfaces, layers, resizing, layout memory, and selective true-window breakout where it earns the complexity.
+- Cassette's Rust backend, trust spine, and Tauri host remain the correct base. The failure is not "wrong stack"; it is "wrong primary UI abstraction."
+- Routes may remain useful for deep links and focused surfaces, but they are no longer the main product model. Surface state, layout state, and truthful action behavior take precedence over page growth.
+- The first implementation gate is an interaction-spine audit: visible controls must be proven truthful before more shell ambition lands.
+
+**Tradeoffs**:
+
+- Existing planning docs that focused on route and surface rebuilds need to be read through the narrower lens of content and ritual, not shell architecture.
+- A modular desktop shell is more demanding than a pleasant route shell, and true multi-window behavior must be staged carefully to avoid state-sync and focus chaos.
+- Some recently completed UI work remains useful, but it should not be misrepresented as the end-state architecture.
+
+**Revisit Condition**:
+
+- Revisit only if Cassette intentionally abandons the modular desktop target or moves to a fundamentally different host/runtime that invalidates the current shell strategy.
+
+---
+
+## Decision 47: Build One Strong Workspace Shell Before Selective True-Window Breakout
+
+**Status**: approved (applied 2026-04-09)
+**Rationale**:
+
+- The owner's target includes both layered in-shell behavior and the possibility of real break-apart desktop windows.
+- Jumping straight to "everything is a separate OS window" would front-load focus, z-order, restore, and state-sync complexity before Cassette has a trustworthy shell contract.
+- The right sequence is therefore: prove the action spine, build one strong workspace shell with persistence and resize behavior, then allow selected modules to become true Tauri windows where that improves the experience.
+- This keeps the Rust backend and Tauri host while rejecting the generic route-first web-shell interpretation.
+
+**Tradeoffs**:
+
+- Some detached-window magic is delayed in exchange for a more stable and more coherent first shell.
+- The main shell has to carry more design and interaction weight up front.
+
+**Revisit Condition**:
+
+- Revisit only if owner direction changes to require true detached windows as the first milestone instead of a staged breakout strategy.
+
+---
+
+## Decision 48: Library And Workstation Must Be Shell-Owned Surfaces, With Routes Kept As Compatibility Only
+
+**Status**: approved (applied 2026-04-09)  
+**Rationale**:
+
+- The direction reset and action-spine audit made it clear that route jumps were overstating modular behavior.
+- Cassette now treats the library browser/filter surface and the Workstation surface as shell-owned regions first.
+- Routes such as `/library` and `/workstation` may remain useful for fallback or focused views, but they no longer define the core shell architecture.
+- This keeps the product aligned with the owner conversation: persistent surfaces, fewer fake modular cues, and an explicit bridge from the old route-led shell into the real workspace model.
+
+**Tradeoffs**:
+
+- The repo now carries both shell-owned surfaces and compatibility routes for a while.
+- Some UI logic must be shared between route wrappers and shell surfaces to avoid divergence.
+
+**Revisit Condition**:
+
+- Revisit only if the owner intentionally wants routes to become the primary shell model again, or if the shell later converges far enough that the compatibility routes can be retired cleanly.
+
+---
+
 ## Deferred Decisions
 
 ### Distributed / Multi-Machine Coordination

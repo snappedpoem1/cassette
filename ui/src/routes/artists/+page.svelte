@@ -40,6 +40,9 @@
       ]);
       missingAlbums = nextMissing;
       requestHistory = nextRequests;
+    } catch {
+      missingAlbums = [];
+      requestHistory = [];
     } finally {
       loading = false;
     }
@@ -195,7 +198,7 @@
             browse everything at once. It is to spot what deserves another listen or another search.
           </p>
           <div class="hero-actions">
-            <button class="btn btn-primary" on:click={() => playArtist(selectedArtist)}>Play artist</button>
+            <button class="btn btn-primary" on:click={() => playArtist(selectedArtist!)}>Play artist</button>
             <button class="btn btn-secondary" on:click={() => goto('/collection')}>Back to collection</button>
           </div>
         </div>

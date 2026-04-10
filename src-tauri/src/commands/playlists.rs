@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use cassette_core::models::{Playlist, PlaylistItem};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 pub fn get_playlists(state: State<'_, AppState>) -> Vec<Playlist> {
@@ -61,7 +61,12 @@ pub fn delete_playlist(state: State<'_, AppState>, playlist_id: i64) {
 }
 
 #[tauri::command]
-pub fn play_playlist(state: State<'_, AppState>, playlist_id: i64, start_index: Option<usize>) {
+pub fn play_playlist(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    start_index: Option<usize>,
+) {
     let items = state
         .db
         .lock()
@@ -70,7 +75,6 @@ pub fn play_playlist(state: State<'_, AppState>, playlist_id: i64, start_index: 
         .unwrap_or_default();
     let track_ids: Vec<i64> = items.iter().map(|i| i.track_id).collect();
 
-    // Reuse queue_tracks logic: clear queue, fill with playlist tracks, play from start
     let db = state.db.lock().unwrap();
     let _ = db.clear_queue();
     for (pos, tid) in track_ids.iter().enumerate() {
@@ -82,9 +86,25 @@ pub fn play_playlist(state: State<'_, AppState>, playlist_id: i64, start_index: 
     if let Some(item) = items.get(start) {
         if let Some(ref track) = item.track {
             state.player.load(track.path.clone());
-            let mut ps = state.playback_state.lock().unwrap();
-            ps.current_track = Some(track.clone());
-            ps.queue_position = start;
+            state.player.play();
+            {
+                let mut ps = state.playback_state.lock().unwrap();
+                ps.current_track = Some(track.clone());
+                ps.queue_position = start;
+                ps.is_playing = true;
+                let db = state.db.lock().unwrap();
+                let _ = db.increment_play_count(track.id);
+            }
         }
+    }
+
+    // Emit updated playback state so frontend reflects the new track and playing state
+    let mut ps = state.playback_state.lock().unwrap().clone();
+    ps.position_secs = state.player.position_secs();
+    ps.duration_secs = state.player.duration_secs();
+    ps.is_playing = state.player.is_playing();
+    ps.volume = state.player.volume();
+    if let Err(e) = app.emit("playback_state_changed", &ps) {
+        tracing::warn!("[play_playlist] failed to emit playback state: {e}");
     }
 }

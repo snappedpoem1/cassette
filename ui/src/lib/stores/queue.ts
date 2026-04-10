@@ -1,17 +1,19 @@
 import { get, writable } from 'svelte/store';
-import { api, type QueueItem, type Track } from '$lib/api/tauri';
+import { api, toDesktopRuntimeMessage, type QueueItem, type Track } from '$lib/api/tauri';
 import { playbackState } from '$lib/stores/player';
 import type { QueueRitualResult } from '$lib/queue-ritual';
 import { cutQueueAfter, holdQueueItem, pinQueueItem, playAfterCurrent } from '$lib/queue-ritual';
 import { liveQueueRitual, resetLiveQueueRitual, updateLiveQueueRitual } from '$lib/stores/rituals';
 
 export const queue = writable<QueueItem[]>([]);
+export const queueLoadError = writable<string | null>(null);
 
 export async function loadQueue() {
   try {
     queue.set(await api.getQueue());
-  } catch {
-    queue.set([]);
+    queueLoadError.set(null);
+  } catch (error) {
+    queueLoadError.set(toDesktopRuntimeMessage(error, 'Failed to load the queue.'));
   }
 }
 

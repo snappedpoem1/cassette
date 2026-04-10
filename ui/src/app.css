@@ -15,12 +15,12 @@
   --accent-glow: rgba(247, 180, 92, 0.22);
 
   --text-primary: #edf4fb;
-  --text-secondary: #c4d1df;
-  --text-muted: #93a3b7;
+  --text-secondary: #d1dbe7;
+  --text-muted: #a3b0c1;
   --text-accent: #b7d5ee;
 
   --border: rgba(139, 180, 212, 0.18);
-  --border-dim: rgba(255, 255, 255, 0.09);
+  --border-dim: rgba(255, 255, 255, 0.12);
   --border-active: rgba(139, 180, 212, 0.5);
 
   --status-ok: #5ec4a0;
@@ -188,7 +188,7 @@ p {
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr var(--right-sidebar-w);
+  grid-template-columns: var(--sidebar-w) var(--library-rail-w) 8px 1fr 8px var(--utility-well-w);
   grid-template-rows: var(--topbar-h) 1fr var(--nowplaying-h);
   height: 100vh;
   overflow: hidden;
@@ -215,7 +215,7 @@ p {
 }
 
 .app-topbar {
-  grid-column: 1 / 4;
+  grid-column: 1 / 7;
   grid-row: 1;
   display: flex;
   align-items: center;
@@ -303,7 +303,7 @@ p {
 
 .app-sidebar {
   grid-column: 1;
-  grid-row: 2 / 4;
+  grid-row: 2;
   overflow-y: auto;
   border-right: 1px solid var(--border-dim);
   background:
@@ -311,8 +311,23 @@ p {
     rgba(7, 10, 16, 0.95);
 }
 
-.app-main {
+.app-library {
   grid-column: 2;
+  grid-row: 2;
+  overflow: hidden;
+  border-right: 1px solid var(--border-dim);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
+    rgba(7, 10, 16, 0.95);
+}
+
+.handle-library {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.app-main {
+  grid-column: 4;
   grid-row: 2;
   overflow-y: auto;
   background:
@@ -322,8 +337,13 @@ p {
   transition: background var(--mood-shift-ms) ease;
 }
 
+.handle-utility {
+  grid-column: 5;
+  grid-row: 2;
+}
+
 .app-right {
-  grid-column: 3;
+  grid-column: 6;
   grid-row: 2;
   overflow-y: auto;
   border-left: 1px solid var(--border-dim);
@@ -332,8 +352,13 @@ p {
     rgba(7, 10, 16, 0.97);
 }
 
+.utility-reopen {
+  grid-column: 5 / 6;
+  grid-row: 2;
+}
+
 .app-nowplaying {
-  grid-column: 1 / 4;
+  grid-column: 1 / 7;
   grid-row: 3;
   border-top: 1px solid var(--border-dim);
   background:
@@ -342,6 +367,10 @@ p {
   display: flex;
   flex-direction: column;
   transition: background var(--mood-shift-ms) ease;
+}
+
+.app-shell.utility-collapsed {
+  grid-template-columns: var(--sidebar-w) var(--library-rail-w) 8px 1fr 24px;
 }
 
 .app-shell.compact-player {
@@ -355,12 +384,12 @@ p {
 }
 
 .app-shell.immersive-route {
-  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-columns: var(--sidebar-w) var(--library-rail-w) 8px 1fr;
 }
 
 .app-shell.immersive-route .app-topbar,
 .app-shell.immersive-route .app-nowplaying {
-  grid-column: 1 / 3;
+  grid-column: 1 / 5;
 }
 
 .app-shell.immersive-route .app-main {
@@ -906,17 +935,18 @@ textarea:focus-visible {
 
 @media (max-width: 1180px) {
   :root {
-    --right-sidebar-w: 0px;
+    --library-rail-w: 284px;
   }
 
-  .app-right {
-    display: none;
+  .app-shell.utility-collapsed {
+    grid-template-columns: var(--sidebar-w) var(--library-rail-w) 8px 1fr 22px;
   }
 }
 
 @media (max-width: 960px) {
   :root {
     --sidebar-w: 84px;
+    --library-rail-w: 248px;
   }
 
   .brand-mode {
@@ -935,6 +965,7 @@ textarea:focus-visible {
   :root {
     --sidebar-w: 72px;
     --topbar-h: 52px;
+    --library-rail-w: 212px;
   }
 
   .app-topbar {
@@ -952,6 +983,16 @@ textarea:focus-visible {
 
   .app-main {
     padding-bottom: 2px;
+  }
+
+  .app-shell,
+  .app-shell.utility-collapsed {
+    grid-template-columns: var(--sidebar-w) minmax(180px, 42vw) 6px 1fr 0 0;
+  }
+
+  .app-right,
+  .utility-reopen {
+    display: none;
   }
 }
 
@@ -996,7 +1037,7 @@ textarea:focus-visible {
   50%       { box-shadow: 0 0 0 9px rgba(var(--mood-accent-rgb), 0), 0 4px 16px rgba(var(--mood-accent-rgb), 0.3); }
 }
 
-/* ── Global mood-reactive card hover ── */
+/* Global mood-reactive card hover */
 .mood-card {
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
 }
@@ -1006,4 +1047,3 @@ textarea:focus-visible {
   box-shadow: 0 8px 28px rgba(var(--mood-accent-rgb), 0.1);
   transform: translateY(-1px);
 }
-

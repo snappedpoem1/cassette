@@ -16,8 +16,8 @@ use cassette_core::{
         TempRecoveryPolicy, TrackTask,
     },
     librarian::db::LibrarianDb,
-    models::{DownloadJob, DownloadStatus, PlaybackState},
-    player::Player,
+    models::{DownloadJob, DownloadStatus, PlaybackState, Track},
+    player::{Player, PlayerEvent},
     provider_settings::DownloadConfig,
     sources::{RemoteProviderConfig, SlskdConnectionConfig},
 };
@@ -206,6 +206,12 @@ impl AppState {
             app_handle: app_handle_for_state,
         };
 
+        spawn_player_event_listener(
+            app_handle.clone(),
+            Arc::clone(&state.player),
+            Arc::clone(&state.playback_state),
+            Arc::clone(&state.db),
+        );
         spawn_director_event_listener(
             app_handle.clone(),
             Arc::clone(&state.db),
@@ -867,6 +873,157 @@ fn spawn_director_event_listener(
             }
         }
     });
+}
+
+fn spawn_player_event_listener(
+    app_handle: Option<AppHandle>,
+    player: Arc<Player>,
+    playback_state: Arc<Mutex<PlaybackState>>,
+    db: Arc<Mutex<Db>>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("cassette-player-events".into())
+        .spawn(move || {
+            loop {
+                let Some(event) =
+                    player.recv_event_timeout(std::time::Duration::from_millis(250))
+                else {
+                    continue;
+                };
+
+                match event {
+                    PlayerEvent::Playing | PlayerEvent::Paused | PlayerEvent::Stopped => {
+                        if let Some(snapshot) = snapshot_playback_state(&player, &playback_state) {
+                            apply_playback_snapshot(
+                                app_handle.as_ref(),
+                                &playback_state,
+                                snapshot,
+                            );
+                        }
+                    }
+                    PlayerEvent::TrackEnded => {
+                        handle_track_end(
+                            app_handle.as_ref(),
+                            &player,
+                            &playback_state,
+                            &db,
+                        );
+                    }
+                    PlayerEvent::Error(message) => {
+                        warn!(error = %message, "player runtime error");
+                        let mut snapshot =
+                            snapshot_playback_state(&player, &playback_state).unwrap_or_default();
+                        snapshot.is_playing = false;
+                        apply_playback_snapshot(app_handle.as_ref(), &playback_state, snapshot);
+                    }
+                }
+            }
+        });
+}
+
+fn handle_track_end(
+    app_handle: Option<&AppHandle>,
+    player: &Arc<Player>,
+    playback_state: &Arc<Mutex<PlaybackState>>,
+    db: &Arc<Mutex<Db>>,
+) {
+    let current_position = playback_state
+        .lock()
+        .map(|state| state.queue_position)
+        .unwrap_or(0);
+
+    let next_track = db
+        .lock()
+        .ok()
+        .and_then(|db| {
+            db.get_queue().ok().and_then(|queue| {
+                queue.get(current_position.saturating_add(1)).and_then(|item| {
+                    item.track
+                        .clone()
+                        .map(|track| (current_position.saturating_add(1), track))
+                })
+            })
+        });
+
+    if let Some((next_position, track)) = next_track {
+        player.load(track.path.clone());
+
+        let mut snapshot = snapshot_playback_state(player, playback_state).unwrap_or_default();
+        snapshot.current_track = Some(track.clone());
+        snapshot.queue_position = next_position;
+        snapshot.position_secs = 0.0;
+        snapshot.duration_secs = 0.0;
+        snapshot.is_playing = true;
+        snapshot.volume = player.volume();
+        apply_playback_snapshot(app_handle, playback_state, snapshot);
+
+        if let Ok(db) = db.lock() {
+            record_local_playback(&db, &track, "player_track_end");
+        }
+        return;
+    }
+
+    let mut snapshot = snapshot_playback_state(player, playback_state).unwrap_or_default();
+    snapshot.position_secs = snapshot.duration_secs.max(player.duration_secs());
+    snapshot.is_playing = false;
+    apply_playback_snapshot(app_handle, playback_state, snapshot);
+    player.pause();
+}
+
+fn snapshot_playback_state(
+    player: &Player,
+    playback_state: &Arc<Mutex<PlaybackState>>,
+) -> Option<PlaybackState> {
+    let mut snapshot = playback_state.lock().ok()?.clone();
+    snapshot.position_secs = player.position_secs();
+    snapshot.duration_secs = player.duration_secs();
+    snapshot.is_playing = player.is_playing();
+    snapshot.volume = player.volume();
+    Some(snapshot)
+}
+
+fn apply_playback_snapshot(
+    app_handle: Option<&AppHandle>,
+    playback_state: &Arc<Mutex<PlaybackState>>,
+    snapshot: PlaybackState,
+) {
+    if let Ok(mut state) = playback_state.lock() {
+        *state = snapshot.clone();
+    }
+    emit_playback_state_snapshot(app_handle, &snapshot);
+}
+
+fn emit_playback_state_snapshot(app_handle: Option<&AppHandle>, playback_state: &PlaybackState) {
+    let Some(app_handle) = app_handle else {
+        return;
+    };
+    if let Err(error) = app_handle.emit("playback_state_changed", playback_state) {
+        warn!(error = %error, "failed to emit playback_state_changed from runtime listener");
+    }
+}
+
+fn record_local_playback(db: &Db, track: &Track, log_context: &str) {
+    if let Err(error) = db.increment_play_count(track.id) {
+        warn!(
+            track_id = track.id,
+            error = %error,
+            "{log_context}: failed to increment play count"
+        );
+    }
+    if let Err(error) = db.record_play_history_event(
+        "local_playback",
+        &track.artist,
+        &track.title,
+        Some(&track.album),
+        None,
+        Some(track.id),
+    ) {
+        warn!(
+            track_id = track.id,
+            error = %error,
+            "{log_context}: failed to record play history"
+        );
+    }
 }
 
 fn spawn_director_result_listener(

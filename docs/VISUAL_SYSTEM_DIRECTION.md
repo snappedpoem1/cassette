@@ -3,6 +3,12 @@
 Last updated: 2026-04-08
 Status: active direction
 
+Supersession note:
+
+- This document governs visual direction and anti-generic UI rules.
+- It does not by itself define Cassette's shell architecture.
+- For workspace behavior, surface model, and modular desktop priorities, read `docs/MODULAR_DESKTOP_DIRECTION_RESET.md` first.
+
 ## Direction
 
 Cassette should look authored, warm, and lived-in. It should not look like a generic dark admin app with album art dropped on top.
@@ -186,4 +192,3 @@ What does not change:
 - no neon skin pass
 - no nostalgia cosplay UI
 - no animation-heavy shell reskin
-

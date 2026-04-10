@@ -16,6 +16,7 @@
   import { backlogStatus, providerHealth, providerStatuses, slskdRuntimeStatus } from '$lib/stores/downloads';
   import { currentTrack, nowPlayingContext, playbackState, player } from '$lib/stores/player';
   import { queue } from '$lib/stores/queue';
+  import { openWorkstationDeck } from '$lib/stores/shell';
   import { formatDuration, coverSrc } from '$lib/utils';
 
   interface WhileAwayMessage {
@@ -81,6 +82,12 @@
       recentRequests = requests;
       trustDistribution = trust;
       recentTracks = recent;
+    } catch {
+      missingAlbums = [];
+      recentResults = [];
+      recentRequests = [];
+      trustDistribution = [];
+      recentTracks = [];
     } finally {
       loading = false;
     }
@@ -175,13 +182,13 @@
       </p>
 
       <div class="hero-actions">
-        <button class="btn btn-primary" on:click={() => goto('/collection')}>Open collection</button>
-        <button class="btn btn-secondary" on:click={() => goto('/queue')}>Open queue</button>
-        <button class="btn btn-ghost" on:click={() => goto('/session')}>Open session</button>
-        <button class="btn btn-ghost" on:click={() => goto('/workstation')}>Open workstation</button>
+        <button class="btn btn-primary" on:click={() => goto('/collection')}>Collection</button>
+        <button class="btn btn-secondary" on:click={() => goto('/queue')}>Queue</button>
+        <button class="btn btn-ghost" on:click={() => goto('/session')}>Session</button>
+        <button class="btn btn-ghost" on:click={openWorkstationDeck}>Workstation</button>
         {#if current}
           <button class="btn btn-ghost" on:click={resumePlayback}>
-            {$playbackState.is_playing ? 'Pause' : 'Resume'}
+            {$playbackState.is_playing ? 'Pause' : 'Play'}
           </button>
         {/if}
       </div>
@@ -219,7 +226,7 @@
         <div class="section-kicker">While you were away</div>
         <h2>Plain-language recap</h2>
       </div>
-      <button class="band-link" on:click={() => goto('/workstation')}>Open workstation</button>
+      <button class="band-link" on:click={openWorkstationDeck}>Workstation</button>
     </div>
 
     {#if loading}
@@ -307,7 +314,7 @@
           <div class="section-kicker">Calm automation</div>
           <h2>What the room is carrying for you</h2>
         </div>
-        <button class="band-link" on:click={() => goto('/workstation')}>Review details</button>
+        <button class="band-link" on:click={openWorkstationDeck}>Review details</button>
       </div>
 
       <AutomationDigestPanel
@@ -315,9 +322,9 @@
         compact={true}
         showThresholdLegend={true}
         primaryHref="/workstation"
-        primaryLabel="Open workstation"
+        primaryLabel="Workstation"
         secondaryHref="/downloads"
-        secondaryLabel="Open downloads"
+        secondaryLabel="Downloads"
       />
 
       <div class="trust-strip">
