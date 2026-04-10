@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Cassette Shell Render</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg-deep: #05080f;
+    --bg-base: #080b12;
+    --bg-card: #0d111a;
+    --bg-hover: rgba(255,255,255,0.05);
+    --bg-active: rgba(255,255,255,0.08);
+    --border: rgba(255,255,255,0.09);
+    --border-dim: rgba(255,255,255,0.05);
+    --border-active: rgba(255,255,255,0.18);
+    --text-primary: #e8ecf2;
+    --text-secondary: #8a95a8;
+    --text-muted: #4e5a6a;
+    --text-accent: #8bb4d4;
+    --primary: #8bb4d4;
+    --accent-bright: #f7b45c;
+    --radius: 8px;
+    --radius-sm: 5px;
+    --status-error: #ffb4b4;
+    --mood-accent-rgb: 139,180,212;
+    --mood-layer-a: rgba(139,180,212,0.08);
+    --mood-layer-b: rgba(247,180,92,0.06);
+    --mood-shift-ms: 460ms;
+    --sidebar-w: 188px;
+    --library-rail-w: 332px;
+    --utility-well-w: 308px;
+    --topbar-h: 44px;
+    --playerbar-h: 80px;
+    --statusstrip-h: 28px;
+    --nowplaying-h: calc(var(--statusstrip-h) + var(--playerbar-h));
+  }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Shell grid (matches app.css exactly) ── */
+  .app-shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) var(--library-rail-w) 8px 1fr 8px var(--utility-well-w);
+    grid-template-rows: var(--topbar-h) 1fr var(--nowplaying-h);
+    height: 100vh;
+    overflow: hidden;
+    background:
+      radial-gradient(85% 120% at 10% 0%, var(--mood-layer-a), transparent 60%),
+      radial-gradient(90% 90% at 90% 100%, var(--mood-layer-b), transparent 58%),
+      var(--bg-deep);
+    position: relative;
+  }
+
+  /* backdrop blobs */
+  .app-backdrop { position:absolute; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+  .backdrop-blob { position:absolute; border-radius:50%; opacity:0.12; }
+  .blob-a { width:560px;height:560px;top:-200px;left:-100px; background:radial-gradient(circle,rgba(139,180,212,1),transparent 70%); filter:blur(48px); }
+  .blob-b { width:460px;height:460px;bottom:-140px;right:-100px; background:radial-gradient(circle,rgba(247,180,92,1),transparent 70%); filter:blur(48px); }
+  .blob-c { width:360px;height:360px;top:35%;left:38%; background:radial-gradient(circle,rgba(139,180,212,1),transparent 70%); filter:blur(36px); opacity:0.08; }
+
+  /* ── Topbar ── */
+  .app-topbar {
+    grid-column: 1 / 7; grid-row: 1;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--border-dim);
+    background: rgba(7,10,16,0.92);
+    position: relative; z-index: 10;
+  }
+  .topbar-brand { display:flex; align-items:center; gap:5px; margin-right:10px; }
+  .brand-wordmark { font-weight:800; font-size:0.9rem; letter-spacing:0.04em; color:var(--text-primary); }
+  .brand-divider { color:var(--text-muted); font-size:0.8rem; }
+  .brand-mode { font-size:0.72rem; color:var(--text-muted); letter-spacing:0.08em; text-transform:uppercase; }
+  .topbar-spacer { flex:1; }
+  .topbar-link {
+    padding:5px 9px; border-radius:var(--radius-sm);
+    border:1px solid var(--border); color:var(--text-muted);
+    font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em;
+    background:none; cursor:pointer; white-space:nowrap;
+  }
+  .topbar-link:hover { border-color:var(--border-active); color:var(--text-primary); }
+  .topbar-preset-active {
+    border-color:rgba(var(--mood-accent-rgb),0.36);
+    color:var(--text-accent);
+    background:rgba(var(--mood-accent-rgb),0.08);
+  }
+  .topbar-command {
+    padding:5px 11px; border-radius:var(--radius-sm);
+    border:1px solid rgba(var(--mood-accent-rgb),0.28);
+    background:rgba(var(--mood-accent-rgb),0.07);
+    color:var(--text-accent); font-size:0.7rem;
+    text-transform:uppercase; letter-spacing:0.08em; font-weight:700; cursor:pointer;
+  }
+
+  /* ── Sidebar ── */
+  .app-sidebar {
+    grid-column: 1; grid-row: 2;
+    overflow-y: auto; overflow-x: hidden;
+    border-right: 1px solid var(--border-dim);
+    background: linear-gradient(180deg,rgba(255,255,255,0.015),transparent 20%), rgba(7,10,16,0.95);
+    position: relative; z-index: 1;
+  }
+  .sidebar { display:flex; flex-direction:column; height:100%; padding-bottom:8px; user-select:none; }
+  .sidebar-logo { display:flex; align-items:center; gap:8px; padding:12px 14px 10px; border-bottom:1px solid var(--border-dim); margin-bottom:8px; }
+  .logo-mark { width:28px;height:28px; border-radius:6px; background:linear-gradient(135deg,rgba(139,180,212,0.9),rgba(247,180,92,0.7)); display:flex;align-items:center;justify-content:center; font-size:11px;font-weight:900;color:#05080f; }
+  .logo-text { font-size:0.84rem; font-weight:800; color:var(--text-primary); }
+  .nav-list { list-style:none; padding:0 8px; display:flex; flex-direction:column; gap:2px; }
+  .nav-heading { padding:8px 8px 4px; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); font-weight:700; }
+  .nav-item {
+    display:flex; align-items:center; gap:8px;
+    padding:7px 10px 7px 8px; border-radius:var(--radius-sm);
+    color:var(--text-secondary); font-size:0.76rem; font-weight:600;
+    border-right:2px solid transparent; text-decoration:none;
+  }
+  .nav-item:hover { color:var(--text-primary); background:rgba(var(--mood-accent-rgb),0.05); }
+  .nav-item.active {
+    color:rgba(var(--mood-accent-rgb),1);
+    background:linear-gradient(90deg,rgba(var(--mood-accent-rgb),0.1),transparent 85%);
+    border-right-color:rgba(var(--mood-accent-rgb),0.9);
+  }
+  .nav-icon { width:18px;height:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;opacity:0.8; }
+  .nav-divider { height:1px; background:var(--border-dim); margin:8px 12px; }
+  .nav-workstation {
+    display:flex; align-items:center; gap:8px;
+    padding:7px 10px 7px 8px; border-radius:var(--radius-sm);
+    color:var(--text-accent); font-size:0.76rem; font-weight:600;
+    border:none; background:rgba(var(--mood-accent-rgb),0.06);
+    border-right:2px solid rgba(var(--mood-accent-rgb),0.3);
+    width:100%; cursor:pointer; text-align:left;
+    margin:0 0 2px;
+  }
+  .sidebar-footer { margin-top:auto; padding:10px 10px 0; border-top:1px solid var(--border-dim); }
+  .stat-row { display:flex; align-items:baseline; gap:5px; padding:4px 6px; }
+  .stat-val { font-size:0.85rem; font-weight:700; color:var(--text-primary); }
+  .stat-lbl { font-size:0.63rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.06em; }
+  .stat-sep { font-size:0.7rem; color:var(--text-muted); }
+
+  /* ── Library Rail ── */
+  .app-library {
+    grid-column: 2; grid-row: 2;
+    overflow: hidden;
+    border-right: 1px solid var(--border-dim);
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0,1fr) auto;
+    background: linear-gradient(180deg,rgba(255,255,255,0.015),transparent 20%), rgba(7,10,16,0.96);
+    position: relative; z-index: 1;
+  }
+  .rail-head { display:grid; gap:6px; padding:10px 12px 8px; border-bottom:1px solid var(--border-dim); }
+  .rail-kicker { font-size:0.6rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--accent-bright); font-weight:700; }
+  .rail-search {
+    background:rgba(255,255,255,0.04); border:1px solid var(--border);
+    border-radius:var(--radius-sm); padding:6px 9px;
+    color:var(--text-primary); font-size:0.78rem; outline:none; width:100%;
+  }
+  .rail-search::placeholder { color:var(--text-muted); }
+  .rail-tabs { display:grid; grid-template-columns:repeat(3,1fr); padding:0 8px; border-bottom:1px solid var(--border-dim); }
+  .rail-tab { padding:9px 8px; border-bottom:2px solid transparent; color:var(--text-muted); font-size:0.68rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; background:none; border-top:none; border-left:none; border-right:none; cursor:pointer; }
+  .rail-tab.active { color:var(--text-accent); border-bottom-color:rgba(var(--mood-accent-rgb),0.9); }
+  .rail-list { overflow:auto; padding:6px; display:flex; flex-direction:column; gap:3px; min-height:0; }
+  .rail-row {
+    display:grid; gap:1px; padding:8px 10px; border-radius:var(--radius-sm);
+    border:1px solid transparent; text-align:left; color:var(--text-secondary); background:transparent; cursor:pointer;
+  }
+  .rail-row.active, .rail-row:hover { background:rgba(var(--mood-accent-rgb),0.08); border-color:rgba(var(--mood-accent-rgb),0.16); color:var(--text-primary); }
+  .rail-row-title { font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rail-row-meta { font-size:0.69rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rail-preview { border-top:1px solid var(--border-dim); background:rgba(6,8,16,0.82); }
+  .rail-preview-head { padding:7px 12px; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); }
+  .rail-preview-body { display:grid; gap:8px; padding:0 12px 12px; }
+  .rail-preview-art { width:100%; aspect-ratio:1; border-radius:var(--radius); background:linear-gradient(135deg,rgba(139,180,212,0.15),rgba(247,180,92,0.1)); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.7rem; }
+  .rail-preview-title { font-size:0.88rem; font-weight:700; color:var(--text-primary); }
+  .rail-preview-meta { font-size:0.73rem; color:var(--text-secondary); margin-top:2px; }
+  .rail-preview-actions { display:flex; gap:6px; margin-top:4px; flex-wrap:wrap; }
+  .btn-sm { padding:5px 10px; border-radius:var(--radius-sm); font-size:0.7rem; font-weight:700; cursor:pointer; }
+  .btn-primary { background:rgba(var(--mood-accent-rgb),0.18); border:1px solid rgba(var(--mood-accent-rgb),0.35); color:var(--text-accent); }
+  .btn-secondary { background:rgba(255,255,255,0.04); border:1px solid var(--border); color:var(--text-secondary); }
+
+  /* ── Resize handle ── */
+  .app-resize-handle {
+    grid-row: 2; position:relative; z-index:2; cursor:col-resize;
+    background: none;
+  }
+  .app-resize-handle::before {
+    content:''; position:absolute; inset:0 auto 0 50%; width:1px;
+    transform:translateX(-50%); background:rgba(var(--mood-accent-rgb),0.12);
+  }
+  .handle-library { grid-column: 3; }
+  .handle-utility { grid-column: 5; }
+
+  /* ── Main ── */
+  .app-main {
+    grid-column: 4; grid-row: 2;
+    overflow-y: auto;
+    position: relative; z-index: 1;
+    background: linear-gradient(180deg,rgba(255,255,255,0.008),transparent 18%),rgba(8,11,18,0.6);
+  }
+  .main-content { padding:16px; }
+  .main-heading { font-size:1.1rem; font-weight:800; color:var(--text-primary); margin-bottom:4px; }
+  .main-sub { font-size:0.76rem; color:var(--text-muted); margin-bottom:16px; }
+  .album-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(128px,1fr)); gap:10px; }
+  .album-card {
+    background:var(--bg-card); border:1px solid var(--border);
+    border-radius:var(--radius); overflow:hidden; cursor:pointer;
+  }
+  .album-card:hover { border-color:rgba(var(--mood-accent-rgb),0.28); }
+  .album-art { aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:0.65rem; color:var(--text-muted); }
+  .album-art.c0 { background:linear-gradient(135deg,#1a2030,#0d1520); }
+  .album-art.c1 { background:linear-gradient(135deg,#1e1828,#120e1c); }
+  .album-art.c2 { background:linear-gradient(135deg,#161f14,#0c1610); }
+  .album-art.c3 { background:linear-gradient(135deg,#201a10,#16120a); }
+  .album-art.c4 { background:linear-gradient(135deg,#1a1820,#12101a); }
+  .album-art.c5 { background:linear-gradient(135deg,#1c1018,#140c14); }
+  .album-info { padding:8px; }
+  .album-title { font-size:0.74rem; font-weight:700; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .album-artist { font-size:0.66rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+  .section-label { font-size:0.64rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-muted); margin:14px 0 8px; font-weight:700; }
+
+  /* ── Right utility well ── */
+  .app-right {
+    grid-column: 6; grid-row: 2;
+    border-left: 1px solid var(--border-dim);
+    background: linear-gradient(180deg,rgba(255,255,255,0.01),transparent 20%), rgba(7,10,16,0.95);
+    display: flex; flex-direction: column;
+    position: relative; z-index: 1; overflow: hidden;
+  }
+  .well-tabs { display:flex; border-bottom:1px solid var(--border-dim); }
+  .well-tab { flex:1; padding:10px 4px; font-size:0.65rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); border:none; background:none; border-bottom:2px solid transparent; cursor:pointer; }
+  .well-tab.active { color:var(--text-accent); border-bottom-color:rgba(var(--mood-accent-rgb),0.9); }
+  .well-body { flex:1; overflow-y:auto; padding:8px; }
+  .queue-item {
+    display:grid; grid-template-columns:24px 1fr auto;
+    align-items:center; gap:8px; padding:8px 8px;
+    border-radius:var(--radius-sm); margin-bottom:3px;
+    border:1px solid transparent;
+  }
+  .queue-item.playing { background:rgba(var(--mood-accent-rgb),0.08); border-color:rgba(var(--mood-accent-rgb),0.16); }
+  .queue-item:hover { background:rgba(255,255,255,0.03); }
+  .qi-num { font-size:0.65rem; color:var(--text-muted); text-align:center; }
+  .qi-play-icon { color:rgba(var(--mood-accent-rgb),1); display:flex; align-items:center; justify-content:center; }
+  .qi-info { min-width:0; }
+  .qi-title { font-size:0.78rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .qi-artist { font-size:0.67rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+  .qi-dur { font-size:0.66rem; color:var(--text-muted); white-space:nowrap; }
+  .well-section-head { padding:10px 8px 6px; font-size:0.6rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-muted); font-weight:700; }
+
+  /* ── Now playing band ── */
+  .app-nowplaying {
+    grid-column: 1 / 7; grid-row: 3;
+    border-top: 1px solid var(--border-dim);
+    background: rgba(7,10,16,0.97);
+    position: relative; z-index: 10;
+  }
+  .mood-strip { height:3px; background:linear-gradient(90deg,rgba(139,180,212,0.9) 0%,rgba(247,180,92,0.6) 50%,rgba(139,180,212,0.4) 100%); box-shadow:0 0 10px rgba(139,180,212,0.4); }
+  .nowplaying { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(320px,1fr) auto; align-items:center; height:var(--playerbar-h); padding:0 14px; gap:14px; }
+  .status-strip { height:var(--statusstrip-h); display:flex; align-items:center; gap:8px; padding:0 14px; border-bottom:1px solid var(--border-dim); }
+  .status-pill { font-size:0.62rem; padding:2px 8px; border-radius:999px; background:rgba(255,255,255,0.04); border:1px solid var(--border); color:var(--text-muted); }
+  .status-pill.ok { background:rgba(80,200,120,0.08); border-color:rgba(80,200,120,0.18); color:#7edba0; }
+  .np-left { display:flex; align-items:center; gap:10px; overflow:hidden; }
+  .np-art { width:54px;height:54px;flex-shrink:0;border-radius:9px;overflow:hidden;border:1px solid rgba(var(--mood-accent-rgb),0.25); box-shadow:0 4px 18px rgba(var(--mood-accent-rgb),0.2); }
+  .np-art-inner { width:100%;height:100%; background:linear-gradient(135deg,rgba(139,180,212,0.25),rgba(247,180,92,0.15)); display:flex;align-items:center;justify-content:center;font-size:0.65rem;color:var(--text-muted); }
+  .np-info { overflow:hidden; }
+  .np-title { font-weight:700; font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-primary); }
+  .np-artist { font-size:0.76rem; color:var(--text-secondary); margin-top:1px; }
+  .np-album { font-size:0.71rem; color:var(--text-muted); margin-top:1px; }
+  .np-chips { display:flex; gap:4px; margin-top:5px; }
+  .np-chip { font-size:0.59rem; color:var(--text-accent); background:rgba(var(--mood-accent-rgb),0.12); border:1px solid rgba(var(--mood-accent-rgb),0.24); border-radius:999px; padding:1px 6px; text-transform:uppercase; letter-spacing:0.04em; }
+  .np-center { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:320px; max-width:560px; width:100%; }
+  .np-controls { display:flex; align-items:center; gap:7px; }
+  .ctrl-btn { display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;color:var(--text-secondary);background:none;border:none;cursor:pointer; }
+  .ctrl-btn:hover { background:var(--bg-hover); color:var(--text-primary); }
+  .play-btn { width:38px;height:38px;background:linear-gradient(135deg,rgba(139,180,212,1) 0%,#8bb4d4 100%);color:#05080f;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 18px rgba(139,180,212,0.35); }
+  .np-seek { display:flex; align-items:center; gap:7px; width:100%; }
+  .np-time { font-size:0.68rem; color:var(--text-secondary); white-space:nowrap; min-width:32px; }
+  .np-time.r { text-align:right; }
+  .seek-bar { position:relative; flex:1; height:4px; border-radius:99px; background:rgba(255,255,255,0.07); cursor:pointer; }
+  .seek-fill { height:100%; width:34%; border-radius:99px; background:linear-gradient(90deg,rgba(139,180,212,0.9),rgba(247,180,92,0.6)); box-shadow:0 0 8px rgba(139,180,212,0.4); }
+  .seek-thumb { position:absolute; top:50%; left:34%; transform:translate(-50%,-50%); width:11px;height:11px;border-radius:50%;background:var(--text-primary); box-shadow:0 0 5px rgba(139,180,212,0.6); }
+  .np-right { display:flex; align-items:center; gap:7px; justify-content:flex-end; }
+  .focus-btn { border:1px solid var(--border); border-radius:999px; background:rgba(139,180,212,0.07); color:var(--text-accent); padding:4px 10px; font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:700; cursor:pointer; }
+  .vol-bar { position:relative; width:72px; height:4px; border-radius:99px; background:rgba(255,255,255,0.07); cursor:pointer; }
+  .vol-fill { height:100%; width:78%; border-radius:99px; background:rgba(139,180,212,0.6); }
+  .vol-icon { font-size:0.8rem; color:var(--text-secondary); display:flex; align-items:center; }
+
+  /* label overlay */
+  .label-overlay {
+    position:absolute; top:4px; right:4px;
+    background:rgba(255,100,100,0.15); border:1px solid rgba(255,100,100,0.3);
+    color:rgba(255,150,150,0.9); font-size:0.56rem; padding:2px 5px;
+    border-radius:3px; text-transform:uppercase; letter-spacing:0.08em; font-weight:700;
+    pointer-events:none; z-index:999;
+  }
+  .label-good {
+    background:rgba(80,200,120,0.12); border-color:rgba(80,200,120,0.25);
+    color:rgba(120,220,150,0.9);
+  }
+  .label-warn {
+    background:rgba(247,180,92,0.1); border-color:rgba(247,180,92,0.25);
+    color:rgba(247,180,92,0.85);
+  }
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- backdrop -->
+  <div class="app-backdrop" aria-hidden="true">
+    <div class="backdrop-blob blob-a"></div>
+    <div class="backdrop-blob blob-b"></div>
+    <div class="backdrop-blob blob-c"></div>
+  </div>
+
+  <!-- ── TOPBAR ── -->
+  <header class="app-topbar">
+    <div class="topbar-brand">
+      <span class="brand-wordmark">Cassette</span>
+      <span class="brand-divider">//</span>
+      <span class="brand-mode">Listening Room</span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <button class="topbar-link">Compact player</button>
+    <button class="topbar-link">Hide well</button>
+    <button class="topbar-link">Workstation</button>
+    <button class="topbar-link">Minimize</button>
+    <button class="topbar-link topbar-preset-active">Listen</button>
+    <button class="topbar-link">Acquire</button>
+    <button class="topbar-command">Commands</button>
+    <span class="label-warn" style="position:relative;top:auto;right:auto;margin-left:6px;">7 controls</span>
+  </header>
+
+  <!-- ── SIDEBAR ── -->
+  <aside class="app-sidebar" style="position:relative;">
+    <span class="label-good">sidebar</span>
+    <nav class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-mark">C</div>
+        <span class="logo-text">Cassette</span>
+      </div>
+      <ul class="nav-list">
+        <li class="nav-heading">Listen</li>
+        <li><a class="nav-item active" href="#"><span class="nav-icon">⌂</span><span>Home</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">▤</span><span>Collection</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">▷</span><span>Now Playing</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">♪</span><span>Artists</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">≡</span><span>Playlists</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">↓</span><span>Queue</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">▦</span><span>Crates</span></a></li>
+        <li><a class="nav-item" href="#"><span class="nav-icon">★</span><span>Session</span></a></li>
+      </ul>
+      <div class="nav-divider"></div>
+      <ul class="nav-list">
+        <li class="nav-heading">Workstation</li>
+        <li><button class="nav-workstation"><span class="nav-icon">⊞</span><span>Workstation</span></button></li>
+      </ul>
+      <div class="sidebar-footer">
+        <div class="stat-row">
+          <span class="stat-val">38,412</span><span class="stat-lbl">tracks</span>
+          <span class="stat-sep">/</span>
+          <span class="stat-val">2,167</span><span class="stat-lbl">albums</span>
+        </div>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- ── LIBRARY RAIL ── -->
+  <aside class="app-library" style="position:relative;">
+    <span class="label-good">library rail ✓</span>
+    <div class="rail-head">
+      <div class="rail-kicker">Browser Rail</div>
+      <input class="rail-search" type="text" placeholder="Filter collection" />
+    </div>
+    <div class="rail-tabs">
+      <button class="rail-tab active">Albums</button>
+      <button class="rail-tab">Tracks</button>
+      <button class="rail-tab">Artists</button>
+    </div>
+    <div class="rail-list">
+      <button class="rail-row active">
+        <span class="rail-row-title">Blue Lines</span>
+        <span class="rail-row-meta">Massive Attack / 1991</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">Mezzanine</span>
+        <span class="rail-row-meta">Massive Attack / 1998</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">Selected Ambient Works</span>
+        <span class="rail-row-meta">Aphex Twin / 1992</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">OK Computer</span>
+        <span class="rail-row-meta">Radiohead / 1997</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">Kid A</span>
+        <span class="rail-row-meta">Radiohead / 2000</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">Dummy</span>
+        <span class="rail-row-meta">Portishead / 1994</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">Endtroducing</span>
+        <span class="rail-row-meta">DJ Shadow / 1996</span>
+      </button>
+      <button class="rail-row">
+        <span class="rail-row-title">Untrue</span>
+        <span class="rail-row-meta">Burial / 2007</span>
+      </button>
+    </div>
+    <div class="rail-preview">
+      <div class="rail-preview-head">Preview</div>
+      <div class="rail-preview-body">
+        <div class="rail-preview-art">Album Art</div>
+        <div>
+          <div class="rail-preview-title">Blue Lines</div>
+          <div class="rail-preview-meta">Massive Attack</div>
+          <div class="rail-preview-meta" style="margin-top:1px;">9 tracks / 1991</div>
+        </div>
+        <div class="rail-preview-actions">
+          <button class="btn-sm btn-primary">Open</button>
+          <button class="btn-sm btn-secondary">Play</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- resize handle library -->
+  <div class="app-resize-handle handle-library"></div>
+
+  <!-- ── MAIN CONTENT ── -->
+  <main class="app-main" style="position:relative;">
+    <span class="label-warn">center slot — still full-page padding</span>
+    <div class="main-content">
+      <div class="main-heading">Listening Room</div>
+      <div class="main-sub">2,167 albums · 38,412 tracks</div>
+      <div class="section-label">Recently played</div>
+      <div class="album-grid">
+        <div class="album-card"><div class="album-art c0">♫</div><div class="album-info"><div class="album-title">Blue Lines</div><div class="album-artist">Massive Attack</div></div></div>
+        <div class="album-card"><div class="album-art c1">♫</div><div class="album-info"><div class="album-title">Mezzanine</div><div class="album-artist">Massive Attack</div></div></div>
+        <div class="album-card"><div class="album-art c2">♫</div><div class="album-info"><div class="album-title">SAW Vol. II</div><div class="album-artist">Aphex Twin</div></div></div>
+        <div class="album-card"><div class="album-art c3">♫</div><div class="album-info"><div class="album-title">OK Computer</div><div class="album-artist">Radiohead</div></div></div>
+        <div class="album-card"><div class="album-art c4">♫</div><div class="album-info"><div class="album-title">Dummy</div><div class="album-artist">Portishead</div></div></div>
+        <div class="album-card"><div class="album-art c5">♫</div><div class="album-info"><div class="album-title">Endtroducing</div><div class="album-artist">DJ Shadow</div></div></div>
+      </div>
+      <div class="section-label">From your library</div>
+      <div class="album-grid">
+        <div class="album-card"><div class="album-art c1">♫</div><div class="album-info"><div class="album-title">Kid A</div><div class="album-artist">Radiohead</div></div></div>
+        <div class="album-card"><div class="album-art c2">♫</div><div class="album-info"><div class="album-title">Untrue</div><div class="album-artist">Burial</div></div></div>
+        <div class="album-card"><div class="album-art c3">♫</div><div class="album-info"><div class="album-title">Geogaddi</div><div class="album-artist">BoC</div></div></div>
+        <div class="album-card"><div class="album-art c0">♫</div><div class="album-info"><div class="album-title">LP5</div><div class="album-artist">Autechre</div></div></div>
+        <div class="album-card"><div class="album-art c4">♫</div><div class="album-info"><div class="album-title">Maxinquaye</div><div class="album-artist">Tricky</div></div></div>
+        <div class="album-card"><div class="album-art c5">♫</div><div class="album-info"><div class="album-title">The Moon…</div><div class="album-artist">Boards of Canada</div></div></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- resize handle utility -->
+  <div class="app-resize-handle handle-utility"></div>
+
+  <!-- ── RIGHT UTILITY WELL ── -->
+  <aside class="app-right" style="position:relative;">
+    <span class="label-good">utility well ✓</span>
+    <div class="well-tabs">
+      <button class="well-tab active">Queue</button>
+      <button class="well-tab">Room</button>
+      <button class="well-tab">Context</button>
+    </div>
+    <div class="well-body">
+      <div class="well-section-head">Up Next · 8 tracks</div>
+      <div class="queue-item playing">
+        <div class="qi-play-icon">▶</div>
+        <div class="qi-info">
+          <div class="qi-title">Safe from Harm</div>
+          <div class="qi-artist">Massive Attack</div>
+        </div>
+        <div class="qi-dur">5:18</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">2</div>
+        <div class="qi-info"><div class="qi-title">One Love</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">3:36</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">3</div>
+        <div class="qi-info"><div class="qi-title">Blue Lines</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">4:51</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">4</div>
+        <div class="qi-info"><div class="qi-title">Be Thankful…</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">5:04</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">5</div>
+        <div class="qi-info"><div class="qi-title">Five Man Army</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">6:11</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">6</div>
+        <div class="qi-info"><div class="qi-title">Unfinished Sympathy</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">5:09</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">7</div>
+        <div class="qi-info"><div class="qi-title">Daydreaming</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">4:43</div>
+      </div>
+      <div class="queue-item">
+        <div class="qi-num">8</div>
+        <div class="qi-info"><div class="qi-title">Lately</div><div class="qi-artist">Massive Attack</div></div>
+        <div class="qi-dur">4:59</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── NOW PLAYING ── -->
+  <footer class="app-nowplaying">
+    <div class="status-strip">
+      <span class="status-pill ok">7 providers ready</span>
+      <span class="status-pill">slskd connected</span>
+      <span class="status-pill">38,412 tracks</span>
+    </div>
+    <div class="mood-strip"></div>
+    <div class="nowplaying">
+      <div class="np-left">
+        <div class="np-art"><div class="np-art-inner">♫</div></div>
+        <div class="np-info">
+          <div class="np-title">Safe from Harm</div>
+          <div class="np-artist">Massive Attack</div>
+          <div class="np-album">Blue Lines</div>
+          <div class="np-chips">
+            <span class="np-chip">FLAC</span>
+            <span class="np-chip">24-bit</span>
+          </div>
+        </div>
+      </div>
+      <div class="np-center">
+        <div class="np-controls">
+          <button class="ctrl-btn">⏮</button>
+          <button class="play-btn">⏸</button>
+          <button class="ctrl-btn">⏭</button>
+        </div>
+        <div class="np-seek">
+          <span class="np-time">1:49</span>
+          <div class="seek-bar">
+            <div class="seek-fill"></div>
+            <div class="seek-thumb"></div>
+          </div>
+          <span class="np-time r">5:18</span>
+        </div>
+      </div>
+      <div class="np-right">
+        <button class="focus-btn">Visualizer</button>
+        <button class="focus-btn">Shrine</button>
+        <span class="vol-icon">🔊</span>
+        <div class="vol-bar"><div class="vol-fill"></div></div>
+      </div>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>
